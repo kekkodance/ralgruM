@@ -37,7 +37,7 @@ jobs:
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
       - name: Check out the parent repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: false
           token: ${{ github.token }}
