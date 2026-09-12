@@ -93,7 +93,7 @@ jobs:
         run: |
           $sha = (git rev-parse HEAD).Trim()
           $shortSha = $sha.Substring(0, 12)
-          $exe = Join-Path $env:GITHUB_WORKSPACE "artifacts\ralgruM-$env:RELEASE_VERSION.exe"
+          $exe = Join-Path $env:GITHUB_WORKSPACE "artifacts\ralgruM.exe"
           New-Item -ItemType Directory -Path (Split-Path $exe) -Force | Out-Null
           Copy-Item target\release\ralgruM.exe $exe
           "RELEASE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
