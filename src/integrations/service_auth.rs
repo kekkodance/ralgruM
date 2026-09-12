@@ -1,3 +1,4 @@
+use futures::StreamExt as _;
 use reqwest::header::{
     AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, USER_AGENT,
 };
@@ -14,6 +15,9 @@ const SOUNDCLOUD_API: &str = "https://api-v2.soundcloud.com/me";
 const SOUNDCLOUD_DESKTOP_CLIENT_ID: &str = "emAJdGEj1mm9yjoCD2jkixmgqrGIyfpi";
 const SOUNDCLOUD_MOBILE_CLIENT_ID: &str = "SSdQ80vM8nLPhbDBylHl2JFK6ElhBr9B";
 const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+const MAX_DEEZER_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_SOUNDCLOUD_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_SOUNDCLOUD_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Service {
@@ -30,6 +34,12 @@ pub(crate) struct ValidatedCredentials {
     pub(crate) identity: Option<ServiceIdentity>,
 }
 
+#[derive(Debug)]
+struct SoundCloudAuthenticatedUser {
+    identity: ServiceIdentity,
+    stable_id: String,
+}
+
 pub(crate) async fn web_login(
     client: &reqwest::Client,
     service: Service,
@@ -38,14 +48,10 @@ pub(crate) async fn web_login(
     match service {
         Service::Deezer => validate(client, service, captured.desktop, None, None).await,
         Service::SoundCloud => {
-            let identity = validate_soundcloud_token(
-                client,
-                &SoundCloudToken::from_saved(&captured.desktop).ok_or_else(|| {
-                    "SoundCloud returned an invalid desktop OAuth token.".to_string()
-                })?,
-                SOUNDCLOUD_DESKTOP_CLIENT_ID,
-            )
-            .await?;
+            let desktop = SoundCloudToken::from_saved(&captured.desktop)
+                .ok_or_else(|| "SoundCloud returned an invalid desktop OAuth token.".to_string())?;
+            let desktop_user =
+                validate_soundcloud_token(client, &desktop, SOUNDCLOUD_DESKTOP_CLIENT_ID).await?;
             let authorization = captured
                 .mobile_authorization
                 .ok_or_else(|| "SoundCloud did not return a mobile authorization.".to_string())?;
@@ -55,9 +61,14 @@ pub(crate) async fn web_login(
                 &authorization.verifier,
             )
             .await?;
+            let mobile = SoundCloudToken::from_saved(&mobile)
+                .ok_or_else(|| "SoundCloud returned an invalid mobile OAuth token.".to_string())?;
+            let mobile_user =
+                validate_soundcloud_token(client, &mobile, SOUNDCLOUD_MOBILE_CLIENT_ID).await?;
+            let identity = soundcloud_pair_identity(desktop_user, mobile_user)?;
             Ok(ValidatedCredentials {
                 desktop: captured.desktop,
-                mobile: Some(mobile),
+                mobile: Some(mobile.expose().to_owned()),
                 soundcloud_cookies: captured.soundcloud_cookies,
                 deezer_user_id: None,
                 identity: Some(identity),
@@ -107,15 +118,19 @@ async fn validate_deezer(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("identity")
         .to_owned();
-    let body = response.bytes().await.map_err(|error| {
-        crate::diagnostics::event(
-            "WARN",
+    let body = read_response_limited(response, MAX_DEEZER_RESPONSE_BYTES)
+        .await
+        .map_err(|error| {
+            crate::diagnostics::event(
+                "WARN",
+                format!(
+                    "deezer account response status={status} content_type={content_type} content_encoding={content_encoding} body_length=0 body_read_error"
+                ),
+            );
             format!(
-                "deezer account response status={status} content_type={content_type} content_encoding={content_encoding} body_length=0 body_read_error"
-            ),
-        );
-        format!("Could not read the Deezer account response ({status}, {content_type}): {error}")
-    })?;
+                "Could not read the Deezer account response ({status}, {content_type}): {error}"
+            )
+        })?;
     let body_length = body.len();
     let result = parse_deezer_profile_response(status, &content_type, &body);
     let profile = match result {
@@ -144,6 +159,32 @@ async fn validate_deezer(
         deezer_user_id: Some(profile.user_id),
         identity: profile.identity,
     })
+}
+
+async fn read_response_limited(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(format!("response body exceeded the {limit}-byte limit"));
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream
+        .next()
+        .await
+        .transpose()
+        .map_err(|error| format!("response body read failed: {error}"))?
+    {
+        if chunk.len() > limit.saturating_sub(body.len()) {
+            return Err(format!("response body exceeded the {limit}-byte limit"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 fn deezer_validation_request(
@@ -306,7 +347,7 @@ async fn validate_soundcloud(
 ) -> Result<ValidatedCredentials, String> {
     let desktop = SoundCloudToken::from_saved(&desktop)
         .ok_or_else(|| "Enter a valid SoundCloud desktop OAuth token.".to_string())?;
-    let identity =
+    let desktop_user =
         validate_soundcloud_token(client, &desktop, SOUNDCLOUD_DESKTOP_CLIENT_ID).await?;
     let mobile = mobile
         .filter(|value| !value.trim().is_empty())
@@ -315,7 +356,12 @@ async fn validate_soundcloud(
             SoundCloudToken::from_saved(&value)
                 .ok_or_else(|| "Enter a valid SoundCloud mobile OAuth token.".to_string())
         })?;
-    validate_soundcloud_token(client, &mobile, SOUNDCLOUD_MOBILE_CLIENT_ID).await?;
+    // Both credentials must authenticate the same stable SoundCloud account.
+    // The mobile response is deliberately not persisted as a second display
+    // identity; the desktop profile remains the canonical settings identity.
+    let mobile_user =
+        validate_soundcloud_token(client, &mobile, SOUNDCLOUD_MOBILE_CLIENT_ID).await?;
+    let identity = soundcloud_pair_identity(desktop_user, mobile_user)?;
     Ok(ValidatedCredentials {
         desktop: desktop.expose().to_owned(),
         mobile: Some(mobile.expose().to_owned()),
@@ -329,7 +375,9 @@ pub(crate) async fn soundcloud_identity(
     client: &reqwest::Client,
     token: &SoundCloudToken,
 ) -> Result<ServiceIdentity, String> {
-    validate_soundcloud_token(client, token, SOUNDCLOUD_DESKTOP_CLIENT_ID).await
+    validate_soundcloud_token(client, token, SOUNDCLOUD_DESKTOP_CLIENT_ID)
+        .await
+        .map(|user| user.identity)
 }
 
 pub(crate) async fn deezer_identity(
@@ -342,11 +390,37 @@ pub(crate) async fn deezer_identity(
         .ok_or_else(|| "Deezer did not return a public account profile.".into())
 }
 
+fn soundcloud_stable_id(profile: &Value) -> Option<String> {
+    profile
+        .get("id")
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .or_else(|| value.as_u64().map(|id| id.to_string()))
+        })
+        .filter(|id| id != "0")
+}
+
+fn soundcloud_pair_identity(
+    desktop: SoundCloudAuthenticatedUser,
+    mobile: SoundCloudAuthenticatedUser,
+) -> Result<ServiceIdentity, String> {
+    if desktop.stable_id != mobile.stable_id {
+        return Err(
+            "The SoundCloud desktop and mobile sessions belong to different accounts.".into(),
+        );
+    }
+    Ok(desktop.identity)
+}
+
 async fn validate_soundcloud_token(
     client: &reqwest::Client,
     token: &SoundCloudToken,
     client_id: &str,
-) -> Result<ServiceIdentity, String> {
+) -> Result<SoundCloudAuthenticatedUser, String> {
     let response = client
         .get(SOUNDCLOUD_API)
         .query(&[("client_id", client_id)])
@@ -361,10 +435,14 @@ async fn validate_soundcloud_token(
         .await
         .map_err(|error| format!("Could not validate the SoundCloud session: {error}"))?;
     if response.status().is_success() {
-        let profile: Value = response
-            .json()
+        let body = read_response_limited(response, MAX_SOUNDCLOUD_RESPONSE_BYTES)
             .await
             .map_err(|error| format!("SoundCloud returned an unreadable profile: {error}"))?;
+        let profile: Value = serde_json::from_slice(&body)
+            .map_err(|error| format!("SoundCloud returned an unreadable profile: {error}"))?;
+        let stable_id = soundcloud_stable_id(&profile).ok_or_else(|| {
+            "SoundCloud returned an invalid authenticated user identity.".to_string()
+        })?;
         let username = profile
             .get("username")
             .and_then(Value::as_str)
@@ -372,8 +450,12 @@ async fn validate_soundcloud_token(
             .filter(|username| !username.is_empty())
             .ok_or_else(|| "SoundCloud returned an invalid authenticated user.".to_string())?;
         let avatar_url = profile_image_url(profile.get("avatar_url"));
-        ServiceIdentity::new(username, avatar_url)
-            .ok_or_else(|| "SoundCloud returned an invalid authenticated user.".into())
+        let identity = ServiceIdentity::new(username, avatar_url)
+            .ok_or_else(|| "SoundCloud returned an invalid authenticated user.".to_owned())?;
+        Ok(SoundCloudAuthenticatedUser {
+            identity,
+            stable_id,
+        })
     } else {
         Err(format!(
             "SoundCloud rejected the session ({}).",
@@ -412,10 +494,12 @@ async fn exchange_soundcloud_mobile_token(
                 format!("Could not exchange the SoundCloud mobile session: {error}")
             })?;
         let status = response.status();
-        let body = response.text().await.map_err(|error| {
-            format!("SoundCloud returned an unreadable token response: {error}")
-        })?;
-        let data = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+        let body = read_response_limited(response, MAX_SOUNDCLOUD_TOKEN_RESPONSE_BYTES)
+            .await
+            .map_err(|error| {
+                format!("SoundCloud returned an unreadable token response: {error}")
+            })?;
+        let data = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
         if status.is_success() {
             let token = data
                 .get("access_token")
@@ -634,5 +718,49 @@ mod tests {
     fn suppresses_html_prefixes_that_might_contain_credentials() {
         let html = b"<!doctype html><html>cookie=credential-sentinel</html>";
         assert_eq!(safe_response_prefix("text/html", html), None);
+    }
+
+    #[test]
+    fn soundcloud_identity_requires_a_nonzero_stable_user_id() {
+        assert_eq!(
+            soundcloud_stable_id(&serde_json::json!({"id": 12345})),
+            Some("12345".into())
+        );
+        assert_eq!(
+            soundcloud_stable_id(&serde_json::json!({"id": " 12345 "})),
+            Some("12345".into())
+        );
+        assert_eq!(soundcloud_stable_id(&serde_json::json!({"id": 0})), None);
+        assert_eq!(
+            soundcloud_stable_id(&serde_json::json!({"username": "listener"})),
+            None
+        );
+    }
+
+    #[test]
+    fn soundcloud_desktop_and_mobile_profiles_must_match() {
+        let desktop = SoundCloudAuthenticatedUser {
+            identity: ServiceIdentity::new("desktop", None).unwrap(),
+            stable_id: "42".into(),
+        };
+        let mobile = SoundCloudAuthenticatedUser {
+            identity: ServiceIdentity::new("mobile", None).unwrap(),
+            stable_id: "42".into(),
+        };
+        assert_eq!(
+            soundcloud_pair_identity(desktop, mobile).unwrap().username,
+            "desktop"
+        );
+
+        let desktop = SoundCloudAuthenticatedUser {
+            identity: ServiceIdentity::new("desktop", None).unwrap(),
+            stable_id: "42".into(),
+        };
+        let mobile = SoundCloudAuthenticatedUser {
+            identity: ServiceIdentity::new("mobile", None).unwrap(),
+            stable_id: "99".into(),
+        };
+        let error = soundcloud_pair_identity(desktop, mobile).unwrap_err();
+        assert!(error.contains("different accounts"));
     }
 }

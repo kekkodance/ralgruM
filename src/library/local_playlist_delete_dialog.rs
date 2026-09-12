@@ -4,7 +4,11 @@ use gpui::{
 };
 use gpui_component::WindowExt;
 
-use super::view::LibraryView;
+use super::{
+    local_persistence::LocalPlaylistMutationOutcome,
+    local_playlist_controller::LocalPlaylistCompletion, local_playlist_store::LocalPlaylistError,
+    view::LibraryView,
+};
 use crate::{
     app_button::{
         danger_secondary_dialog_button_with_disabled, secondary_dialog_button_with_disabled,
@@ -19,6 +23,7 @@ pub(crate) struct LocalPlaylistDeleteDialog {
     playlist_id: String,
     title: String,
     error: Option<SharedString>,
+    busy: bool,
     completed: bool,
     close_motion: DialogCloseMotion,
 }
@@ -38,6 +43,7 @@ impl LocalPlaylistDeleteDialog {
                 playlist_id,
                 title,
                 error: None,
+                busy: false,
                 completed: false,
                 close_motion: DialogCloseMotion::default(),
             }
@@ -73,23 +79,40 @@ impl LocalPlaylistDeleteDialog {
     }
 
     fn submit(&mut self, cx: &mut Context<Self>) {
-        if self.completed {
+        if self.completed || self.busy {
             return;
         }
+        self.busy = true;
+        let dialog = cx.entity().clone();
         let result = self.library.update(cx, |library, cx| {
-            library.delete_local_playlist(self.playlist_id.clone(), cx)
+            let completion: LocalPlaylistCompletion = Box::new(
+                move |result: Result<LocalPlaylistMutationOutcome, LocalPlaylistError>,
+                      _view: &mut LibraryView,
+                      cx: &mut Context<LibraryView>| {
+                    dialog.update(cx, |dialog, cx| {
+                        dialog.busy = false;
+                        match result {
+                            Ok(LocalPlaylistMutationOutcome::Deleted { changed: true }) => {
+                                dialog.error = None;
+                                dialog.completed = true;
+                            }
+                            Ok(LocalPlaylistMutationOutcome::Deleted { changed: false }) => {
+                                dialog.error = Some("The local playlist could not be found.".into())
+                            }
+                            Err(error) => dialog.error = Some(error.to_string().into()),
+                            _ => {}
+                        }
+                        cx.notify();
+                    });
+                },
+            );
+            library.delete_local_playlist(self.playlist_id.clone(), completion, cx)
         });
-        match result {
-            Ok(()) => {
-                self.error = None;
-                self.completed = true;
-                cx.notify();
-            }
-            Err(error) => {
-                self.error = Some(error.to_string().into());
-                cx.notify();
-            }
+        if let Err(error) = result {
+            self.busy = false;
+            self.error = Some(error.to_string().into());
         }
+        cx.notify();
     }
 }
 
@@ -187,7 +210,7 @@ impl Render for LocalPlaylistDeleteDialog {
                         "confirm-local-playlist-delete",
                         Some(LocalIcon::TrashCan),
                         "Delete playlist",
-                        false,
+                        self.busy,
                         cx.listener(|this, _, _, cx| this.submit(cx)),
                     )),
             );

@@ -63,11 +63,14 @@ the version files without building. Promoting a prerelease such as
 ## Checks
 
 ```powershell
-cargo fmt --all -- --check
+cargo fmt --package ralgrum-gpui -- --check
 cargo metadata --locked --no-deps
 cargo check --locked --all-targets
 cargo test --locked --all-targets
 ```
+
+Formatting is scoped to the application package so vendored dependencies keep
+their upstream formatting.
 
 These commands use the selected backend. For a real-backend run, place the
 private checkout at the default path described below, or select it with

@@ -1,15 +1,17 @@
 use std::{sync::Arc, time::Duration};
 
 use gpui::{
-    AnyElement, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Render, ScrollHandle,
-    SharedString, Task, WeakEntity, Window, div, prelude::*, px, rgb,
+    AnyElement, Context, Entity, FontWeight, IntoElement, KeyDownEvent, ListAlignment, ListState,
+    Render, SharedString, Task, WeakEntity, Window, div, prelude::*, px, rgb,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use tokio::runtime::Runtime;
 
 use crate::{
     assets::{LocalIcon, local_icon},
-    browser_scroll::{BrowserScrollState, BrowserScrollTarget, browser_scroll_surface},
+    browser_scroll::{
+        BrowserScrollState, BrowserScrollTarget, FixedListScrollHandle, browser_scroll_surface,
+    },
     context_menu::{self, track_menu},
     downloads::DownloadModel,
     entity_navigation::{ProviderNavigationOpeners, artist_routes_for_track},
@@ -19,7 +21,7 @@ use crate::{
         track_row_with_action,
     },
     playback::{AudioCache, PlaybackContext, PlaybackModel, PlaybackProvider, PlaybackTrack},
-    playing_indicator::PlayingSnapshot,
+    playing_indicator::{PlayingSnapshot, QueuePlayingSnapshot},
     search::Provider,
     settings::AccountState,
     theme::{FOREGROUND, MUTED},
@@ -43,7 +45,7 @@ pub(crate) struct CacheView {
     loading: bool,
     load_generation: u64,
     loaded_revision: Option<u64>,
-    scroll: ScrollHandle,
+    list_state: ListState,
     browser_scroll: BrowserScrollState,
     _watcher: Task<()>,
 }
@@ -97,7 +99,12 @@ impl CacheView {
             loading: false,
             load_generation: 0,
             loaded_revision: None,
-            scroll: ScrollHandle::new(),
+            list_state: ListState::new(
+                0,
+                ListAlignment::Top,
+                crate::library::virtualization::overdraw(),
+            )
+            .with_uniform_item_height(crate::library::virtualization::row_height()),
             browser_scroll: BrowserScrollState::new(),
             _watcher: watcher,
         };
@@ -134,6 +141,12 @@ impl CacheView {
                 if this.load_generation != generation {
                     return;
                 }
+                if this.tracks.len() != tracks.len() {
+                    this.list_state.reset_with_uniform_height(
+                        tracks.len(),
+                        crate::library::virtualization::row_height(),
+                    );
+                }
                 this.tracks = Arc::new(tracks);
                 this.loading = false;
                 // This result describes the revision at which its read began.
@@ -155,28 +168,41 @@ impl Render for CacheView {
             crate::music_ui::narrow_content_viewport(f32::from(window.viewport_size().width));
         let tracks = self.tracks.clone();
         let host = cx.entity();
-        let rows = (0..tracks.len())
-            .map(|index| render_cache_row(index, tracks.clone(), narrow, self, &host, cx))
-            .collect::<Vec<_>>();
         let count = tracks.len();
         let loading = self.loading;
         let gutter = crate::music_ui::main_content_inset(&metrics);
+        let playing = self.playing.for_queue(&tracks);
+        let fixed_scroll = FixedListScrollHandle::new(
+            self.list_state.clone(),
+            count,
+            crate::library::virtualization::row_height(),
+        );
+        let list = gpui::list(self.list_state.clone(), move |index, _window, app| {
+            let row = render_cache_row(
+                index,
+                tracks.clone(),
+                narrow,
+                host.read(app),
+                &host,
+                playing,
+                app,
+            );
+            div()
+                .w_full()
+                .h(crate::library::virtualization::row_height())
+                .child(row)
+                .into_any_element()
+        });
         let body = div()
             .id("cache-page-content")
             .size_full()
             .min_h_0()
-            .track_scroll(&self.scroll)
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .w_full()
-                    .px(px(gutter))
-                    .pb(px(CACHE_CONTENT_BOTTOM_PADDING_PX))
-                    .when(count == 0, |this| this.child(empty_cache_state(loading)))
-                    .when(count > 0, |this| {
-                        this.child(div().w_full().flex().flex_col().gap(px(4.)).children(rows))
-                    }),
-            );
+            .px(px(gutter))
+            .pb(px(CACHE_CONTENT_BOTTOM_PADDING_PX))
+            .when(count == 0, |this| this.child(empty_cache_state(loading)))
+            .when(count > 0, |this| {
+                this.child(list.w_full().h_full().min_h_0())
+            });
         let scroll_viewport = div()
             .id("cache-page-scroll-viewport")
             .relative()
@@ -187,13 +213,13 @@ impl Render for CacheView {
                 div()
                     .absolute()
                     .inset_0()
-                    .child(Scrollbar::vertical(&self.scroll).scrollbar_show(ScrollbarShow::Hover)),
+                    .child(Scrollbar::vertical(&fixed_scroll).scrollbar_show(ScrollbarShow::Hover)),
             )
             .into_any_element();
         let scroll = browser_scroll_surface(
             "cache-page-scroll",
             scroll_viewport,
-            BrowserScrollTarget::Handle(self.scroll.clone()),
+            BrowserScrollTarget::FixedList(fixed_scroll),
             self.browser_scroll.clone(),
         );
 
@@ -260,7 +286,8 @@ fn render_cache_row(
     narrow: bool,
     view: &CacheView,
     host: &Entity<CacheView>,
-    cx: &Context<CacheView>,
+    playing: QueuePlayingSnapshot,
+    cx: &gpui::App,
 ) -> AnyElement {
     let Some(track) = tracks.get(index) else {
         return div().into_any_element();
@@ -323,7 +350,7 @@ fn render_cache_row(
             provider_icon_only: false,
         },
         track.explicit,
-        view.playing.row_in_queue(track, index, &tracks),
+        playing.row(index),
         None,
         blocked,
         None,

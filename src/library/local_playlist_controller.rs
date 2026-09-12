@@ -2,21 +2,26 @@ use gpui::{Context, Window};
 use gpui_component::WindowExt;
 
 use super::{
+    local_persistence::{
+        LocalPlaylistMutation, LocalPlaylistMutationOutcome, LocalPlaylistMutationResponse,
+    },
     local_playlist_delete_dialog::LocalPlaylistDeleteDialog,
     local_playlist_dialog::LocalPlaylistDialog,
     local_playlist_store::{LocalPlaylistError, LocalPlaylistStore},
     local_playlist_view::{local_playlist_page, local_playlists_page},
     model::Service,
-    state::Status,
+    state::{LibraryState, Status},
     view::LibraryView,
 };
 use crate::search::Provider;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum LocalPlaylistAddResult {
-    Added { count: usize },
-    AlreadyPresent { playlist_title: String },
-}
+pub(crate) type LocalPlaylistCompletion = Box<
+    dyn FnOnce(
+            Result<LocalPlaylistMutationOutcome, LocalPlaylistError>,
+            &mut LibraryView,
+            &mut Context<LibraryView>,
+        ) + Send,
+>;
 
 fn local_picker_storage_error(
     local_playlists: &Result<LocalPlaylistStore, LocalPlaylistError>,
@@ -29,6 +34,15 @@ fn local_added_tracks_message(count: usize) -> String {
         "1 track added.".to_owned()
     } else {
         format!("{count} tracks added.")
+    }
+}
+
+fn leave_deleted_local_playlist(state: &mut LibraryState, playlist_id: &str) -> bool {
+    if state.route().is_local_playlist_detail() && state.route().id == playlist_id {
+        let _ = state.back();
+        true
+    } else {
+        false
     }
 }
 
@@ -109,49 +123,33 @@ impl LibraryView {
         LocalPlaylistDeleteDialog::open(cx.entity(), id, title, window, cx);
     }
 
-    pub(crate) fn create_local_playlist(
-        &mut self,
-        title: String,
-        description: String,
-        cx: &mut Context<Self>,
-    ) -> Result<(), LocalPlaylistError> {
-        self.create_local_playlist_with_artwork(title, description, None, cx)
-    }
-
     pub(crate) fn create_local_playlist_with_artwork(
         &mut self,
         title: String,
         description: String,
         artwork_jpeg: Option<&[u8]>,
+        completion: LocalPlaylistCompletion,
         cx: &mut Context<Self>,
     ) -> Result<(), LocalPlaylistError> {
-        let result = match self.local_playlists.as_mut() {
-            Ok(store) => store
-                .create_with_artwork(title, description, artwork_jpeg)
-                .map(|_| ()),
-            Err(error) => Err(*error),
-        };
-        if result.is_ok() {
-            self.refresh_local_playlist_page();
-            cx.notify();
-            crate::toast::push_global(
-                cx,
-                crate::toast::ToastKind::Success,
-                "Local playlist created",
-                Some("Your new playlist is ready.".into()),
-            );
-        }
-        result
-    }
-
-    pub(crate) fn create_local_playlist_with_tracks(
-        &mut self,
-        title: String,
-        description: String,
-        tracks: &[crate::playback::PlaybackTrack],
-        cx: &mut Context<Self>,
-    ) -> Result<(), LocalPlaylistError> {
-        self.create_local_playlist_with_tracks_and_artwork(title, description, tracks, None, cx)
+        self.enqueue_local_playlist_mutation(
+            LocalPlaylistMutation::Create {
+                title,
+                description,
+                artwork_jpeg: artwork_jpeg.map(ToOwned::to_owned),
+            },
+            Box::new(move |result, view, cx| {
+                if matches!(result, Ok(LocalPlaylistMutationOutcome::Created)) {
+                    crate::toast::push_global(
+                        cx,
+                        crate::toast::ToastKind::Success,
+                        "Local playlist created",
+                        Some("Your new playlist is ready.".into()),
+                    );
+                }
+                completion(result, view, cx);
+            }),
+            cx,
+        )
     }
 
     pub(crate) fn create_local_playlist_with_tracks_and_artwork(
@@ -160,39 +158,33 @@ impl LibraryView {
         description: String,
         tracks: &[crate::playback::PlaybackTrack],
         artwork_jpeg: Option<&[u8]>,
+        completion: LocalPlaylistCompletion,
         cx: &mut Context<Self>,
     ) -> Result<(), LocalPlaylistError> {
         let local_tracks = tracks
             .iter()
             .map(super::local_store::LocalTrack::from)
             .collect::<Vec<_>>();
-        let result = match self.local_playlists.as_mut() {
-            Ok(store) => store
-                .create_with_tracks_and_artwork(title, description, &local_tracks, artwork_jpeg)
-                .map(|_| ()),
-            Err(error) => Err(*error),
-        };
-        if result.is_ok() {
-            self.refresh_local_playlist_page();
-            cx.notify();
-            crate::toast::push_global(
-                cx,
-                crate::toast::ToastKind::Success,
-                "Local playlist created",
-                Some("Your track was added to the new playlist.".into()),
-            );
-        }
-        result
-    }
-
-    pub(crate) fn update_local_playlist(
-        &mut self,
-        id: String,
-        title: String,
-        description: String,
-        cx: &mut Context<Self>,
-    ) -> Result<(), LocalPlaylistError> {
-        self.update_local_playlist_with_artwork(id, title, description, None, cx)
+        self.enqueue_local_playlist_mutation(
+            LocalPlaylistMutation::CreateWithTracks {
+                title,
+                description,
+                tracks: local_tracks,
+                artwork_jpeg: artwork_jpeg.map(ToOwned::to_owned),
+            },
+            Box::new(move |result, view, cx| {
+                if matches!(result, Ok(LocalPlaylistMutationOutcome::Created)) {
+                    crate::toast::push_global(
+                        cx,
+                        crate::toast::ToastKind::Success,
+                        "Local playlist created",
+                        Some("Your track was added to the new playlist.".into()),
+                    );
+                }
+                completion(result, view, cx);
+            }),
+            cx,
+        )
     }
 
     pub(crate) fn update_local_playlist_with_artwork(
@@ -201,33 +193,38 @@ impl LibraryView {
         title: String,
         description: String,
         artwork_jpeg: Option<&[u8]>,
+        completion: LocalPlaylistCompletion,
         cx: &mut Context<Self>,
     ) -> Result<(), LocalPlaylistError> {
-        let result = match self.local_playlists.as_mut() {
-            Ok(store) => store
-                .update_with_artwork(&id, title, description, artwork_jpeg)
-                .map(|_| ()),
-            Err(error) => Err(*error),
-        };
-        if result.is_ok() {
-            self.refresh_local_playlist_page();
-            cx.notify();
-            crate::toast::push_global(
-                cx,
-                crate::toast::ToastKind::Success,
-                "Local playlist updated",
-                Some("Your changes were saved.".into()),
-            );
-        }
-        result
+        self.enqueue_local_playlist_mutation(
+            LocalPlaylistMutation::Update {
+                id,
+                title,
+                description,
+                artwork_jpeg: artwork_jpeg.map(ToOwned::to_owned),
+            },
+            Box::new(move |result, view, cx| {
+                if matches!(result, Ok(LocalPlaylistMutationOutcome::Updated)) {
+                    crate::toast::push_global(
+                        cx,
+                        crate::toast::ToastKind::Success,
+                        "Local playlist updated",
+                        Some("Your changes were saved.".into()),
+                    );
+                }
+                completion(result, view, cx);
+            }),
+            cx,
+        )
     }
 
     pub(crate) fn add_tracks_to_local_playlist(
         &mut self,
         playlist_id: String,
         tracks: &[crate::playback::PlaybackTrack],
+        completion: LocalPlaylistCompletion,
         cx: &mut Context<Self>,
-    ) -> Result<LocalPlaylistAddResult, LocalPlaylistError> {
+    ) -> Result<(), LocalPlaylistError> {
         if tracks.is_empty() {
             return Err(LocalPlaylistError::InvalidItem);
         }
@@ -235,86 +232,71 @@ impl LibraryView {
             .iter()
             .map(super::local_store::LocalTrack::from)
             .collect::<Vec<_>>();
-        let result = match self.local_playlists.as_mut() {
-            Ok(store) => {
-                let (playlist_title, duplicate) = store
-                    .playlist(&playlist_id)
-                    .map(|playlist| {
-                        let duplicate = local_tracks.iter().any(|track| {
-                            playlist.tracks.iter().any(|saved| {
-                                saved.provider == track.provider && saved.id == track.id.trim()
-                            })
-                        });
-                        (playlist.title.clone(), duplicate)
-                    })
-                    .ok_or(LocalPlaylistError::NotFound)?;
-                if duplicate {
-                    Ok(LocalPlaylistAddResult::AlreadyPresent { playlist_title })
-                } else {
-                    store.add_tracks(&playlist_id, &local_tracks).map(|()| {
-                        LocalPlaylistAddResult::Added {
-                            count: local_tracks.len(),
-                        }
-                    })
+        self.enqueue_local_playlist_mutation(
+            LocalPlaylistMutation::AddTracks {
+                playlist_id,
+                tracks: local_tracks,
+            },
+            Box::new(move |result, view, cx| {
+                match &result {
+                    Ok(LocalPlaylistMutationOutcome::Added { count }) => {
+                        crate::toast::push_global(
+                            cx,
+                            crate::toast::ToastKind::Success,
+                            "Added to Local playlist",
+                            Some(local_added_tracks_message(*count).into()),
+                        );
+                    }
+                    Ok(LocalPlaylistMutationOutcome::AlreadyPresent { playlist_title }) => {
+                        crate::toast::push_global(
+                            cx,
+                            crate::toast::ToastKind::Info,
+                            "Already in Local playlist",
+                            Some(playlist_title.clone().into()),
+                        );
+                    }
+                    _ => {}
                 }
-            }
-            Err(error) => Err(*error),
-        };
-        match &result {
-            Ok(LocalPlaylistAddResult::Added { count }) => {
-                self.refresh_local_playlist_page();
-                cx.notify();
-                crate::toast::push_global(
-                    cx,
-                    crate::toast::ToastKind::Success,
-                    "Added to Local playlist",
-                    Some(local_added_tracks_message(*count).into()),
-                );
-            }
-            Ok(LocalPlaylistAddResult::AlreadyPresent { playlist_title }) => {
-                crate::toast::push_global(
-                    cx,
-                    crate::toast::ToastKind::Info,
-                    "Already in Local playlist",
-                    Some(playlist_title.clone().into()),
-                );
-            }
-            Err(_) => {}
-        }
-        result
+                completion(result, view, cx);
+            }),
+            cx,
+        )
     }
 
     pub(crate) fn delete_local_playlist(
         &mut self,
         id: String,
+        completion: LocalPlaylistCompletion,
         cx: &mut Context<Self>,
     ) -> Result<(), LocalPlaylistError> {
-        let result = match self.local_playlists.as_mut() {
-            Ok(store) => store.delete(&id),
-            Err(error) => Err(*error),
-        };
-        match result {
-            Ok(true) => {
-                let deleted_detail =
-                    self.state.route().is_local_playlist_detail() && self.state.route().id == id;
-                if deleted_detail {
-                    let _ = self.state.back();
-                    self.clear_track_list_states();
-                    self.reset_detail_scroll();
-                }
-                self.refresh_local_playlist_page();
-                cx.notify();
-                crate::toast::push_global(
-                    cx,
-                    crate::toast::ToastKind::Success,
-                    "Local playlist deleted",
-                    Some("The playlist was removed from your Local library.".into()),
-                );
-                Ok(())
-            }
-            Ok(false) => Err(LocalPlaylistError::NotFound),
-            Err(error) => Err(error),
-        }
+        self.enqueue_local_playlist_mutation(
+            LocalPlaylistMutation::Delete { id: id.clone() },
+            Box::new(move |result, view, cx| {
+                let result = match result {
+                    Ok(LocalPlaylistMutationOutcome::Deleted { changed: true }) => {
+                        if leave_deleted_local_playlist(&mut view.state, &id) {
+                            view.clear_track_list_states();
+                            view.reset_detail_scroll();
+                            view.refresh_local_playlist_page();
+                        }
+                        crate::toast::push_global(
+                            cx,
+                            crate::toast::ToastKind::Success,
+                            "Local playlist deleted",
+                            Some("The playlist was removed from your Local library.".into()),
+                        );
+                        Ok(LocalPlaylistMutationOutcome::Deleted { changed: true })
+                    }
+                    Ok(LocalPlaylistMutationOutcome::Deleted { changed: false }) => {
+                        Err(LocalPlaylistError::NotFound)
+                    }
+                    Ok(other) => Ok(other),
+                    Err(error) => Err(error),
+                };
+                completion(result, view, cx);
+            }),
+            cx,
+        )
     }
 
     pub(crate) fn remove_local_playlist_track(
@@ -324,26 +306,73 @@ impl LibraryView {
         track_id: String,
         cx: &mut Context<Self>,
     ) {
-        let result = match self.local_playlists.as_mut() {
-            Ok(store) => store
-                .remove_track(&playlist_id, provider, &track_id)
-                .map(|removed| removed.then_some(())),
-            Err(error) => Err(*error),
-        };
-        match result {
-            Ok(Some(())) => {
-                self.refresh_local_playlist_page();
-                cx.notify();
-                crate::toast::push_global(
-                    cx,
-                    crate::toast::ToastKind::Success,
-                    "Track removed from local playlist",
-                    None,
-                );
-            }
-            Ok(None) => push_local_error(cx, "Track is no longer in this local playlist", None),
-            Err(error) => push_local_error(cx, "Local playlist could not be updated", Some(error)),
+        let result = self.enqueue_local_playlist_mutation(
+            LocalPlaylistMutation::RemoveTrack {
+                playlist_id,
+                provider,
+                track_id,
+            },
+            Box::new(move |result, _, cx| match result {
+                Ok(LocalPlaylistMutationOutcome::Removed { changed: true }) => {
+                    crate::toast::push_global(
+                        cx,
+                        crate::toast::ToastKind::Success,
+                        "Track removed from local playlist",
+                        None,
+                    );
+                }
+                Ok(LocalPlaylistMutationOutcome::Removed { changed: false }) => {
+                    push_local_error(cx, "Track is no longer in this local playlist", None)
+                }
+                Err(error) => {
+                    push_local_error(cx, "Local playlist could not be updated", Some(error))
+                }
+                _ => {}
+            }),
+            cx,
+        );
+        if let Err(error) = result {
+            push_local_error(cx, "Local playlist could not be updated", Some(error));
         }
+    }
+
+    pub(crate) fn enqueue_local_playlist_mutation(
+        &mut self,
+        mutation: LocalPlaylistMutation,
+        completion: LocalPlaylistCompletion,
+        cx: &mut Context<Self>,
+    ) -> Result<(), LocalPlaylistError> {
+        let (_, response) = self
+            .local_persistence
+            .submit_playlist(mutation)
+            .map_err(|_| LocalPlaylistError::Filesystem)?;
+        let entity = cx.entity().clone();
+        cx.spawn(async move |_, cx| {
+            let result = response.await.map_err(|_| LocalPlaylistError::Filesystem);
+            entity.update(cx, |view, cx| {
+                let result = match result {
+                    Ok(response) => view.apply_local_playlist_response(response, cx),
+                    Err(error) => Err(error),
+                };
+                completion(result, view, cx);
+            });
+        })
+        .detach();
+        Ok(())
+    }
+
+    pub(super) fn apply_local_playlist_response(
+        &mut self,
+        response: LocalPlaylistMutationResponse,
+        cx: &mut Context<Self>,
+    ) -> Result<LocalPlaylistMutationOutcome, LocalPlaylistError> {
+        if response.revision > self.local_playlist_revision {
+            self.local_playlist_revision = response.revision;
+            self.local_playlists = response.state;
+            self.refresh_local_playlist_page();
+            cx.notify();
+        }
+        response.outcome
     }
 
     fn refresh_local_playlist_page(&mut self) {
@@ -387,6 +416,8 @@ fn push_local_error(
 #[cfg(test)]
 mod tests {
     use super::super::local_playlist_store::LocalPlaylistError;
+    use super::{LibraryState, Provider, Service};
+    use crate::library::model::Route;
 
     #[test]
     fn local_mutations_refresh_the_visible_page_without_reloading_the_route() {
@@ -400,19 +431,25 @@ mod tests {
 
     #[test]
     fn local_delete_returns_to_the_local_playlists_root() {
-        let source = include_str!("local_playlist_controller.rs");
-        let delete = source
-            .split("pub(crate) fn delete_local_playlist")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split("pub(crate) fn remove_local_playlist_track")
-                    .next()
-            })
-            .expect("local delete controller");
-        assert!(delete.contains("self.state.route().is_local_playlist_detail()"));
-        assert!(delete.contains("self.state.back()"));
-        assert!(delete.contains("self.refresh_local_playlist_page()"));
+        let mut state = LibraryState::default();
+        state.reload(Service::Local, super::super::model::Category::Playlists);
+        state.push(Route {
+            source: Provider::Deezer,
+            category: super::super::model::Category::Playlists,
+            action: "localPlaylistTracks".into(),
+            id: "playlist".into(),
+            title: "Playlist".into(),
+            subtitle: String::new(),
+            artwork: String::new(),
+            release_date: String::new(),
+        });
+
+        assert!(super::leave_deleted_local_playlist(&mut state, "playlist"));
+        assert_eq!(
+            state.route(),
+            &Route::root(Service::Local, super::super::model::Category::Playlists)
+        );
+        assert!(!super::leave_deleted_local_playlist(&mut state, "playlist"));
     }
 
     #[test]

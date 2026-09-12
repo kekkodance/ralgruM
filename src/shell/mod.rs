@@ -903,7 +903,7 @@ impl RalgrumApp {
                         }
             };
             if should_persist {
-                settings_for_playback.update(cx, |settings, _| {
+                settings_for_playback.update(cx, |settings, cx| {
                     settings.persist_runtime_state(
                         preferences,
                         (
@@ -915,6 +915,7 @@ impl RalgrumApp {
                                 }
                             },
                         ),
+                        cx,
                     );
                 });
             }

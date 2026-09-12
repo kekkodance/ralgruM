@@ -22,6 +22,9 @@ pub use parsers::{
     lyric_block_text, lyric_full_text, parse_synced_lyrics, prepare_genius_lyrics,
 };
 pub use providers::{
-    extract_genius_hits, extract_genius_lyrics, extract_genius_lyrics_result,
-    extract_genius_referents, extract_musixmatch_lyrics,
+    extract_genius_lyrics, extract_genius_lyrics_result, extract_genius_referents,
+    extract_musixmatch_lyrics,
 };
+
+#[cfg(test)]
+pub use providers::extract_genius_hits;

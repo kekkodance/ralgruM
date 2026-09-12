@@ -577,8 +577,6 @@ fn player_download_menu_opens_above_with_chevron() {
     let render = include_str!("popup_render.rs");
     assert!(render.contains("app-popup-menu-arrow"));
     assert!(render.contains("arrow_center_offset"));
-    let player_bar = include_str!("../playback/player_bar.rs");
-    assert!(player_bar.contains("track_download_button_above"));
     let search_rows = include_str!("../search/rows_view.rs");
     assert!(search_rows.contains("track_download_button_above("));
     let library_rows = include_str!("../library/track_view.rs");

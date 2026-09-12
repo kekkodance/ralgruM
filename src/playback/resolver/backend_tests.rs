@@ -382,7 +382,7 @@ async fn cached_timeline_cancelled_on_last_chunk_does_not_release_startup() {
 }
 
 #[tokio::test]
-async fn cached_timeline_invalidated_on_last_chunk_does_not_release_startup() {
+async fn cache_maintenance_does_not_interrupt_cached_playback() {
     let fixture = cached_timeline(PROGRESSIVE_WRITE_CHUNK_SIZE as u64 + 1).await;
     let total = fixture.bytes.len() as u64;
     let file = ProgressiveFile::new(AudioFormat::M4a, Some(total)).unwrap();
@@ -404,9 +404,65 @@ async fn cached_timeline_invalidated_on_last_chunk_does_not_release_startup() {
             None,
         )
         .await;
-    writer.cancel();
-    assert!(result.is_err());
-    assert!(file.reader().unwrap().wait_until_startup_ready().is_err());
+    result.unwrap();
+    file.reader().unwrap().wait_until_startup_ready().unwrap();
+    let mut actual = vec![0; total as usize];
+    file.reader().unwrap().read_exact(&mut actual).unwrap();
+    assert_eq!(actual, fixture.bytes);
+    writer.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn cache_maintenance_does_not_interrupt_cached_progressive_playback() {
+    let fixture = cached_timeline(PROGRESSIVE_WRITE_CHUNK_SIZE as u64 + 1).await;
+    let total = fixture.bytes.len() as u64;
+    let file = ProgressiveFile::new(AudioFormat::M4a, Some(total)).unwrap();
+    let writer = file.writer().unwrap();
+    let cache = fixture.resolver.cache.clone().unwrap();
+    let source_cache_epoch = fixture.resolver.resolved_source_cache.epoch();
+    let progress: ProgressCallback = Arc::new(move |update| {
+        if update.downloaded == total {
+            cache.cancel();
+        }
+    });
+    let track = PlaybackTrack {
+        provider: PlaybackProvider::Deezer,
+        id: "offline-backend-regression".into(),
+        title: "Fixture track".into(),
+        artist: "Fixture artist".into(),
+        album: String::new(),
+        album_id: String::new(),
+        release_date: String::new(),
+        artists: Vec::new(),
+        artwork: String::new(),
+        duration: Duration::from_secs(1),
+        downloadable: false,
+        progressive: true,
+        explicit: false,
+        service_url: String::new(),
+    };
+    let (mut writer, result) = fixture
+        .resolver
+        .download_progressive(
+            track,
+            None,
+            None,
+            None,
+            fixture.source,
+            CancellationToken::new(),
+            Some(progress),
+            writer,
+            Arc::new(tokio::sync::Mutex::new(false)),
+            None,
+            source_cache_epoch,
+        )
+        .await;
+    result.unwrap();
+    file.reader().unwrap().wait_until_startup_ready().unwrap();
+    let mut actual = vec![0; total as usize];
+    file.reader().unwrap().read_exact(&mut actual).unwrap();
+    assert_eq!(actual, fixture.bytes);
+    writer.finish().await.unwrap();
 }
 
 #[tokio::test]

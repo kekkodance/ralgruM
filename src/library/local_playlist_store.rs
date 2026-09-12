@@ -200,7 +200,18 @@ impl LocalPlaylistStore {
         };
         let mut playlists = self.playlists.clone();
         playlists.push(playlist.clone());
-        self.persist(playlists)?;
+        if let Err(error) = self.persist(playlists) {
+            if error == LocalPlaylistError::Serialization
+                && let Some(written) = &written
+            {
+                super::local_playlist_artwork::cleanup(
+                    &self.directory,
+                    &playlist.id,
+                    &written.reference,
+                );
+            }
+            return Err(error);
+        }
         Ok(playlist)
     }
 
@@ -247,7 +258,18 @@ impl LocalPlaylistStore {
         };
         let mut playlists = self.playlists.clone();
         playlists.push(playlist.clone());
-        self.persist(playlists)?;
+        if let Err(error) = self.persist(playlists) {
+            if error == LocalPlaylistError::Serialization
+                && let Some(written) = &written
+            {
+                super::local_playlist_artwork::cleanup(
+                    &self.directory,
+                    &playlist.id,
+                    &written.reference,
+                );
+            }
+            return Err(error);
+        }
         Ok(playlist)
     }
 
@@ -289,7 +311,21 @@ impl LocalPlaylistStore {
             playlist.artwork = written.reference.clone();
         }
         let updated = playlist.clone();
-        self.persist(playlists)?;
+        if let Err(error) = self.persist(playlists) {
+            // Encoding fails before any metadata write. Filesystem failures
+            // may have committed the backup, so retain its referenced cover.
+            if error == LocalPlaylistError::Serialization
+                && let Some(written) = &written
+                && written.reference != old_artwork
+            {
+                super::local_playlist_artwork::cleanup(
+                    &self.directory,
+                    &playlist_id,
+                    &written.reference,
+                );
+            }
+            return Err(error);
+        }
         if written.is_some() && updated.artwork != old_artwork {
             super::local_playlist_artwork::cleanup(&self.directory, &playlist_id, &old_artwork);
         }
@@ -621,12 +657,16 @@ fn decode_playlists(
 
 fn encode_playlists(playlists: &[LocalPlaylist]) -> Result<Vec<u8>, LocalPlaylistError> {
     let playlists = playlists.iter().map(stored_playlist).collect::<Vec<_>>();
-    serde_json::to_vec_pretty(&LocalPlaylistEnvelope {
+    let encoded = serde_json::to_vec_pretty(&LocalPlaylistEnvelope {
         format: FORMAT.into(),
         schema_version: SCHEMA_VERSION,
         playlists,
     })
-    .map_err(|_| LocalPlaylistError::Serialization)
+    .map_err(|_| LocalPlaylistError::Serialization)?;
+    if encoded.len() as u64 > MAX_FILE_BYTES {
+        return Err(LocalPlaylistError::Serialization);
+    }
+    Ok(encoded)
 }
 
 enum StoredFile {
@@ -990,6 +1030,43 @@ mod tests {
     }
 
     #[test]
+    fn oversized_encoded_playlist_is_rejected_before_state_or_files_change() {
+        let directory = TempDir::new().unwrap();
+        let mut store = LocalPlaylistStore::load_from_directory(directory.path()).unwrap();
+        let original = store.create("Original", "").unwrap();
+        let primary_before = fs::read(directory.path().join(PRIMARY_FILE)).unwrap();
+        let backup_before = fs::read(directory.path().join(BACKUP_FILE)).unwrap();
+        let playlists_before = store.playlists.clone();
+        let tracks = (0..1_200)
+            .map(|index| {
+                let mut track = track(Provider::Deezer, &format!("large-{index}"));
+                track.title = "x".repeat(16 * 1024);
+                track
+            })
+            .collect::<Vec<_>>();
+        let oversized = LocalPlaylist {
+            id: original.id.clone(),
+            title: original.title.clone(),
+            description: original.description.clone(),
+            artwork: original.artwork.clone(),
+            tracks,
+        };
+        let mut next = store.playlists.clone();
+        next[0] = oversized;
+
+        assert_eq!(store.persist(next), Err(LocalPlaylistError::Serialization));
+        assert_eq!(store.playlists, playlists_before);
+        assert_eq!(
+            fs::read(directory.path().join(PRIMARY_FILE)).unwrap(),
+            primary_before
+        );
+        assert_eq!(
+            fs::read(directory.path().join(BACKUP_FILE)).unwrap(),
+            backup_before
+        );
+    }
+
+    #[test]
     fn duplicate_playlist_ids_and_blank_track_ids_are_rejected() {
         let directory = TempDir::new().unwrap();
         let mut store = LocalPlaylistStore::load_from_directory(directory.path()).unwrap();
@@ -1049,6 +1126,25 @@ mod tests {
         assert!(!contents.contains("token"));
         assert!(!contents.contains("arl"));
         assert!(!contents.contains("account"));
+    }
+
+    #[test]
+    fn failed_metadata_save_keeps_the_existing_cover() {
+        let directory = TempDir::new().unwrap();
+        let mut store = LocalPlaylistStore::load_from_directory(directory.path()).unwrap();
+        let jpeg = cover_jpeg([12, 34, 56]);
+        let playlist = store.create_with_artwork("Local", "", Some(&jpeg)).unwrap();
+        let cover = store.artwork_path(&playlist.id, &playlist.artwork).unwrap();
+        let backup = directory.path().join(BACKUP_FILE);
+        fs::remove_file(&backup).unwrap();
+        fs::create_dir(&backup).unwrap();
+
+        assert_eq!(
+            store.update_with_artwork(&playlist.id, "Renamed", "", Some(&jpeg)),
+            Err(LocalPlaylistError::Filesystem),
+        );
+        assert_eq!(fs::read(cover).unwrap(), jpeg);
+        assert_eq!(store.playlist(&playlist.id).unwrap().title, "Local");
     }
 
     #[test]

@@ -69,48 +69,47 @@ impl PlayingSnapshot {
         }
     }
 
-    /// Rows match the current track on provider and id, the same key the
-    /// original trackKey helper built for its playing-row sweep.
-    pub(crate) fn row(&self, track: &PlaybackTrack) -> RowPlaying {
-        let is_current = self
-            .current
-            .as_ref()
-            .is_some_and(|(provider, id)| *provider == track.provider && id == &track.id);
-        if is_current {
-            RowPlaying::Current {
-                animating: self.playing,
-            }
-        } else {
-            RowPlaying::Other
-        }
-    }
-
-    /// Resolve a row against its full playback queue so duplicate tracks only
-    /// mark the physical occurrence that is currently playing.
-    pub(crate) fn row_in_queue(
-        &self,
-        track: &PlaybackTrack,
-        index: usize,
-        queue: &[PlaybackTrack],
-    ) -> RowPlaying {
+    /// Resolve queue correspondence once before rendering any rows.
+    pub(crate) fn for_queue(&self, queue: &[PlaybackTrack]) -> QueuePlayingSnapshot {
         let queue_matches = queue.len() == self.queue.len()
             && queue
                 .iter()
                 .zip(&self.queue)
                 .all(|(track, (provider, id))| track.provider == *provider && track.id == *id);
-        if queue_matches {
-            if self.current_index != Some(index) {
-                return RowPlaying::Other;
-            }
-            return self.row(track);
-        }
-        let first_match = queue.iter().position(|candidate| {
-            self.current.as_ref().is_some_and(|(provider, id)| {
-                candidate.provider == *provider && candidate.id == *id
+        let current_index = if queue_matches {
+            self.current_index
+        } else {
+            queue.iter().position(|track| {
+                self.current
+                    .as_ref()
+                    .is_some_and(|(provider, id)| track.provider == *provider && track.id == *id)
             })
-        });
-        if first_match == Some(index) {
-            self.row(track)
+        };
+        QueuePlayingSnapshot {
+            current_index,
+            playing: self.playing,
+            skip_explicit: self.skip_explicit,
+        }
+    }
+
+    pub(crate) fn blocks(&self, track: &PlaybackTrack) -> bool {
+        self.skip_explicit && track.explicit
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QueuePlayingSnapshot {
+    current_index: Option<usize>,
+    playing: bool,
+    skip_explicit: bool,
+}
+
+impl QueuePlayingSnapshot {
+    pub(crate) fn row(&self, index: usize) -> RowPlaying {
+        if self.current_index == Some(index) {
+            RowPlaying::Current {
+                animating: self.playing,
+            }
         } else {
             RowPlaying::Other
         }
@@ -556,23 +555,31 @@ mod tests {
         let snapshot = PlayingSnapshot::from_playback(&state);
 
         assert_eq!(
-            snapshot.row(&deezer),
+            snapshot.for_queue(std::slice::from_ref(&deezer)).row(0),
             RowPlaying::Current { animating: false }
         );
-        assert_eq!(snapshot.row(&other_provider), RowPlaying::Other);
-        assert_eq!(snapshot.row(&other_id), RowPlaying::Other);
+        assert_eq!(
+            snapshot
+                .for_queue(std::slice::from_ref(&other_provider))
+                .row(0),
+            RowPlaying::Other
+        );
+        assert_eq!(
+            snapshot.for_queue(std::slice::from_ref(&other_id)).row(0),
+            RowPlaying::Other
+        );
 
         state.loaded(state.generation, None);
         let snapshot = PlayingSnapshot::from_playback(&state);
         assert_eq!(
-            snapshot.row(&deezer),
+            snapshot.for_queue(std::slice::from_ref(&deezer)).row(0),
             RowPlaying::Current { animating: true }
         );
 
         state.toggle();
         let snapshot = PlayingSnapshot::from_playback(&state);
         assert_eq!(
-            snapshot.row(&deezer),
+            snapshot.for_queue(std::slice::from_ref(&deezer)).row(0),
             RowPlaying::Current { animating: false }
         );
     }
@@ -585,14 +592,24 @@ mod tests {
         state.replace(queue.clone(), 1);
         let snapshot = PlayingSnapshot::from_playback(&state);
 
+        assert_eq!(snapshot.for_queue(&queue).row(0), RowPlaying::Other);
         assert_eq!(
-            snapshot.row_in_queue(&queue[0], 0, &queue),
-            RowPlaying::Other
-        );
-        assert_eq!(
-            snapshot.row_in_queue(&queue[1], 1, &queue),
+            snapshot.for_queue(&queue).row(1),
             RowPlaying::Current { animating: false }
         );
+    }
+
+    #[test]
+    fn queue_snapshot_matches_provider_and_marks_only_the_first_external_occurrence() {
+        let mut state = PlaybackState::default();
+        let current = track(PlaybackProvider::Deezer, "42", false);
+        let other = track(PlaybackProvider::SoundCloud, "42", false);
+        state.replace(vec![current.clone()], 0);
+        let snapshot = PlayingSnapshot::from_playback(&state);
+        let rows = snapshot.for_queue(&[other, current.clone(), current]);
+        assert_eq!(rows.row(0), RowPlaying::Other);
+        assert_eq!(rows.row(1), RowPlaying::Current { animating: false });
+        assert_eq!(rows.row(2), RowPlaying::Other);
     }
 
     #[test]
@@ -617,7 +634,10 @@ mod tests {
         state.replace(vec![deezer.clone()], 0);
         state.clear();
         let snapshot = PlayingSnapshot::from_playback(&state);
-        assert_eq!(snapshot.row(&deezer), RowPlaying::Other);
+        assert_eq!(
+            snapshot.for_queue(std::slice::from_ref(&deezer)).row(0),
+            RowPlaying::Other
+        );
         assert_eq!(state.status, PlaybackStatus::Empty);
     }
 

@@ -66,11 +66,8 @@ pub(crate) const PRIMARY_BUTTON_RADIUS: f32 = 6.;
 pub(crate) const PLAIN_X_HIT_SIZE: f32 = 24.;
 pub(crate) const PLAIN_X_ICON_SIZE: f32 = 9.;
 
-#[allow(dead_code)]
 pub(crate) const SECONDARY_PAGE_ACTION_HEIGHT: f32 = 32.;
-#[allow(dead_code)]
 pub(crate) const SECONDARY_PAGE_ACTION_HORIZONTAL_PADDING: f32 = 11.;
-#[allow(dead_code)]
 pub(crate) const SECONDARY_PAGE_ACTION_RADIUS: f32 = 6.;
 const SECONDARY_PAGE_ACTION_PALETTE: ButtonPalette = ButtonPalette {
     normal_text: FOREGROUND,
@@ -80,22 +77,6 @@ const SECONDARY_PAGE_ACTION_PALETTE: ButtonPalette = ButtonPalette {
     hover_border: BORDER,
     hover_background: BORDER,
 };
-#[allow(dead_code)]
-pub(crate) const SECONDARY_PAGE_ACTION_NORMAL_BACKGROUND: u32 =
-    SECONDARY_PAGE_ACTION_PALETTE.normal_background;
-#[allow(dead_code)]
-pub(crate) const SECONDARY_PAGE_ACTION_NORMAL_BORDER: u32 =
-    SECONDARY_PAGE_ACTION_PALETTE.normal_border;
-#[allow(dead_code)]
-pub(crate) const SECONDARY_PAGE_ACTION_NORMAL_TEXT: u32 = SECONDARY_PAGE_ACTION_PALETTE.normal_text;
-#[allow(dead_code)]
-pub(crate) const SECONDARY_PAGE_ACTION_HOVER_BACKGROUND: u32 =
-    SECONDARY_PAGE_ACTION_PALETTE.hover_background;
-#[allow(dead_code)]
-pub(crate) const SECONDARY_PAGE_ACTION_HOVER_BORDER: u32 =
-    SECONDARY_PAGE_ACTION_PALETTE.hover_border;
-#[allow(dead_code)]
-pub(crate) const SECONDARY_PAGE_ACTION_HOVER_TEXT: u32 = SECONDARY_PAGE_ACTION_PALETTE.hover_text;
 
 fn palette_color(color: u32) -> gpui::Rgba {
     if color == 0 || color > 0x00ff_ffff {
@@ -278,7 +259,6 @@ fn primary_button_is_disabled(disabled: bool, loading: bool) -> bool {
     disabled || loading
 }
 
-#[allow(dead_code)]
 pub(crate) fn secondary_page_action_button_with_disabled(
     id: impl Into<ElementId>,
     icon: Option<LocalIcon>,
@@ -458,165 +438,4 @@ fn primary_button_with_dimensions(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        DANGER_SECONDARY_HEIGHT, DANGER_SECONDARY_PALETTE, DANGER_SECONDARY_RADIUS,
-        PLAIN_X_HIT_SIZE, PLAIN_X_ICON_SIZE, PRIMARY_BUTTON_BACKGROUND, PRIMARY_BUTTON_BORDER,
-        PRIMARY_BUTTON_FOREGROUND, PRIMARY_BUTTON_HEIGHT, PRIMARY_BUTTON_HOVER_BACKGROUND,
-        PRIMARY_BUTTON_HOVER_BORDER, PRIMARY_BUTTON_ICON_GAP, PRIMARY_BUTTON_ICON_SIZE,
-        PRIMARY_BUTTON_RADIUS, SECONDARY_PAGE_ACTION_HEIGHT,
-        SECONDARY_PAGE_ACTION_HORIZONTAL_PADDING, SECONDARY_PAGE_ACTION_HOVER_BACKGROUND,
-        SECONDARY_PAGE_ACTION_HOVER_BORDER, SECONDARY_PAGE_ACTION_HOVER_TEXT,
-        SECONDARY_PAGE_ACTION_NORMAL_BACKGROUND, SECONDARY_PAGE_ACTION_NORMAL_BORDER,
-        SECONDARY_PAGE_ACTION_NORMAL_TEXT, SECONDARY_PAGE_ACTION_RADIUS,
-        SETTINGS_SECONDARY_MIN_HEIGHT, primary_button_is_disabled,
-    };
-
-    #[test]
-    fn danger_palette_is_shared_and_matches_logout_contract() {
-        assert_eq!(DANGER_SECONDARY_PALETTE.normal_text, 0xfca5a5);
-        assert_eq!(DANGER_SECONDARY_PALETTE.normal_border, 0xef44444d);
-        assert_eq!(DANGER_SECONDARY_PALETTE.normal_background, 0x00000000);
-        assert_eq!(DANGER_SECONDARY_PALETTE.hover_text, 0xfecaca);
-        assert_eq!(DANGER_SECONDARY_PALETTE.hover_border, 0xef44448c);
-        assert_eq!(DANGER_SECONDARY_PALETTE.hover_background, 0xef444424);
-        assert_eq!(DANGER_SECONDARY_RADIUS, 6.);
-    }
-
-    #[test]
-    fn shared_button_contract_keeps_settings_actions_compact() {
-        assert_eq!(SETTINGS_SECONDARY_MIN_HEIGHT, 32.);
-    }
-
-    #[test]
-    fn primary_button_contract_matches_library_action() {
-        assert_eq!(PRIMARY_BUTTON_BACKGROUND, 0x6366f1ff);
-        assert_eq!(PRIMARY_BUTTON_BORDER, 0x818cf8c2);
-        assert_eq!(PRIMARY_BUTTON_FOREGROUND, 0xfafafa);
-        assert_eq!(PRIMARY_BUTTON_HOVER_BACKGROUND, 0x5558e8ff);
-        assert_eq!(PRIMARY_BUTTON_HOVER_BORDER, 0xa5b4fcff);
-        assert_eq!(PRIMARY_BUTTON_HEIGHT, 34.);
-    }
-
-    #[test]
-    fn plain_x_is_small_and_only_swaps_glyph_color_on_hover() {
-        assert_eq!(PLAIN_X_HIT_SIZE, 24.);
-        assert_eq!(PLAIN_X_ICON_SIZE, 9.);
-        let source = include_str!("app_button.rs");
-        let body = source
-            .split_once("pub(crate) fn plain_x_button")
-            .unwrap()
-            .1
-            .split_once("/// Build a normal app action button")
-            .unwrap()
-            .0;
-        assert!(body.contains("LocalIcon::X, FOREGROUND"));
-        assert!(body.contains("group_hover"));
-        assert!(!body.contains(".hover("));
-    }
-
-    #[test]
-    fn loading_primary_button_state_disables_interaction() {
-        assert!(primary_button_is_disabled(false, true));
-        assert!(primary_button_is_disabled(true, false));
-        assert!(!primary_button_is_disabled(false, false));
-    }
-
-    #[test]
-    fn secondary_page_action_contract_matches_global_bordered_header_action() {
-        assert_eq!(SECONDARY_PAGE_ACTION_HEIGHT, 32.);
-        assert_eq!(SECONDARY_PAGE_ACTION_HORIZONTAL_PADDING, 11.);
-        assert_eq!(SECONDARY_PAGE_ACTION_RADIUS, 6.);
-        assert_eq!(SECONDARY_PAGE_ACTION_NORMAL_BACKGROUND, 0x00000000);
-        assert_eq!(SECONDARY_PAGE_ACTION_NORMAL_BORDER, crate::theme::BORDER);
-        assert_eq!(SECONDARY_PAGE_ACTION_NORMAL_TEXT, crate::theme::FOREGROUND);
-        assert_eq!(SECONDARY_PAGE_ACTION_HOVER_BACKGROUND, crate::theme::BORDER);
-        assert_eq!(SECONDARY_PAGE_ACTION_HOVER_BORDER, crate::theme::BORDER);
-        assert_eq!(SECONDARY_PAGE_ACTION_HOVER_TEXT, crate::theme::FOREGROUND);
-
-        let source = include_str!("app_button.rs");
-        assert!(source.contains("pub(crate) fn secondary_page_action_button_with_disabled"));
-        assert!(source.contains(".border_1()"));
-        assert!(source.contains(".active(|style|"));
-    }
-
-    #[test]
-    fn dialog_actions_share_height_and_radius() {
-        assert_eq!(PRIMARY_BUTTON_RADIUS, SECONDARY_PAGE_ACTION_RADIUS);
-        let source = include_str!("app_button.rs");
-        let dialog = source
-            .split("pub(crate) fn secondary_dialog_button_with_disabled")
-            .nth(1)
-            .and_then(|body| body.split("fn primary_button_with_dimensions").next())
-            .expect("secondary dialog button helper");
-        let delegate = dialog
-            .find("secondary_page_action_button_with_disabled")
-            .expect("dialog helper delegates to page action helper");
-        let height = dialog
-            .find(".h(px(PRIMARY_BUTTON_HEIGHT))")
-            .expect("dialog helper restores primary height");
-        assert!(delegate < height);
-        assert!(source.contains(".size(px(PRIMARY_BUTTON_ICON_SIZE))"));
-        assert!(source.contains(".top(px(0.5))"));
-        assert!(source.contains("LocalIcon::Download | LocalIcon::Upload"));
-        assert!(source.contains("danger_secondary_button_with_loading"));
-    }
-
-    #[test]
-    fn danger_and_neutral_dialog_helpers_share_geometry() {
-        assert_eq!(PRIMARY_BUTTON_HEIGHT, DANGER_SECONDARY_HEIGHT);
-        assert_eq!(PRIMARY_BUTTON_RADIUS, DANGER_SECONDARY_RADIUS);
-        assert_eq!(PRIMARY_BUTTON_ICON_GAP, 7.);
-        assert_eq!(PRIMARY_BUTTON_ICON_SIZE, 13.);
-
-        let source = include_str!("app_button.rs");
-        let neutral = source
-            .split_once("pub(crate) fn secondary_dialog_button_with_disabled(")
-            .unwrap()
-            .1
-            .split_once("/// Build a destructive secondary dialog action")
-            .unwrap()
-            .0;
-        let danger = source
-            .split_once("pub(crate) fn danger_secondary_dialog_button_with_disabled(")
-            .unwrap()
-            .1
-            .split_once("fn primary_button_with_dimensions")
-            .unwrap()
-            .0;
-        let shared = source
-            .split_once("fn secondary_page_action_button_with_palette(")
-            .unwrap()
-            .1
-            .split_once("/// Build a secondary dialog action")
-            .unwrap()
-            .0;
-        assert!(neutral.contains("secondary_page_action_button_with_disabled"));
-        assert!(danger.contains("secondary_page_action_button_with_palette"));
-        assert!(neutral.contains(".h(px(PRIMARY_BUTTON_HEIGHT))"));
-        assert!(danger.contains(".h(px(PRIMARY_BUTTON_HEIGHT))"));
-        for shared_geometry in [
-            ".px(px(SECONDARY_PAGE_ACTION_HORIZONTAL_PADDING))",
-            ".gap(px(PRIMARY_BUTTON_ICON_GAP))",
-            ".rounded(px(SECONDARY_PAGE_ACTION_RADIUS))",
-            ".size(px(PRIMARY_BUTTON_ICON_SIZE))",
-            ".opacity(0.5).cursor(CursorStyle::Arrow)",
-        ] {
-            assert!(
-                shared.contains(shared_geometry),
-                "shared dialog geometry missing: {shared_geometry}"
-            );
-        }
-        assert!(danger.contains("DANGER_SECONDARY_PALETTE"));
-        assert!(source.contains("fn secondary_page_action_button_with_palette"));
-    }
-
-    #[test]
-    fn playlist_delete_uses_loading_danger_secondary_action_contract() {
-        let source = include_str!("app_button.rs");
-        assert!(source.contains("pub(crate) fn danger_secondary_button_with_loading"));
-        assert!(source.contains("DANGER_SECONDARY_PALETTE.normal_border"));
-        assert!(source.contains("DANGER_SECONDARY_PALETTE.hover_background"));
-        assert!(source.contains("let is_disabled = disabled || loading;"));
-    }
-}
+mod tests;

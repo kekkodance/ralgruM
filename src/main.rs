@@ -48,17 +48,25 @@ use shell::RalgrumApp;
 fn start_browser_link_pump(
     cx: &mut App,
     shell: gpui::WeakEntity<RalgrumApp>,
-    mut events: futures::channel::mpsc::UnboundedReceiver<browser_link::BrowserEntity>,
+    mut events: futures::channel::mpsc::UnboundedReceiver<
+        platform::windows_browser_link::BrowserLinkEvent,
+    >,
 ) {
     use futures::StreamExt as _;
 
     cx.spawn(async move |cx| {
-        while let Some(entity) = events.next().await {
-            let alive = cx.update(|cx| {
-                tray::restore_main_window(cx);
-                shell
-                    .update(cx, |app, cx| app.open_browser_link(entity, cx))
-                    .is_ok()
+        while let Some(event) = events.next().await {
+            let alive = cx.update(|cx| match event {
+                platform::windows_browser_link::BrowserLinkEvent::Restore => {
+                    tray::restore_main_window(cx);
+                    true
+                }
+                platform::windows_browser_link::BrowserLinkEvent::Open(entity) => shell
+                    .update(cx, |app, cx| {
+                        tray::restore_main_window(cx);
+                        app.open_browser_link(entity, cx)
+                    })
+                    .is_ok(),
             });
             if !alive {
                 break;
@@ -87,10 +95,18 @@ fn main() {
     let mut browser_launch = platform::windows_browser_link::prepare(raw_browser_link.clone());
     #[cfg(windows)]
     if matches!(
-        browser_launch,
+        &browser_launch,
         platform::windows_browser_link::BrowserLinkLaunch::Forwarded
+            | platform::windows_browser_link::BrowserLinkLaunch::Unavailable
     ) {
-        diagnostics::event("INFO", "browser link forwarded to running app");
+        if matches!(
+            &browser_launch,
+            platform::windows_browser_link::BrowserLinkLaunch::Forwarded
+        ) {
+            diagnostics::event("INFO", "secondary launch forwarded to running app");
+        } else {
+            diagnostics::event("ERROR", "single-instance startup unavailable");
+        }
         return;
     }
     #[cfg(not(windows))]

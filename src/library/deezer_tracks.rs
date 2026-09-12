@@ -168,16 +168,24 @@ impl LibraryView {
                 })
                 .detach();
             }
-            DeezerTracksRetry::Hydration { token, hydration } => {
+            DeezerTracksRetry::Hydration {
+                token,
+                hydration,
+                key,
+            } => {
                 if !self.state.begin_tracks_pipeline_enrichment_retry(token) {
-                    self.deezer_tracks_retry =
-                        Some(DeezerTracksRetry::Hydration { token, hydration });
+                    self.deezer_tracks_retry = Some(DeezerTracksRetry::Hydration {
+                        token,
+                        hydration,
+                        key,
+                    });
                     return;
                 }
                 let retry_hydration = hydration.clone();
                 self.deezer_tracks_retry = Some(DeezerTracksRetry::Hydration {
                     token,
                     hydration: retry_hydration,
+                    key: key.clone(),
                 });
                 let task = self.runtime.spawn(async move { hydration.hydrate().await });
                 cx.spawn(async move |this, cx| {
@@ -186,18 +194,29 @@ impl LibraryView {
                         .unwrap_or_else(|_| Err("Deezer track enrichment failed".into()));
                     match result {
                         Ok(page) => {
-                            this.update(cx, |this, cx| {
-                                this.deezer_tracks_retry = None;
-                                if this.state.accept_tracks_pipeline_enrichment(token, page) {
-                                    this.seed_loaded_root_favorites(
-                                        Service::Deezer,
-                                        Category::Tracks,
-                                        cx,
-                                    );
-                                    cx.notify();
-                                }
-                            })
-                            .ok();
+                            let persisted_page = page.clone();
+                            let accepted = this
+                                .update(cx, |this, cx| {
+                                    if !pipeline_is_current_in_entity(this, token) {
+                                        return false;
+                                    }
+                                    this.deezer_tracks_retry = None;
+                                    let accepted =
+                                        this.state.accept_tracks_pipeline_enrichment(token, page);
+                                    if accepted {
+                                        this.seed_loaded_root_favorites(
+                                            Service::Deezer,
+                                            Category::Tracks,
+                                            cx,
+                                        );
+                                        cx.notify();
+                                    }
+                                    accepted || pipeline_is_current_in_entity(this, token)
+                                })
+                                .unwrap_or(false);
+                            if accepted {
+                                persist_snapshot(this, cx, key, persisted_page);
+                            }
                         }
                         Err(error) => {
                             eprintln!("Deezer track enrichment retry failed: {error}");
@@ -332,6 +351,7 @@ async fn run_deezer_tracks_continuation(
         this.deezer_tracks_retry = Some(DeezerTracksRetry::Hydration {
             token,
             hydration: retry_hydration,
+            key: verified_key.clone(),
         });
     })
     .ok();
@@ -362,6 +382,9 @@ async fn finish_deezer_tracks_hydration(
         Ok(page) => {
             let accepted = this
                 .update(cx, |this, cx| {
+                    if !pipeline_is_current_in_entity(this, token) {
+                        return false;
+                    }
                     this.deezer_tracks_retry = None;
                     let accepted = this
                         .state
@@ -422,8 +445,9 @@ fn persist_snapshot(
     let (Some(key), Some((cache, runtime))) = (key, cache_and_runtime) else {
         return;
     };
+    let revision = cache.reserve_revision(&key);
     drop(runtime.spawn(async move {
-        if let Err(error) = cache.store(&key, &page).await {
+        if let Err(error) = cache.store_revision(&key, &page, revision).await {
             eprintln!("{error}");
         }
     }));

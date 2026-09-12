@@ -36,6 +36,7 @@ mod layout;
 mod logout_all_dialog;
 mod murglar_panel;
 mod murglar_referral;
+mod runtime_persistence;
 mod service_panel;
 mod settings_transfer_dialog;
 mod toggle;
@@ -162,6 +163,7 @@ pub(crate) struct SettingsView {
     pub(super) draft: AppSettings,
     pub(super) save_error: Option<SharedString>,
     import_sync_pending: bool,
+    pending_runtime_save: Option<Task<()>>,
     pub(super) account: Entity<AccountState>,
     pub(super) runtime: Arc<Runtime>,
     pub(super) http_client: reqwest::Client,
@@ -307,9 +309,14 @@ impl SettingsView {
             store,
             save_error,
             import_sync_pending: false,
+            pending_runtime_save: None,
             account,
             runtime,
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("settings HTTP client configuration should be valid"),
             username,
             password,
             deezer_arl: cx.new(|cx| {
@@ -374,6 +381,7 @@ impl SettingsView {
         };
         let mut view = this;
         view.subscribe_selects(cx);
+        view.install_runtime_settings_flush(cx);
         view
     }
 
@@ -579,35 +587,6 @@ impl SettingsView {
             self.saved = settings;
             if !self.session_active {
                 self.draft = self.saved.clone();
-            }
-        }
-    }
-
-    pub(crate) fn persist_runtime_state(
-        &mut self,
-        preferences: (f32, bool, crate::playback::RepeatMode, bool),
-        sidebar: (bool, RightSidebarView),
-    ) {
-        if self.import_sync_pending {
-            return;
-        }
-        let Some(store) = self.store.as_mut() else {
-            return;
-        };
-        let mut settings = self.saved.clone();
-        let volume_changed = settings.apply_volume_preferences(preferences.0, preferences.1);
-        let modes_changed = settings.apply_playback_modes(preferences.2, preferences.3);
-        let modes_allowed = self.saved.remember_playback_modes;
-        let sidebar_changed =
-            settings.right_sidebar_open != sidebar.0 || settings.right_sidebar_view != sidebar.1;
-        settings.right_sidebar_open = sidebar.0;
-        settings.right_sidebar_view = sidebar.1;
-        if (volume_changed || (modes_allowed && modes_changed) || sidebar_changed)
-            && store.persist(settings.clone()).is_ok()
-        {
-            self.saved = settings.clone();
-            if !self.session_active {
-                self.draft = settings;
             }
         }
     }

@@ -14,7 +14,7 @@ use crate::{
         row_download_button, row_more_button, track_row_with_action,
     },
     playback::PlaybackTrack,
-    playing_indicator::PlayingSnapshot,
+    playing_indicator::{PlayingSnapshot, QueuePlayingSnapshot},
     theme::PRIMARY,
 };
 
@@ -40,7 +40,7 @@ pub(super) struct SearchTrackRows {
     downloads: Entity<crate::downloads::DownloadModel>,
     account: Entity<crate::settings::AccountState>,
     navigation_context: Option<ContextRoute>,
-    playing: PlayingSnapshot,
+    playing: QueuePlayingSnapshot,
     deezer_openers: (NavigationOpener, NavigationOpener),
     soundcloud_openers: (NavigationOpener, NavigationOpener),
 }
@@ -86,6 +86,7 @@ impl SearchTrackRows {
                 .map(crate::playback::PlaybackTrack::from_search)
                 .collect::<Vec<_>>(),
         );
+        let playing = playing.for_queue(&queue);
         Self {
             view: view.clone(),
             tracks: rendered_tracks,
@@ -314,7 +315,7 @@ fn render_track_item(
     downloads: &Entity<crate::downloads::DownloadModel>,
     account: &Entity<crate::settings::AccountState>,
     navigation_context: Option<&ContextRoute>,
-    playing: &PlayingSnapshot,
+    playing: &QueuePlayingSnapshot,
     deezer_openers: &(NavigationOpener, NavigationOpener),
     soundcloud_openers: &(NavigationOpener, NavigationOpener),
     app: &App,
@@ -332,7 +333,7 @@ fn render_track_item(
             (track.source == Provider::Deezer)
                 .then(|| remove_button(index, playlist, track, removal_pending, view))
         });
-    let row_playing = playing.row_in_queue(queue_track, index, queue);
+    let row_playing = playing.row(index);
     let row_blocked = playing.blocks(queue_track);
     let click_playback = playback.clone();
     let key_playback = playback.clone();

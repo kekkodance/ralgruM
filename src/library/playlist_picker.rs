@@ -9,7 +9,8 @@ use gpui_component::{
 };
 
 use super::{
-    local_playlist_controller::LocalPlaylistAddResult as AddResult,
+    local_persistence::LocalPlaylistMutationOutcome,
+    local_playlist_controller::LocalPlaylistCompletion,
     local_playlist_store::LocalPlaylist,
     playlist_client::AddTracksResult,
     playlist_state::CatalogStatus,
@@ -487,19 +488,39 @@ impl PlaylistPicker {
         };
         match self.target.clone() {
             PlaylistPickerTarget::Local { tracks } => {
+                self.busy = true;
+                self.error = None;
+                let picker = cx.entity().clone();
                 let result = self.library.update(cx, |library, cx| {
-                    library.add_tracks_to_local_playlist(playlist_id, &tracks, cx)
+                    let completion: LocalPlaylistCompletion = Box::new(
+                        move |result: Result<
+                            LocalPlaylistMutationOutcome,
+                            super::local_playlist_store::LocalPlaylistError,
+                        >,
+                              _view: &mut LibraryView,
+                              cx: &mut Context<LibraryView>| {
+                            picker.update(cx, |picker, cx| {
+                                picker.busy = false;
+                                match result {
+                                    Ok(LocalPlaylistMutationOutcome::Added { count }) => {
+                                        picker.completed = Some(AddTracksResult::Added { count });
+                                    }
+                                    Ok(LocalPlaylistMutationOutcome::AlreadyPresent { .. }) => {
+                                        picker.completed =
+                                            Some(AddTracksResult::AlreadyPresent { count: 1 });
+                                    }
+                                    Err(error) => picker.error = Some(error.to_string().into()),
+                                    _ => {}
+                                }
+                                cx.notify();
+                            });
+                        },
+                    );
+                    library.add_tracks_to_local_playlist(playlist_id, &tracks, completion, cx)
                 });
-                match result {
-                    Ok(AddResult::Added { count }) => {
-                        self.completed = Some(AddTracksResult::Added { count });
-                    }
-                    Ok(AddResult::AlreadyPresent { .. }) => {
-                        self.completed = Some(AddTracksResult::AlreadyPresent { count: 1 });
-                    }
-                    Err(error) => {
-                        self.error = Some(error.to_string().into());
-                    }
+                if let Err(error) = result {
+                    self.busy = false;
+                    self.error = Some(error.to_string().into());
                 }
                 cx.notify();
             }

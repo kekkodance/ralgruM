@@ -90,13 +90,21 @@ pub(crate) struct LyricsTrackInput(LyricsTrack);
 impl LyricsTrackInput {
     pub(crate) fn from_playback(track: &PlaybackTrack) -> Self {
         Self(LyricsTrack {
-            stable_id: Some(track.id.clone()),
+            stable_id: Some(lyrics_track_identity(track)),
             artist: track.artist.clone(),
             title: track.title.clone(),
             album: Some(track.album.clone()),
             duration: Some(track.duration.as_secs()),
         })
     }
+}
+
+fn lyrics_track_identity(track: &PlaybackTrack) -> String {
+    let provider = match track.provider {
+        crate::playback::PlaybackProvider::Deezer => "deezer",
+        crate::playback::PlaybackProvider::SoundCloud => "soundcloud",
+    };
+    format!("{provider}:{}", track.id)
 }
 
 pub(crate) struct LyricsPanel {
@@ -738,7 +746,7 @@ impl LyricsPanel {
             .read(cx)
             .state
             .current()
-            .map(|track| track.id.clone());
+            .map(lyrics_track_identity);
         let lyrics_id = self
             .track
             .as_ref()
@@ -1349,6 +1357,40 @@ mod tests {
     use super::*;
     use gpui::StatefulInteractiveElement;
     use gpui_component::scroll::ScrollableElement;
+
+    #[test]
+    fn equal_track_ids_from_different_services_have_distinct_lyrics() {
+        let deezer = PlaybackTrack {
+            provider: crate::playback::PlaybackProvider::Deezer,
+            id: "42".into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            album: String::new(),
+            album_id: String::new(),
+            release_date: String::new(),
+            artists: Vec::new(),
+            artwork: String::new(),
+            duration: Duration::from_secs(30),
+            downloadable: false,
+            progressive: false,
+            explicit: false,
+            service_url: String::new(),
+        };
+        let mut soundcloud = deezer.clone();
+        soundcloud.provider = crate::playback::PlaybackProvider::SoundCloud;
+        let first = LyricsTrackInput::from_playback(&deezer).0;
+        let second = LyricsTrackInput::from_playback(&soundcloud).0;
+        assert!(track_changed(Some(&first), Some(&second)));
+        assert_ne!(first.stable_id, second.stable_id);
+        assert_ne!(
+            LyricsCacheKey::new(LyricsProvider::Genius, &first),
+            LyricsCacheKey::new(LyricsProvider::Genius, &second),
+        );
+        assert_eq!(
+            first.stable_id.as_deref(),
+            Some(lyrics_track_identity(&deezer).as_str())
+        );
+    }
 
     struct LyricsScrollProbe {
         scroll: ScrollHandle,

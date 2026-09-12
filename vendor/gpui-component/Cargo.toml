@@ -1,25 +1,6 @@
 [workspace]
-default-members = ["crates/ui", "crates/story", "crates/assets"]
-members = [
-    "crates/macros",
-    "crates/story",
-    "crates/story-web",
-    "crates/ui",
-    "crates/assets",
-    "crates/webview",
-    "examples/app_assets",
-    "examples/hello_world",
-    "examples/input",
-    "examples/window_title",
-    "examples/dialog_overlay",
-    "examples/webview",
-    "examples/system_monitor",
-    "examples/focus_trap",
-    "examples/tooltip_top_edge",
-    "examples/sidebar",
-    "examples/text_selection",
-    "examples/root_borderless",
-]
+default-members = ["crates/ui", "crates/assets"]
+members = ["crates/macros", "crates/ui", "crates/assets"]
 resolver = "2"
 
 [workspace.package]
@@ -30,7 +11,6 @@ edition = "2024"
 gpui-component = { path = "crates/ui", version = "0.5.2" }
 gpui-component-macros = { path = "crates/macros", version = "0.5.1" }
 gpui-component-assets = { path = "crates/assets", version = "0.5.1" }
-story = { path = "crates/story" }
 
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }

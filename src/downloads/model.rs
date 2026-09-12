@@ -945,7 +945,7 @@ impl DownloadModel {
         let cancellation = cancellation.clone();
         let resolver = self.resolver.clone();
         let cache = self.cache.clone();
-        let part = part_path(&path);
+        let part = part_path(&path, id, generation);
         let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
         let progress: ProgressCallback = Arc::new(move |update: ProgressUpdate| {
             let _ = progress_sender.send((update.downloaded, update.total));
@@ -1249,12 +1249,14 @@ fn destination_with_extension(track: &PlaybackTrack, extension: &str, directory:
     ))
 }
 
-fn part_path(path: &Path) -> PathBuf {
+fn part_path(path: &Path, id: u64, generation: u64) -> PathBuf {
     path.with_file_name(format!(
-        "{}.part",
+        ".{}.{}.{}.part",
         path.file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("download")
+            .unwrap_or("download"),
+        id,
+        generation,
     ))
 }
 
@@ -1337,6 +1339,43 @@ mod tests {
         assert_eq!(
             batch_download_extension(PlaybackProvider::SoundCloud, DownloadVariant::Standard),
             Some("mp3")
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_job_cleanup_preserves_a_newer_download_to_the_same_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("track.mp3");
+        let old_part = part_path(&destination, 1, 4);
+        let new_part = part_path(&destination, 2, 5);
+        fs::write(&old_part, b"cancelled transfer").await.unwrap();
+        fs::write(&new_part, b"new completed transfer")
+            .await
+            .unwrap();
+
+        fs::remove_file(&old_part).await.unwrap();
+        super::super::finalize::finalize_download(&new_part, &destination, false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fs::read(&destination).await.unwrap(),
+            b"new completed transfer"
+        );
+        assert!(!new_part.exists());
+    }
+
+    #[test]
+    fn partial_paths_are_unique_to_the_job_generation() {
+        let destination = PathBuf::from("downloads/Artist - Song.mp3");
+        assert_ne!(part_path(&destination, 1, 4), part_path(&destination, 2, 4));
+        assert_ne!(part_path(&destination, 1, 4), part_path(&destination, 1, 5));
+        assert!(
+            part_path(&destination, 1, 4)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".part")
         );
     }
 

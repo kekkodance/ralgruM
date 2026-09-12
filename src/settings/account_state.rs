@@ -44,7 +44,11 @@ pub(crate) struct AccountState {
     pub(super) soundcloud_identity_loading: bool,
     soundcloud_identity_attempted: bool,
     service_identity_generation: u64,
-    murglar_logout_epoch: u64,
+    /// Generation for the currently running Murglar login exchange. It is
+    /// independent from the settings view generation so a login may finish
+    /// and persist after the settings view closes.
+    murglar_login_epoch: u64,
+    active_murglar_login_epoch: Option<u64>,
     murglar_summary_trusted: bool,
 }
 
@@ -154,7 +158,8 @@ impl AccountState {
             soundcloud_identity_loading: false,
             soundcloud_identity_attempted: false,
             service_identity_generation: 0,
-            murglar_logout_epoch: 0,
+            murglar_login_epoch: 0,
+            active_murglar_login_epoch: None,
             murglar_summary_trusted,
         }
     }
@@ -306,6 +311,8 @@ impl AccountState {
         };
         self.generation = self.generation.wrapping_add(1);
         self.murglar_summary_trusted = false;
+        self.murglar_login_epoch = self.murglar_login_epoch.wrapping_add(1);
+        self.active_murglar_login_epoch = Some(self.murglar_login_epoch);
         self.loading = true;
         self.status = None;
         self.device_limit_exceeded = false;
@@ -319,24 +326,30 @@ impl AccountState {
         self.referral_copy_status = None;
         self.plans_status = None;
         self.session_error = None;
-        Some((self.generation, identity, self.murglar_logout_epoch))
+        Some((self.generation, identity, self.murglar_login_epoch))
     }
 
     pub(super) fn complete_token_exchange(
         &mut self,
         generation: u64,
-        logout_epoch: u64,
+        login_epoch: u64,
         result: Result<AccessToken, AccountError>,
     ) -> Option<String> {
+        // Validate every completion before touching durable storage. The
+        // settings generation changes when the view closes, so it cannot be
+        // used here: a still-current login is allowed to finish in the
+        // background. A new login or logout advances this dedicated epoch.
+        if self.active_murglar_login_epoch != Some(login_epoch) {
+            return None;
+        }
         match result {
             Ok(token) => {
-                if logout_epoch != self.murglar_logout_epoch {
-                    return None;
-                }
+                self.active_murglar_login_epoch = None;
                 let persisted_token = match self.session_store.as_mut() {
                     Some(store) => {
                         if let Err(error) = store.persist_murglar(token.into_inner()) {
                             if self.settings_active && generation == self.generation {
+                                self.loading = false;
                                 self.session_error = Some(error);
                                 self.status = None;
                                 self.device_limit_exceeded = false;
@@ -369,6 +382,7 @@ impl AccountState {
                 Some(persisted_token)
             }
             Err(error) => {
+                self.active_murglar_login_epoch = None;
                 if !self.settings_active || generation != self.generation {
                     return None;
                 }
@@ -489,7 +503,8 @@ impl AccountState {
     }
 
     pub(super) fn logout(&mut self) {
-        self.murglar_logout_epoch = self.murglar_logout_epoch.wrapping_add(1);
+        self.murglar_login_epoch = self.murglar_login_epoch.wrapping_add(1);
+        self.active_murglar_login_epoch = None;
         self.generation = self.generation.wrapping_add(1);
         self.murglar_summary_trusted = false;
         self.loading = false;
@@ -834,7 +849,8 @@ impl AccountState {
     }
 
     pub(super) fn logout_all(&mut self) {
-        self.murglar_logout_epoch = self.murglar_logout_epoch.wrapping_add(1);
+        self.murglar_login_epoch = self.murglar_login_epoch.wrapping_add(1);
+        self.active_murglar_login_epoch = None;
         self.generation = self.generation.wrapping_add(1);
         self.murglar_summary_trusted = false;
         self.service_generation = self.service_generation.wrapping_add(1);

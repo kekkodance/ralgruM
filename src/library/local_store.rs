@@ -385,12 +385,16 @@ fn decode_items(items: Vec<StoredItem>) -> Result<Vec<LocalTrack>, LocalLibraryE
 }
 
 fn encode_items(items: &[StoredItem]) -> Result<Vec<u8>, LocalLibraryError> {
-    serde_json::to_vec_pretty(&LocalEnvelope {
+    let encoded = serde_json::to_vec_pretty(&LocalEnvelope {
         format: FORMAT.into(),
         schema_version: SCHEMA_VERSION,
         items: items.to_vec(),
     })
-    .map_err(|_| LocalLibraryError::Serialization)
+    .map_err(|_| LocalLibraryError::Serialization)?;
+    if encoded.len() as u64 > MAX_FILE_BYTES {
+        return Err(LocalLibraryError::Serialization);
+    }
+    Ok(encoded)
 }
 
 fn encode_tracks(tracks: &[LocalTrack]) -> Result<Vec<u8>, LocalLibraryError> {
@@ -714,6 +718,39 @@ mod tests {
             LocalLibraryStore::load_from_directory(temp.path()),
             Err(LocalLibraryError::InvalidFile)
         ));
+    }
+
+    #[test]
+    fn oversized_encoded_library_is_rejected_before_state_or_files_change() {
+        let temp = TempDir::new().unwrap();
+        let mut store = load_store(&temp);
+        store
+            .add_track(track(Provider::Deezer, "original"))
+            .unwrap();
+        let primary_before = fs::read(temp.path().join(PRIMARY_FILE)).unwrap();
+        let backup_before = fs::read(temp.path().join(BACKUP_FILE)).unwrap();
+        let tracks_before = store.tracks.clone();
+        let oversized = (0..1_200)
+            .map(|index| {
+                let mut track = track(Provider::Deezer, &format!("large-{index}"));
+                track.title = "x".repeat(16 * 1024);
+                track
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            store.persist_tracks(oversized),
+            Err(LocalLibraryError::Serialization)
+        );
+        assert_eq!(store.tracks, tracks_before);
+        assert_eq!(
+            fs::read(temp.path().join(PRIMARY_FILE)).unwrap(),
+            primary_before
+        );
+        assert_eq!(
+            fs::read(temp.path().join(BACKUP_FILE)).unwrap(),
+            backup_before
+        );
     }
 
     #[test]

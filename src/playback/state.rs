@@ -674,7 +674,11 @@ impl PlaybackState {
     }
 
     pub(crate) fn next(&mut self) -> Option<u64> {
-        if self.repeat_mode == RepeatMode::One {
+        if self.repeat_mode == RepeatMode::One
+            && !self
+                .current()
+                .is_some_and(|track| self.explicit_blocked(track))
+        {
             return self.begin_selection();
         }
         let next_index = self
@@ -904,6 +908,7 @@ impl PlaybackState {
         if self.shuffle_enabled {
             self.shuffle_order.extend(first_new..self.queue.len());
         }
+        self.bump_queue_epoch();
         count
     }
 
@@ -1114,6 +1119,7 @@ impl PlaybackState {
         self.history = history_indices;
         self.play_next.clear();
         self.rebuild_shuffle_after_remainder_replace(preserved_count);
+        self.bump_queue_epoch();
         added
     }
 
@@ -1622,6 +1628,20 @@ mod tests {
         assert!(!state.set_skip_explicit(false));
         state.replace(explicit_tracks(&[1, 2]), 1);
         assert!(state.set_skip_explicit(true));
+    }
+
+    #[test]
+    fn repeat_one_moves_past_an_explicit_current_track_when_skipping_is_enabled() {
+        let mut state = PlaybackState::default();
+        state.replace(explicit_tracks(&[0]), 0);
+        state.set_repeat_mode(RepeatMode::One);
+        assert!(state.set_skip_explicit(true));
+
+        let generation = state.generation;
+        assert!(state.next().is_some());
+        assert_ne!(state.generation, generation);
+        assert_eq!(state.current_id(), Some("1"));
+        assert!(!state.current().is_some_and(|track| track.explicit));
     }
 
     #[test]
@@ -2357,6 +2377,24 @@ mod tests {
             ["0", "1", "2"]
         );
         assert_eq!(state.queue[2].title, "fresh");
+    }
+
+    #[test]
+    fn queue_epoch_advances_when_extension_changes_the_queue() {
+        let mut state = PlaybackState::default();
+        state.replace(vec![tracks()[0].clone()], 0);
+        state.replace_context(PlaybackContext::DeezerTrackMix {
+            seed_track_id: "0".into(),
+        });
+        let ticket = state.extension_ticket().unwrap();
+        let epoch = state.queue_epoch();
+
+        assert_eq!(
+            state.apply_extension(&ticket, vec![tracks()[1].clone()], false, None, None),
+            ExtensionApply::Applied { added: 1 }
+        );
+        assert_ne!(state.queue_epoch(), epoch);
+        assert!(!state.extension_ticket_is_current(&ticket));
     }
 
     #[test]

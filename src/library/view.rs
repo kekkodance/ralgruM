@@ -2,6 +2,9 @@ use super::{
     client::LibraryClient,
     deezer_radio::{DeezerRadioBatch, FlowMode},
     favorite_state::{FavoriteKey, FavoriteKind, FavoriteState},
+    local_persistence::{
+        LocalLibraryMutation, LocalLibraryMutationOutcome, LocalLibraryMutationResponse,
+    },
     model::{Card, Category, Page, Route, Service, Track, is_deezer_flow_detail, is_detail_route},
     playlist_client::PlaylistClient,
     soundcloud_client::SoundCloudLibraryClient,
@@ -31,7 +34,7 @@ use crate::{
 use gpui::{
     AnimationExt as _, AnyElement, Context, ElementId, Entity, EventEmitter, FocusHandle,
     FontWeight, IntoElement, KeyDownEvent, ListAlignment, ListOffset, ListState, Pixels, Render,
-    ScrollHandle, StatefulInteractiveElement, Window, div, prelude::*, px, rgb, rgba,
+    ScrollHandle, StatefulInteractiveElement, Subscription, Window, div, prelude::*, px, rgb, rgba,
 };
 use gpui_component::{
     input::{InputEvent, InputState},
@@ -267,6 +270,12 @@ pub(crate) struct LibraryView {
         super::local_playlist_store::LocalPlaylistStore,
         super::local_playlist_store::LocalPlaylistError,
     >,
+    pub(super) local_persistence: super::local_persistence::LocalStorageWorker,
+    _local_persistence_quit: Subscription,
+    pub(super) local_library_revision: u64,
+    pub(super) local_playlist_revision: u64,
+    local_library_reorder_pending: bool,
+    local_playlist_reorder_pending: bool,
     soundcloud_client: Result<SoundCloudLibraryClient, String>,
     pub(super) playlist_client: Result<PlaylistClient, String>,
     pub(crate) playlists: super::playlist_state::PlaylistState,
@@ -312,6 +321,7 @@ pub(super) enum DeezerTracksRetry {
     Hydration {
         token: u64,
         hydration: super::client::DeezerTracksHydration,
+        key: Option<super::tracks_cache::DeezerTracksCacheKey>,
     },
 }
 
@@ -434,6 +444,10 @@ const MAX_CARD_GRID_STATES: usize = 24;
 impl EventEmitter<LibraryEvent> for LibraryView {}
 
 impl crate::search::AlbumInfoCacheHost for LibraryView {
+    fn album_info_generation(&self) -> u64 {
+        self.album_info_prefetch.generation()
+    }
+
     fn store_album_info_page(&mut self, page: &crate::search::DetailPage) {
         self.album_info_prefetch.store_page(page.clone());
     }
@@ -546,6 +560,8 @@ impl LibraryView {
             return;
         }
         let account = self.account.read(cx);
+        let account_scope = account.library_scope();
+        let prefetch_generation = self.album_info_prefetch.generation();
         let (deezer_arl, soundcloud_token) = (account.deezer_arl(), account.soundcloud_token());
         let has_account = match route.provider {
             crate::search::Provider::Deezer => deezer_arl.is_some(),
@@ -564,13 +580,26 @@ impl LibraryView {
             .spawn(async move { client.detail(route, deezer_arl, soundcloud_token).await });
         cx.spawn(async move |this, cx| {
             let Ok(result) = task.await else {
-                this.update(cx, |this, _| this.album_info_prefetch.fail(&key))
-                    .ok();
+                this.update(cx, |this, cx| {
+                    if this.album_info_prefetch.generation() == prefetch_generation
+                        && this.account.read(cx).library_scope() == account_scope
+                    {
+                        this.album_info_prefetch.fail(&key);
+                    }
+                })
+                .ok();
                 return;
             };
-            this.update(cx, |this, _| match result {
-                Ok(page) => this.album_info_prefetch.complete(key, page),
-                Err(_) => this.album_info_prefetch.fail(&key),
+            this.update(cx, |this, cx| {
+                if this.album_info_prefetch.generation() != prefetch_generation
+                    || this.account.read(cx).library_scope() != account_scope
+                {
+                    return;
+                }
+                match result {
+                    Ok(page) => this.album_info_prefetch.complete(key, page),
+                    Err(_) => this.album_info_prefetch.fail(&key),
+                }
             })
             .ok();
         })
@@ -635,6 +664,17 @@ impl LibraryView {
         let account_scope = account.read(cx).library_scope();
         let playlists = super::playlist_state::PlaylistState::new(account_scope.clone());
         let soundcloud_playlists = super::playlist_state::PlaylistState::new(account_scope.clone());
+        let local_store = super::local_store::LocalLibraryStore::load_current_user();
+        let local_playlists = super::local_playlist_store::LocalPlaylistStore::load_current_user();
+        let local_persistence = super::local_persistence::LocalStorageWorker::new(
+            local_store.clone(),
+            local_playlists.clone(),
+        );
+        let persistence_for_quit = local_persistence.clone();
+        let local_persistence_quit = cx.on_app_quit(move |_, _| {
+            let persistence = persistence_for_quit.clone();
+            async move { persistence.flush().await }
+        });
         let mut view = Self {
             input,
             account,
@@ -642,8 +682,14 @@ impl LibraryView {
             runtime,
             client: LibraryClient::new(),
             tracks_cache: super::tracks_cache::DeezerTracksCache::current_user(),
-            local_store: super::local_store::LocalLibraryStore::load_current_user(),
-            local_playlists: super::local_playlist_store::LocalPlaylistStore::load_current_user(),
+            local_store,
+            local_playlists,
+            local_persistence,
+            _local_persistence_quit: local_persistence_quit,
+            local_library_revision: 0,
+            local_playlist_revision: 0,
+            local_library_reorder_pending: false,
+            local_playlist_reorder_pending: false,
             soundcloud_client: SoundCloudLibraryClient::new(),
             playlist_client: PlaylistClient::new(),
             playlists,
@@ -1777,27 +1823,38 @@ impl LibraryView {
             if !self.query(cx).trim().is_empty() {
                 return;
             }
-            let result = match self.local_playlists.as_mut() {
-                Ok(store) => store.reorder_tracks(&route.id, from, to),
-                Err(error) => Err(*error),
-            };
-            match result {
-                Ok(true) => {
-                    if let Some(page) = self.state.page.as_mut()
-                        && let Some(tracks) =
-                            super::playlist_reorder::reorder_items(&page.tracks, from, to)
-                    {
-                        page.tracks = tracks;
+            if self.local_playlist_reorder_pending {
+                return;
+            }
+            self.local_playlist_reorder_pending = true;
+            let result = self.enqueue_local_playlist_mutation(
+                super::local_persistence::LocalPlaylistMutation::Reorder {
+                    playlist_id: route.id,
+                    from,
+                    to,
+                },
+                Box::new(move |result, view, cx| {
+                    view.local_playlist_reorder_pending = false;
+                    if let Err(error) = result {
+                        crate::toast::push_global(
+                            cx,
+                            crate::toast::ToastKind::Error,
+                            "Local playlist could not be reordered",
+                            Some(error.to_string().into()),
+                        );
                     }
                     cx.notify();
-                }
-                Ok(false) => {}
-                Err(error) => crate::toast::push_global(
+                }),
+                cx,
+            );
+            if let Err(error) = result {
+                self.local_playlist_reorder_pending = false;
+                crate::toast::push_global(
                     cx,
                     crate::toast::ToastKind::Error,
                     "Local playlist could not be reordered",
                     Some(error.to_string().into()),
-                ),
+                );
             }
             return;
         }
@@ -1808,28 +1865,102 @@ impl LibraryView {
         if !self.query(cx).trim().is_empty() {
             return;
         }
-        let result = match self.local_store.as_mut() {
-            Ok(store) => store.reorder_track(from, to),
-            Err(error) => Err(*error),
-        };
-        match result {
-            Ok(true) => {
-                if let Some(page) = self.state.page.as_mut()
-                    && let Some(tracks) =
-                        super::playlist_reorder::reorder_items(&page.tracks, from, to)
-                {
-                    page.tracks = tracks;
+        if self.local_library_reorder_pending {
+            return;
+        }
+        self.local_library_reorder_pending = true;
+        let result = self.enqueue_local_library_mutation(
+            LocalLibraryMutation::Reorder { from, to },
+            Box::new(move |result, view, cx| {
+                view.local_library_reorder_pending = false;
+                if let Err(error) = result {
+                    crate::toast::push_global(
+                        cx,
+                        crate::toast::ToastKind::Error,
+                        "Local library could not be reordered",
+                        Some(error.to_string().into()),
+                    );
                 }
                 cx.notify();
-            }
-            Ok(false) => {}
-            Err(error) => crate::toast::push_global(
+            }),
+            cx,
+        );
+        if let Err(error) = result {
+            self.local_library_reorder_pending = false;
+            crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
                 "Local library could not be reordered",
                 Some(error.to_string().into()),
-            ),
+            );
         }
+    }
+
+    pub(super) fn enqueue_local_library_mutation(
+        &mut self,
+        mutation: LocalLibraryMutation,
+        completion: Box<
+            dyn FnOnce(
+                    Result<LocalLibraryMutationOutcome, super::local_store::LocalLibraryError>,
+                    &mut Self,
+                    &mut Context<Self>,
+                ) + Send,
+        >,
+        cx: &mut Context<Self>,
+    ) -> Result<(), super::local_store::LocalLibraryError> {
+        let (_, response) = self
+            .local_persistence
+            .submit_library(mutation)
+            .map_err(|_| super::local_store::LocalLibraryError::Filesystem)?;
+        let entity = cx.entity().clone();
+        cx.spawn(async move |_, cx| {
+            let result = response
+                .await
+                .map_err(|_| super::local_store::LocalLibraryError::Filesystem);
+            entity.update(cx, |view, cx| {
+                let result = match result {
+                    Ok(response) => view.apply_local_library_response(response, cx),
+                    Err(error) => Err(error),
+                };
+                completion(result, view, cx);
+            });
+        })
+        .detach();
+        Ok(())
+    }
+
+    fn apply_local_library_response(
+        &mut self,
+        response: LocalLibraryMutationResponse,
+        cx: &mut Context<Self>,
+    ) -> Result<LocalLibraryMutationOutcome, super::local_store::LocalLibraryError> {
+        if response.revision > self.local_library_revision {
+            self.local_library_revision = response.revision;
+            self.local_store = response.state;
+            self.refresh_local_library_page();
+            cx.notify();
+        }
+        response.outcome
+    }
+
+    fn refresh_local_library_page(&mut self) {
+        if !self.state.route().is_local_tracks_root() {
+            return;
+        }
+        let page = match self.local_store.as_ref() {
+            Ok(store) => local_tracks_page(store.tracks()),
+            Err(error) => {
+                self.state.status = super::state::Status::Failed(error.to_string());
+                self.state.page = None;
+                return;
+            }
+        };
+        self.state.status = if page.is_empty() {
+            super::state::Status::Empty
+        } else {
+            super::state::Status::Results
+        };
+        self.state.page = Some(page);
     }
 
     pub(crate) fn account_scope_changed(&mut self, scope: String, cx: &mut Context<Self>) {
@@ -2848,37 +2979,43 @@ impl crate::entity_navigation::TrackMenuHost for LibraryView {
         saved: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.local_store.is_err() {
-            self.local_store = super::local_store::LocalLibraryStore::load_current_user();
-        }
-        let provider = playback_provider(&track);
-        let result = match self.local_store.as_mut() {
-            Ok(store) if saved => store.upsert_track(super::local_store::LocalTrack::from(&track)),
-            Ok(store) => store.remove_track(provider, &track.id).map(|_| ()),
-            Err(error) => Err(*error),
-        };
-        match result {
-            Ok(()) => {
-                crate::toast::push_global(
-                    cx,
-                    crate::toast::ToastKind::Success,
-                    if saved {
-                        "Saved to Local"
-                    } else {
-                        "Removed from Local"
-                    },
-                    Some(track.title.clone().into()),
-                );
-                if self.state.service == Service::Local {
-                    self.load_service(Service::Local, Category::Tracks, cx);
+        let title = track.title.clone();
+        let result = self.enqueue_local_library_mutation(
+            LocalLibraryMutation::SetSaved {
+                track: super::local_store::LocalTrack::from(&track),
+                saved,
+            },
+            Box::new(move |result, _, cx| match result {
+                Ok(LocalLibraryMutationOutcome::Saved)
+                | Ok(LocalLibraryMutationOutcome::Removed) => {
+                    crate::toast::push_global(
+                        cx,
+                        crate::toast::ToastKind::Success,
+                        if saved {
+                            "Saved to Local"
+                        } else {
+                            "Removed from Local"
+                        },
+                        Some(title.into()),
+                    );
                 }
-            }
-            Err(error) => crate::toast::push_global(
+                Err(error) => crate::toast::push_global(
+                    cx,
+                    crate::toast::ToastKind::Error,
+                    "Local library could not be updated",
+                    Some(error.to_string().into()),
+                ),
+                Ok(_) => {}
+            }),
+            cx,
+        );
+        if let Err(error) = result {
+            crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
                 "Local library could not be updated",
                 Some(error.to_string().into()),
-            ),
+            );
         }
     }
 

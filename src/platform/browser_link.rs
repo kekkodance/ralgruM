@@ -48,27 +48,40 @@ struct PendingBrowserLink {
     raw_url: String,
 }
 fn decode_component(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
+    // Percent escapes encode UTF-8 bytes, so decode into bytes first. Casting
+    // every escaped byte directly to char corrupts non-ASCII titles and URLs.
+    let input_bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(input.len());
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = (bytes[i + 1] as char).to_digit(16);
-            let lo = (bytes[i + 2] as char).to_digit(16);
+    while i < input_bytes.len() {
+        if input_bytes[i] == b'%' && i + 2 < input_bytes.len() {
+            let hi = (input_bytes[i + 1] as char).to_digit(16);
+            let lo = (input_bytes[i + 2] as char).to_digit(16);
             if let (Some(hi), Some(lo)) = (hi, lo) {
-                out.push(((hi << 4) | lo) as u8 as char);
+                decoded.push(((hi << 4) | lo) as u8);
                 i += 3;
                 continue;
             }
         }
-        if bytes[i] == b'+' {
-            out.push(' ');
+        if input_bytes[i] == b'+' {
+            decoded.push(b' ');
         } else {
-            out.push(bytes[i] as char);
+            decoded.push(input_bytes[i]);
         }
         i += 1;
     }
-    out
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn truncate_utf8(value: &mut String, max_bytes: usize) {
+    if value.len() <= max_bytes {
+        return;
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
 }
 fn valid_deezer_id(id: &str) -> bool {
     if id.is_empty() || id.len() > 32 {
@@ -296,9 +309,7 @@ pub(crate) fn parse_ralgrum_url(input: &str) -> Option<BrowserEntity> {
             "action" => action_raw = Some(value),
             "title" => {
                 let mut short = value.trim().to_owned();
-                if short.len() > 200 {
-                    short.truncate(200);
-                }
+                truncate_utf8(&mut short, 200);
                 title = short;
             }
             _ => {}
@@ -454,9 +465,6 @@ pub(crate) fn drain_pending_links() -> Vec<BrowserEntity> {
         .collect()
 }
 
-pub(crate) fn remove_pending_link(path: &Path) {
-    let _ = fs::remove_file(path);
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +476,28 @@ mod tests {
         assert_eq!(entity.kind, BrowserKind::Track);
         assert_eq!(entity.id, "3135556");
         assert_eq!(entity.action, BrowserAction::Play);
+    }
+
+    #[test]
+    fn percent_decoding_preserves_utf8_and_form_spaces() {
+        let entity = parse_ralgrum_url("ralgrum://open?provider=deezer&type=track&id=1&title=Za%C5%BC%C3%B3%C5%82%C4%87+g%C4%99%C5%9Bl%C4%85&url=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F1").unwrap();
+        assert_eq!(entity.title, "Zażółć gęślą");
+    }
+
+    #[test]
+    fn title_limit_stops_at_a_utf8_boundary() {
+        let title = "é".repeat(101);
+        let encoded = title
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect::<String>();
+        let raw = format!(
+            "ralgrum://open?provider=deezer&type=track&id=1&title={encoded}&url=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F1"
+        );
+        let entity = parse_ralgrum_url(&raw).unwrap();
+        assert_eq!(entity.title.len(), 200);
+        assert_eq!(entity.title.chars().count(), 100);
     }
     #[test]
     fn album_defaults_to_open_without_action() {

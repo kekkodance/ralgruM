@@ -1,7 +1,9 @@
 use std::{
+    collections::HashMap,
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize};
@@ -25,10 +27,17 @@ const MAX_CACHED_TRACKS: usize = 10_000;
 #[derive(Clone)]
 pub(super) struct DeezerTracksCache {
     directory: PathBuf,
+    coordinator: Arc<CacheCoordinator>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct DeezerTracksCacheKey(String);
+
+#[derive(Default)]
+struct CacheCoordinator {
+    locks: Mutex<HashMap<DeezerTracksCacheKey, Arc<tokio::sync::Mutex<()>>>>,
+    latest_revisions: Mutex<HashMap<DeezerTracksCacheKey, u64>>,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,12 +72,18 @@ struct StoredArtist {
 impl DeezerTracksCache {
     pub(super) fn current_user() -> Self {
         let directory = crate::paths::cache_dir().join(CACHE_DIRECTORY);
-        Self { directory }
+        Self {
+            directory,
+            coordinator: Arc::new(CacheCoordinator::default()),
+        }
     }
 
     #[cfg(test)]
     fn new(directory: PathBuf) -> Self {
-        Self { directory }
+        Self {
+            directory,
+            coordinator: Arc::new(CacheCoordinator::default()),
+        }
     }
 
     /// Bind a snapshot to the exact saved account and credential pair without
@@ -92,26 +107,40 @@ impl DeezerTracksCache {
     }
 
     pub(super) async fn load(&self, key: &DeezerTracksCacheKey) -> Option<Page> {
+        let lock = self.lock_for(key);
+        let guard = lock.clone().lock_owned().await;
         let path = self.path(key);
         let bytes = match read_bounded(&path).await {
             Ok(bytes) => bytes,
             Err(CacheReadError::Missing) => return None,
             Err(CacheReadError::Invalid) => {
-                let _ = tokio::fs::remove_file(path).await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _guard = guard;
+                    let _ = fs::remove_file(path);
+                })
+                .await;
                 return None;
             }
         };
         let stored: StoredTracks = match serde_json::from_slice(&bytes) {
             Ok(stored) => stored,
             Err(_) => {
-                let _ = tokio::fs::remove_file(path).await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _guard = guard;
+                    let _ = fs::remove_file(path);
+                })
+                .await;
                 return None;
             }
         };
         match stored.into_page() {
             Some(page) => Some(page),
             None => {
-                let _ = tokio::fs::remove_file(path).await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _guard = guard;
+                    let _ = fs::remove_file(path);
+                })
+                .await;
                 None
             }
         }
@@ -122,21 +151,72 @@ impl DeezerTracksCache {
         key: &DeezerTracksCacheKey,
         page: &Page,
     ) -> Result<(), String> {
+        let revision = self.reserve_revision(key);
+        self.store_revision(key, page, revision).await
+    }
+
+    pub(super) fn reserve_revision(&self, key: &DeezerTracksCacheKey) -> u64 {
+        let mut revisions = self
+            .coordinator
+            .latest_revisions
+            .lock()
+            .expect("cache revision coordinator poisoned");
+        let revision = revisions
+            .get(key)
+            .copied()
+            .unwrap_or_default()
+            .wrapping_add(1);
+        revisions.insert(key.clone(), revision);
+        revision
+    }
+
+    pub(super) async fn store_revision(
+        &self,
+        key: &DeezerTracksCacheKey,
+        page: &Page,
+        revision: u64,
+    ) -> Result<(), String> {
         let stored = StoredTracks::from_page(page)?;
         let encoded = serde_json::to_vec(&stored)
             .map_err(|_| "Deezer Tracks cache could not be encoded".to_owned())?;
         if encoded.len() as u64 > MAX_CACHE_BYTES {
             return Err("Deezer Tracks cache exceeds its size limit".to_owned());
         }
+        let lock = self.lock_for(key);
+        let guard = lock.clone().lock_owned().await;
+        let latest = self
+            .coordinator
+            .latest_revisions
+            .lock()
+            .expect("cache revision coordinator poisoned")
+            .get(key)
+            .copied()
+            .unwrap_or_default();
+        if revision < latest {
+            return Ok(());
+        }
         let path = self.path(key);
-        tokio::task::spawn_blocking(move || atomic_write(&path, &encoded))
-            .await
-            .map_err(|_| "Deezer Tracks cache writer stopped unexpectedly".to_owned())?
-            .map_err(|_| "Deezer Tracks cache could not be stored".to_owned())
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            atomic_write(&path, &encoded)
+        })
+        .await
+        .map_err(|_| "Deezer Tracks cache writer stopped unexpectedly".to_owned())?
+        .map_err(|_| "Deezer Tracks cache could not be stored".to_owned())
     }
 
     fn path(&self, key: &DeezerTracksCacheKey) -> PathBuf {
         self.directory.join(format!("{}.json", key.0))
+    }
+
+    fn lock_for(&self, key: &DeezerTracksCacheKey) -> Arc<tokio::sync::Mutex<()>> {
+        self.coordinator
+            .locks
+            .lock()
+            .expect("cache lock coordinator poisoned")
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 }
 
@@ -469,6 +549,42 @@ mod tests {
         cache.store(&key, &fixture_page("new")).await.unwrap();
         assert_eq!(cache.load(&key).await.unwrap().tracks[0].title, "First new");
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn newer_snapshot_wins_when_detached_writers_finish_out_of_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = DeezerTracksCache::new(directory.path().into());
+        let key = key(&cache);
+        let old = fixture_page("old");
+        let new = fixture_page("new");
+        let old_revision = cache.reserve_revision(&key);
+        let new_revision = cache.reserve_revision(&key);
+
+        let (new_result, old_result) = tokio::join!(
+            cache.store_revision(&key, &new, new_revision),
+            cache.store_revision(&key, &old, old_revision),
+        );
+        new_result.unwrap();
+        old_result.unwrap();
+        assert_eq!(cache.load(&key).await.unwrap().tracks[0].title, "First new");
+    }
+
+    #[tokio::test]
+    async fn invalid_read_cleanup_cannot_delete_a_concurrent_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = DeezerTracksCache::new(directory.path().into());
+        let key = key(&cache);
+        fs::write(cache.path(&key), b"not json").unwrap();
+        let page = fixture_page("replacement");
+
+        let (loaded, stored) = tokio::join!(cache.load(&key), cache.store(&key, &page));
+        assert!(loaded.is_none());
+        stored.unwrap();
+        assert_eq!(
+            cache.load(&key).await.unwrap().tracks[0].title,
+            "First replacement"
+        );
     }
 
     #[tokio::test]

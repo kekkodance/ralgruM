@@ -102,6 +102,7 @@ impl SinkProbe {
 pub(crate) struct ArmedStandby {
     pub(crate) track: PlaybackTrack,
     pub(crate) generation: u64,
+    pub(crate) queue_epoch: u64,
     pub(crate) duration: Option<Duration>,
     pub(crate) quality: Option<String>,
     pub(crate) audio_info: Option<ResolvedTrackInfo>,
@@ -119,15 +120,6 @@ pub(crate) enum StandbyPhase {
     Armed(ArmedStandby),
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct StandbyView<'a> {
-    pub(crate) status: PlaybackStatus,
-    pub(crate) repeat_one: bool,
-    pub(crate) position: Duration,
-    pub(crate) duration: Duration,
-    pub(crate) next_track: Option<&'a PlaybackTrack>,
-}
-
 /// A standby is only prepared while playing without repeat one, when a next
 /// track exists and the current track runs out inside the prepare window.
 /// Tracks shorter than the window qualify immediately.
@@ -139,16 +131,6 @@ pub(crate) fn should_prepare_status(
     status == PlaybackStatus::Playing
         && !duration.is_zero()
         && duration.saturating_sub(position) <= PREPARE_WINDOW
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn should_prepare(phase: &StandbyPhase, view: &StandbyView) -> bool {
-    if !matches!(phase, StandbyPhase::Idle) {
-        return false;
-    }
-    !view.repeat_one
-        && view.next_track.is_some()
-        && should_prepare_status(view.status, view.duration, view.position)
 }
 
 /// What the boundary watcher should do after observing the sink.
@@ -202,8 +184,11 @@ pub(crate) struct BoundaryCheck {
     pub(crate) status: PlaybackStatus,
     pub(crate) generation: u64,
     pub(crate) armed_generation: u64,
+    pub(crate) queue_epoch: u64,
+    pub(crate) armed_queue_epoch: u64,
+    pub(crate) armed_provider: super::PlaybackProvider,
     pub(crate) armed_target: String,
-    pub(crate) upcoming_first: Option<String>,
+    pub(crate) upcoming_first: Option<(super::PlaybackProvider, String)>,
 }
 
 pub(crate) fn boundary_outcome(check: &BoundaryCheck) -> BoundaryOutcome {
@@ -216,7 +201,16 @@ pub(crate) fn boundary_outcome(check: &BoundaryCheck) -> BoundaryOutcome {
     {
         return BoundaryOutcome::Ignore;
     }
-    if check.upcoming_first.as_deref() == Some(check.armed_target.as_str()) {
+    if check.queue_epoch != check.armed_queue_epoch {
+        return BoundaryOutcome::Replace;
+    }
+    if check
+        .upcoming_first
+        .as_ref()
+        .is_some_and(|(provider, target)| {
+            *provider == check.armed_provider && target == &check.armed_target
+        })
+    {
         BoundaryOutcome::Commit
     } else {
         BoundaryOutcome::Replace
@@ -226,123 +220,36 @@ pub(crate) fn boundary_outcome(check: &BoundaryCheck) -> BoundaryOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::playback::{PlaybackProvider, PlaybackStatus, PlaybackTrack, RepeatMode};
+    use crate::playback::{PlaybackProvider, PlaybackStatus};
     use rodio::buffer::SamplesBuffer;
 
-    fn track(id: &str) -> PlaybackTrack {
-        PlaybackTrack {
-            downloadable: false,
-            progressive: false,
-            provider: PlaybackProvider::Deezer,
-            id: id.into(),
-            title: id.into(),
-            artist: String::new(),
-            album: String::new(),
-            album_id: String::new(),
-            release_date: String::new(),
-            artists: Vec::new(),
-            artwork: String::new(),
-            duration: Duration::from_secs(10),
-            explicit: false,
-            service_url: String::new(),
-        }
-    }
-
-    fn view(
-        status: PlaybackStatus,
-        position: Duration,
-        duration: Duration,
-    ) -> StandbyView<'static> {
-        let next = Box::leak(Box::new(track("next")));
-        StandbyView {
-            status,
-            repeat_one: false,
-            position,
-            duration,
-            next_track: Some(next),
-        }
-    }
-
     #[test]
-    fn preparation_requires_playing_a_next_track_and_a_near_end() {
-        let near = view(
+    fn preparation_requires_playing_near_the_end_with_a_known_duration() {
+        assert!(should_prepare_status(
             PlaybackStatus::Playing,
-            Duration::from_secs(95),
             Duration::from_secs(100),
-        );
-        assert!(should_prepare(&StandbyPhase::Idle, &near));
-
-        let far = view(
+            Duration::from_secs(95),
+        ));
+        assert!(should_prepare_status(
             PlaybackStatus::Playing,
+            Duration::from_secs(5),
+            Duration::ZERO,
+        ));
+        assert!(!should_prepare_status(
+            PlaybackStatus::Playing,
+            Duration::from_secs(100),
             Duration::from_secs(10),
-            Duration::from_secs(100),
-        );
-        assert!(!should_prepare(&StandbyPhase::Idle, &far));
-
-        let paused = view(
+        ));
+        assert!(!should_prepare_status(
             PlaybackStatus::Paused,
-            Duration::from_secs(95),
             Duration::from_secs(100),
-        );
-        assert!(!should_prepare(&StandbyPhase::Idle, &paused));
-
-        let loading = view(
-            PlaybackStatus::Loading,
             Duration::from_secs(95),
-            Duration::from_secs(100),
-        );
-        assert!(!should_prepare(&StandbyPhase::Idle, &loading));
-
-        let unknown_duration = view(PlaybackStatus::Playing, Duration::ZERO, Duration::ZERO);
-        assert!(!should_prepare(&StandbyPhase::Idle, &unknown_duration));
-    }
-
-    #[test]
-    fn short_tracks_prepare_immediately_and_repeat_one_never_prepares() {
-        let short = view(
+        ));
+        assert!(!should_prepare_status(
             PlaybackStatus::Playing,
             Duration::ZERO,
-            Duration::from_secs(5),
-        );
-        assert!(should_prepare(&StandbyPhase::Idle, &short));
-
-        let mut repeat_one = view(
-            PlaybackStatus::Playing,
-            Duration::from_secs(95),
-            Duration::from_secs(100),
-        );
-        repeat_one.repeat_one = true;
-        assert!(!should_prepare(&StandbyPhase::Idle, &repeat_one));
-        assert_eq!(RepeatMode::One.next(), RepeatMode::Off);
-
-        let mut without_next = view(
-            PlaybackStatus::Playing,
-            Duration::from_secs(95),
-            Duration::from_secs(100),
-        );
-        without_next.next_track = None;
-        assert!(!should_prepare(&StandbyPhase::Idle, &without_next));
-    }
-
-    #[test]
-    fn pending_and_armed_phases_never_start_a_second_preparation() {
-        let near = view(
-            PlaybackStatus::Playing,
-            Duration::from_secs(95),
-            Duration::from_secs(100),
-        );
-        assert!(!should_prepare(&StandbyPhase::Pending, &near));
-
-        let (sink, _queue) = Sink::new();
-        let armed = StandbyPhase::Armed(ArmedStandby {
-            track: track("next"),
-            generation: 7,
-            duration: Some(Duration::from_secs(10)),
-            quality: None,
-            audio_info: None,
-            probe: SinkProbe::new(Arc::new(sink)),
-        });
-        assert!(!should_prepare(&armed, &near));
+            Duration::ZERO,
+        ));
     }
 
     #[test]
@@ -394,8 +301,12 @@ mod tests {
             status,
             generation,
             armed_generation: generation,
+            queue_epoch: 4,
+            armed_queue_epoch: 4,
+            armed_provider: PlaybackProvider::Deezer,
             armed_target: armed_target.into(),
-            upcoming_first: upcoming_first.map(str::to_owned),
+            upcoming_first: upcoming_first
+                .map(|target| (PlaybackProvider::Deezer, target.to_owned())),
         }
     }
 
@@ -406,8 +317,11 @@ mod tests {
             status,
             generation,
             armed_generation: 7,
+            queue_epoch: 4,
+            armed_queue_epoch: 4,
+            armed_provider: PlaybackProvider::Deezer,
             armed_target: "next".into(),
-            upcoming_first: Some("next".into()),
+            upcoming_first: Some((PlaybackProvider::Deezer, "next".into())),
         };
         assert_eq!(
             boundary_outcome(&live(false, PlaybackStatus::Playing, 7)),
@@ -441,6 +355,19 @@ mod tests {
 
         let matching = boundary_check(true, PlaybackStatus::Paused, 7, "next", Some("next"));
         assert_eq!(boundary_outcome(&matching), BoundaryOutcome::Commit);
+
+        let mut changed_epoch =
+            boundary_check(true, PlaybackStatus::Playing, 7, "next", Some("next"));
+        changed_epoch.queue_epoch = 5;
+        assert_eq!(boundary_outcome(&changed_epoch), BoundaryOutcome::Replace);
+
+        let mut changed_provider =
+            boundary_check(true, PlaybackStatus::Playing, 7, "next", Some("next"));
+        changed_provider.upcoming_first = Some((PlaybackProvider::SoundCloud, "next".into()));
+        assert_eq!(
+            boundary_outcome(&changed_provider),
+            BoundaryOutcome::Replace
+        );
     }
 
     #[test]

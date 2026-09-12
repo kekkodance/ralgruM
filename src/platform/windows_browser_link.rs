@@ -1,4 +1,4 @@
-use std::{thread, time::Duration};
+use std::{path::PathBuf, thread, time::Duration};
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui::{App, Global};
@@ -15,12 +15,15 @@ use windows::{
 
 use crate::browser_link::{
     BrowserEntity, drain_pending_links, enqueue_pending_link, parse_ralgrum_url,
-    remove_pending_link,
 };
 
 const EVENT_NAME: windows::core::PCWSTR = w!("Local\\ralgruM-browser-links-v1-event");
 const MUTEX_NAME: windows::core::PCWSTR = w!("Local\\ralgruM-browser-links-v1-owner");
-const EVENT_OPEN_RETRIES: usize = 25;
+const EVENT_OPEN_RETRIES: usize = 100;
+const EVENT_OPEN_RETRY_DELAY: Duration = Duration::from_millis(25);
+
+type EnqueueLink = fn(&str) -> Option<(BrowserEntity, PathBuf)>;
+type DrainLinks = fn() -> Vec<BrowserEntity>;
 
 pub(crate) struct OwnedKernelHandle(HANDLE);
 
@@ -49,15 +52,19 @@ struct BrowserLinkOwner {
 
 impl Global for BrowserLinkOwner {}
 
+#[derive(Debug)]
+pub(crate) enum BrowserLinkEvent {
+    Restore,
+    Open(BrowserEntity),
+}
+
 pub(crate) enum BrowserLinkLaunch {
     Forwarded,
-    Local {
-        initial: Vec<BrowserEntity>,
-    },
+    Unavailable,
     Owner {
         mutex: OwnedKernelHandle,
         initial: Vec<BrowserEntity>,
-        events: UnboundedReceiver<BrowserEntity>,
+        events: UnboundedReceiver<BrowserLinkEvent>,
     },
 }
 
@@ -71,12 +78,12 @@ impl BrowserLinkLaunch {
 
     pub(crate) fn take_initial(&mut self) -> Vec<BrowserEntity> {
         match self {
-            Self::Forwarded => Vec::new(),
-            Self::Local { initial } | Self::Owner { initial, .. } => std::mem::take(initial),
+            Self::Forwarded | Self::Unavailable => Vec::new(),
+            Self::Owner { initial, .. } => std::mem::take(initial),
         }
     }
 
-    pub(crate) fn take_events(&mut self) -> Option<UnboundedReceiver<BrowserEntity>> {
+    pub(crate) fn take_events(&mut self) -> Option<UnboundedReceiver<BrowserLinkEvent>> {
         match self {
             Self::Owner { events, .. } => Some(std::mem::replace(events, unbounded().1)),
             _ => None,
@@ -84,49 +91,90 @@ impl BrowserLinkLaunch {
     }
 }
 
-/// Establishes the process handoff before GPUI starts. A protocol-only
-/// secondary process forwards its validated link and exits. Ordinary second
-/// launches remain ordinary launches and do not change existing behavior.
+/// Establishes the process handoff before GPUI starts. Every process after the
+/// owner forwards its optional link or restore request and exits, so a second
+/// launch never creates another application window.
 pub(crate) fn prepare(raw: Option<String>) -> BrowserLinkLaunch {
+    prepare_with_names(raw, MUTEX_NAME, EVENT_NAME)
+}
+
+fn prepare_with_names(
+    raw: Option<String>,
+    mutex_name: windows::core::PCWSTR,
+    event_name: windows::core::PCWSTR,
+) -> BrowserLinkLaunch {
+    prepare_with_names_and_queue(
+        raw,
+        mutex_name,
+        event_name,
+        enqueue_pending_link,
+        drain_pending_links,
+    )
+}
+
+fn prepare_with_names_and_queue(
+    raw: Option<String>,
+    mutex_name: windows::core::PCWSTR,
+    event_name: windows::core::PCWSTR,
+    enqueue: EnqueueLink,
+    drain: DrainLinks,
+) -> BrowserLinkLaunch {
     let valid = raw.and_then(|raw| parse_ralgrum_url(&raw).map(|entity| (raw, entity)));
 
-    let Ok(mutex) = (unsafe { CreateMutexW(None, false, MUTEX_NAME) }) else {
-        return local(valid.map(|(_, entity)| entity));
+    let Ok(mutex) = (unsafe { CreateMutexW(None, false, mutex_name) }) else {
+        crate::diagnostics::event(
+            "ERROR",
+            "single-instance mutex could not be created; refusing to start unmanaged",
+        );
+        return BrowserLinkLaunch::Unavailable;
     };
     let already_owned = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     let mutex = OwnedKernelHandle(mutex);
 
     if already_owned {
-        let Some((raw, entity)) = valid else {
-            return BrowserLinkLaunch::Local {
-                initial: Vec::new(),
-            };
-        };
-        let Some((_, queued_path)) = enqueue_pending_link(&raw) else {
-            return local(Some(entity));
-        };
-        if signal_owner() {
-            return BrowserLinkLaunch::Forwarded;
+        if let Some((raw, _entity)) = valid {
+            if enqueue(&raw).is_none() {
+                crate::diagnostics::event(
+                    "WARN",
+                    "could not queue browser link for the running app",
+                );
+            }
         }
-        remove_pending_link(&queued_path);
-        return local(Some(entity));
+        if !signal_owner(event_name) {
+            crate::diagnostics::event(
+                "WARN",
+                "running app did not accept the secondary launch request",
+            );
+        }
+        // The mutex was acquired with ERROR_ALREADY_EXISTS. Keep this process
+        // from becoming a second owner even when the handoff event is not
+        // available yet. The queued link remains for the owner to consume.
+        return BrowserLinkLaunch::Forwarded;
     }
 
-    let Ok(event) = (unsafe { CreateEventW(None, false, false, EVENT_NAME) }) else {
-        return local(valid.map(|(_, entity)| entity));
+    let Ok(event) = (unsafe { CreateEventW(None, false, false, event_name) }) else {
+        crate::diagnostics::event(
+            "ERROR",
+            "browser-link event could not be created; refusing to start without IPC",
+        );
+        return BrowserLinkLaunch::Unavailable;
     };
     let mut direct_fallback = None;
     if let Some((raw, entity)) = valid
-        && enqueue_pending_link(&raw).is_none()
+        && enqueue(&raw).is_none()
     {
         direct_fallback = Some(entity);
     }
 
-    let mut initial = drain_pending_links();
+    let mut initial = drain();
     initial.extend(direct_fallback);
-    let (sender, events) = unbounded();
-    if !start_listener(OwnedKernelHandle(event), sender) {
-        return BrowserLinkLaunch::Local { initial };
+    let (sender, events) = unbounded::<BrowserLinkEvent>();
+    if !start_listener(OwnedKernelHandle(event), sender, drain) {
+        crate::diagnostics::event(
+            "ERROR",
+            "browser-link listener could not start; refusing to start without IPC",
+        );
+        return BrowserLinkLaunch::Unavailable;
     }
     BrowserLinkLaunch::Owner {
         mutex,
@@ -135,28 +183,26 @@ pub(crate) fn prepare(raw: Option<String>) -> BrowserLinkLaunch {
     }
 }
 
-fn local(entity: Option<BrowserEntity>) -> BrowserLinkLaunch {
-    BrowserLinkLaunch::Local {
-        initial: entity.into_iter().collect(),
-    }
-}
-
-fn signal_owner() -> bool {
+fn signal_owner(event_name: windows::core::PCWSTR) -> bool {
     for attempt in 0..EVENT_OPEN_RETRIES {
-        if let Ok(event) = unsafe { OpenEventW(EVENT_MODIFY_STATE, false, EVENT_NAME) } {
+        if let Ok(event) = unsafe { OpenEventW(EVENT_MODIFY_STATE, false, event_name) } {
             let event = OwnedKernelHandle(event);
             if unsafe { SetEvent(event.0) }.is_ok() {
                 return true;
             }
         }
         if attempt + 1 < EVENT_OPEN_RETRIES {
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(EVENT_OPEN_RETRY_DELAY);
         }
     }
     false
 }
 
-fn start_listener(event: OwnedKernelHandle, sender: UnboundedSender<BrowserEntity>) -> bool {
+fn start_listener(
+    event: OwnedKernelHandle,
+    sender: UnboundedSender<BrowserLinkEvent>,
+    drain: DrainLinks,
+) -> bool {
     thread::Builder::new()
         .name("browser-link-handoff".into())
         .spawn(move || {
@@ -165,8 +211,14 @@ fn start_listener(event: OwnedKernelHandle, sender: UnboundedSender<BrowserEntit
                 if wait != WAIT_OBJECT_0 {
                     break;
                 }
-                for entity in drain_pending_links() {
-                    if sender.unbounded_send(entity).is_err() {
+                if sender.unbounded_send(BrowserLinkEvent::Restore).is_err() {
+                    return;
+                }
+                for entity in drain() {
+                    if sender
+                        .unbounded_send(BrowserLinkEvent::Open(entity))
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -178,23 +230,68 @@ fn start_listener(event: OwnedKernelHandle, sender: UnboundedSender<BrowserEntit
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt as _;
 
-    #[test]
-    fn local_launch_keeps_a_valid_entity() {
-        let entity = parse_ralgrum_url(
-            "ralgrum://open?provider=deezer&type=track&id=1&url=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F1",
-        )
-        .unwrap();
-        let mut launch = local(Some(entity.clone()));
-        assert_eq!(launch.take_initial(), vec![entity]);
+    fn isolated_enqueue(_: &str) -> Option<(BrowserEntity, PathBuf)> {
+        None
+    }
+
+    fn isolated_drain() -> Vec<BrowserEntity> {
+        Vec::new()
     }
 
     #[test]
     fn forwarding_retry_is_short_and_bounded() {
-        assert_eq!(EVENT_OPEN_RETRIES, 25);
+        assert_eq!(EVENT_OPEN_RETRIES, 100);
         assert!(
-            Duration::from_millis(10) * (EVENT_OPEN_RETRIES.saturating_sub(1) as u32)
-                < Duration::from_millis(250)
+            EVENT_OPEN_RETRY_DELAY * (EVENT_OPEN_RETRIES.saturating_sub(1) as u32)
+                < Duration::from_secs(3)
         );
+    }
+
+    #[test]
+    fn second_regular_launch_is_forwarded_and_restores_the_owner() {
+        let suffix = format!("{}-{}", std::process::id(), uuid::Uuid::new_v4().simple());
+        let mutex_name_storage = format!("Local\\ralgrum-test-mutex-{suffix}")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let event_name_storage = format!("Local\\ralgrum-test-event-{suffix}")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mutex_name = windows::core::PCWSTR::from_raw(mutex_name_storage.as_ptr());
+        let event_name = windows::core::PCWSTR::from_raw(event_name_storage.as_ptr());
+
+        let mut owner = prepare_with_names_and_queue(
+            None,
+            mutex_name,
+            event_name,
+            isolated_enqueue,
+            isolated_drain,
+        );
+        assert!(matches!(&owner, BrowserLinkLaunch::Owner { .. }));
+        let mut events = owner
+            .take_events()
+            .expect("owner should expose its listener");
+
+        let secondary = prepare_with_names_and_queue(
+            None,
+            mutex_name,
+            event_name,
+            isolated_enqueue,
+            isolated_drain,
+        );
+        assert!(matches!(secondary, BrowserLinkLaunch::Forwarded));
+        assert!(matches!(
+            futures::executor::block_on(events.next()),
+            Some(BrowserLinkEvent::Restore)
+        ));
+
+        // Let the listener observe the dropped receiver and exit instead of
+        // leaving a test thread waiting on the named event.
+        drop(events);
+        drop(owner);
+        let _ = signal_owner(event_name);
     }
 }

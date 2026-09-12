@@ -15,7 +15,7 @@ use crate::{
         row_more_button, track_row_with_action,
     },
     playback::PlaybackTrack,
-    playing_indicator::PlayingSnapshot,
+    playing_indicator::{PlayingSnapshot, QueuePlayingSnapshot},
     theme::PRIMARY,
 };
 
@@ -38,7 +38,7 @@ pub(super) struct LibraryTrackRows {
     removal_pending: bool,
     reorder: Option<(String, bool)>,
     reorder_pending: bool,
-    playing: PlayingSnapshot,
+    playing: QueuePlayingSnapshot,
     favorite_root_active: bool,
     playback: Entity<crate::playback::PlaybackModel>,
     context: crate::playback::PlaybackContext,
@@ -150,6 +150,7 @@ impl LibraryTrackRows {
         );
         let source_tracks = source_tracks.unwrap_or(items);
         let queue = Arc::new(playback_queue(source_tracks, provider));
+        let playing = playing.for_queue(&queue);
         Self {
             host,
             tracks,
@@ -399,7 +400,7 @@ fn render_track_item(
     removal_pending: bool,
     reorder: Option<&(String, bool)>,
     reorder_pending: bool,
-    playing: &PlayingSnapshot,
+    playing: &QueuePlayingSnapshot,
     favorite_root_active: bool,
     playback: &Entity<crate::playback::PlaybackModel>,
     context: &crate::playback::PlaybackContext,
@@ -433,7 +434,7 @@ fn render_track_item(
             )
         })
     });
-    let row_playing = playing.row_in_queue(playback_track, queue_index, queue);
+    let row_playing = playing.row(queue_index);
     let row_blocked = playing.blocks(playback_track);
     let click_playback = playback.clone();
     let key_playback = playback.clone();

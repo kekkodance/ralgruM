@@ -1350,15 +1350,30 @@ impl SearchView {
         let task = self
             .runtime
             .spawn(async move { client.detail(route, deezer_arl, soundcloud_token).await });
+        let account_scope = self.account_scope.clone();
+        let cache_generation = self.album_info_prefetch.generation();
         cx.spawn(async move |this, cx| {
             let result = task.await.unwrap_or_else(|_| {
                 Err(super::models::ProviderError::new(
                     "Collection request failed",
                 ))
             });
-            this.update(cx, |this, _| match result {
-                Ok(page) => this.album_info_prefetch.complete(key, page),
-                Err(_) => this.album_info_prefetch.fail(&key),
+            this.update(cx, |this, _| {
+                if this.account_scope != account_scope
+                    || this.album_info_prefetch.generation() != cache_generation
+                {
+                    return;
+                }
+                match result {
+                    Ok(page) => this.album_info_prefetch.complete_for_generation(
+                        cache_generation,
+                        key,
+                        page,
+                    ),
+                    Err(_) => this
+                        .album_info_prefetch
+                        .fail_for_generation(cache_generation, &key),
+                }
             })
             .ok();
         })
@@ -2597,6 +2612,10 @@ impl ResizeSettledTarget for SearchView {
 }
 
 impl super::album_info_cache::AlbumInfoCacheHost for SearchView {
+    fn album_info_generation(&self) -> u64 {
+        self.album_info_prefetch.generation()
+    }
+
     fn store_album_info_page(&mut self, page: &super::detail::DetailPage) {
         self.album_info_prefetch.store_page(page.clone());
     }

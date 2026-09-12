@@ -1,7 +1,7 @@
 use super::*;
 use crate::account_session::{SessionError, SessionStore};
 use crate::murglar_backend::{
-    AccountError, AccountExtras, DeviceIdentity, PassStatus, PaymentPlans, ReferralStats,
+    AccountError, AccountExtras, PassStatus, PaymentPlans, ReferralStats,
 };
 use crate::service_auth::{Service, ValidatedCredentials};
 use serde_json::json;
@@ -149,6 +149,46 @@ fn stale_session_end_after_exchange_persists_without_exposing_token_or_profile()
     state.begin_settings_session();
     let (_, _, refresh_token) = state.refresh().unwrap();
     assert_eq!(refresh_token, "token");
+}
+
+#[test]
+fn superseded_login_completion_is_rejected_before_persistence() {
+    let temp = TempDir::new().unwrap();
+    let mut state = account_state(&temp);
+    state.begin_settings_session();
+    let (first_generation, _, first_login_epoch) = state.begin_login().unwrap();
+
+    state.end_settings_session();
+    state.begin_settings_session();
+    let (second_generation, _, second_login_epoch) = state.begin_login().unwrap();
+    assert_ne!(first_login_epoch, second_login_epoch);
+
+    assert!(
+        state
+            .complete_token_exchange(
+                first_generation,
+                first_login_epoch,
+                Ok(AccessToken::new("stale-token".into())),
+            )
+            .is_none()
+    );
+    assert_eq!(
+        SessionStore::load(temp.path()).unwrap().session().murglar(),
+        ""
+    );
+
+    assert_eq!(
+        state.complete_token_exchange(
+            second_generation,
+            second_login_epoch,
+            Ok(AccessToken::new("current-token".into())),
+        ),
+        Some("current-token".into())
+    );
+    assert_eq!(
+        SessionStore::load(temp.path()).unwrap().session().murglar(),
+        "current-token"
+    );
 }
 
 #[test]

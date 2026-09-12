@@ -10,6 +10,11 @@ use uuid::Uuid;
 
 use crate::playback::RepeatMode;
 
+#[path = "settings_write.rs"]
+mod persistence;
+
+pub(crate) use persistence::SettingsWrite;
+
 const PRIMARY_FILE: &str = "general_settings.json";
 const BACKUP_FILE: &str = "general_settings.backup.json";
 const LEGACY_PREFERENCES_FILE: &str = "app_preferences.json";
@@ -393,6 +398,7 @@ impl Default for AppSettings {
 pub(crate) struct SettingsStore {
     directory: PathBuf,
     settings: AppSettings,
+    writes: std::sync::Arc<persistence::WriteCoordinator>,
 }
 
 impl SettingsStore {
@@ -441,6 +447,7 @@ impl SettingsStore {
         Ok(Self {
             directory: directory.to_owned(),
             settings,
+            writes: Default::default(),
         })
     }
 
@@ -463,16 +470,21 @@ impl SettingsStore {
         self.persist(settings)
     }
 
+    pub(crate) fn prepare_persist(&self, settings: AppSettings) -> SettingsWrite {
+        SettingsWrite::new(self.directory.clone(), settings, self.writes.clone())
+    }
+
+    pub(crate) fn accept_persisted(&mut self, write: &SettingsWrite) {
+        if write.is_current() {
+            self.settings = write.settings().clone();
+        }
+    }
+
     pub(crate) fn persist(&mut self, settings: AppSettings) -> Result<(), SettingsError> {
-        fs::create_dir_all(&self.directory).map_err(|_| SettingsError::Filesystem)?;
-        let mut settings = settings;
-        settings.audio_cache_limit_mb =
-            normalize_audio_cache_limit_mb(settings.audio_cache_limit_mb);
-        let encoded = encode(&settings)?;
-        // The primary file remains authoritative if the second replacement fails.
-        atomic_write(&self.directory.join(BACKUP_FILE), &encoded)?;
-        atomic_write(&self.directory.join(PRIMARY_FILE), &encoded)?;
-        self.settings = settings;
+        let write = self.prepare_persist(settings);
+        if write.persist()? {
+            self.settings = write.settings().clone();
+        }
         Ok(())
     }
 }

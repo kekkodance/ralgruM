@@ -554,6 +554,7 @@ fn open_card_info_dialog_inner<T: AlbumInfoCacheHost + 'static>(
     let Some(client) = client else {
         return;
     };
+    let cache_generation = cx.entity().read(cx).album_info_generation();
     let task =
         runtime.spawn(async move { client.detail(route, deezer_arl, soundcloud_token).await });
     cx.spawn_in(window, async move |this, cx| {
@@ -566,6 +567,9 @@ fn open_card_info_dialog_inner<T: AlbumInfoCacheHost + 'static>(
         let route = page.route.clone();
         let page_for_cache = page;
         let _ = this.update_in(cx, |view, window, cx| {
+            if view.album_info_generation() != cache_generation {
+                return;
+            }
             view.store_album_info_page(&page_for_cache);
             if window.has_active_dialog(cx) {
                 // Swap the content in place without a fade or height

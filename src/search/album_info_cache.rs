@@ -56,9 +56,14 @@ impl AlbumInfoCacheKey {
 pub(crate) struct AlbumInfoPrefetch {
     pages: HashMap<AlbumInfoCacheKey, DetailPage>,
     in_flight: HashSet<AlbumInfoCacheKey>,
+    generation: u64,
 }
 
 impl AlbumInfoPrefetch {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(crate) fn cached(&self, route: &DetailRoute) -> Option<(DetailRoute, AlbumInfo)> {
         let key = AlbumInfoCacheKey::from_route(route)?;
         let page = self.pages.get(&key)?;
@@ -88,6 +93,23 @@ impl AlbumInfoPrefetch {
         self.store_page(page);
     }
 
+    pub(crate) fn complete_for_generation(
+        &mut self,
+        generation: u64,
+        key: AlbumInfoCacheKey,
+        page: DetailPage,
+    ) {
+        if generation == self.generation {
+            self.complete(key, page);
+        }
+    }
+
+    pub(crate) fn fail_for_generation(&mut self, generation: u64, key: &AlbumInfoCacheKey) {
+        if generation == self.generation {
+            self.fail(key);
+        }
+    }
+
     pub(crate) fn fail(&mut self, key: &AlbumInfoCacheKey) {
         self.in_flight.remove(key);
     }
@@ -108,6 +130,7 @@ impl AlbumInfoPrefetch {
     }
 
     pub(crate) fn clear(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.pages.clear();
         self.in_flight.clear();
     }
@@ -122,6 +145,7 @@ impl AlbumInfoPrefetch {
 /// Implemented by SearchView and LibraryView so the shared dialog fetch can
 /// populate either view cache without knowing the concrete view type.
 pub(crate) trait AlbumInfoCacheHost {
+    fn album_info_generation(&self) -> u64;
     fn store_album_info_page(&mut self, page: &DetailPage);
 }
 
@@ -149,6 +173,32 @@ pub(crate) fn info_for_detail_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_reset_invalidates_prefetches_even_when_the_account_returns() {
+        let mut cache = AlbumInfoPrefetch::default();
+        let key = AlbumInfoCacheKey::test_key(Provider::Deezer, ResultType::Albums, "42");
+        cache.begin(key.clone());
+        let before = cache.generation();
+        cache.clear();
+        cache.clear();
+        assert!(cache.begin(key.clone()));
+        cache.fail_for_generation(before, &key);
+        assert!(cache.is_in_flight(&key));
+        cache.complete_for_generation(
+            before,
+            key.clone(),
+            page_with_info(ResultType::Albums, "42", "old account"),
+        );
+        assert!(!cache.contains(&key));
+        assert!(cache.is_in_flight(&key));
+        cache.complete_for_generation(
+            cache.generation(),
+            key.clone(),
+            page_with_info(ResultType::Albums, "42", "current account"),
+        );
+        assert!(cache.contains(&key));
+    }
 
     fn route(kind: ResultType, id: &str) -> DetailRoute {
         DetailRoute {

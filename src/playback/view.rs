@@ -1131,6 +1131,7 @@ impl PlaybackModel {
         };
         let cancellation = self.cancellation.clone();
         let generation = self.state.generation;
+        let queue_epoch = self.state.queue_epoch();
         self.standby = StandbyPhase::Pending;
         let resolve_track = track.clone();
         let task = self.runtime.spawn(async move {
@@ -1154,7 +1155,7 @@ impl PlaybackModel {
                 .await
                 .unwrap_or_else(|_| Err("The playback worker stopped unexpectedly".into()));
             this.update(cx, |this, cx| {
-                this.standby_ready(track, generation, result, cx);
+                this.standby_ready(track, generation, queue_epoch, result, cx);
             })
             .ok();
         })
@@ -1165,6 +1166,7 @@ impl PlaybackModel {
         &mut self,
         track: PlaybackTrack,
         generation: u64,
+        queue_epoch: u64,
         result: Result<(PreparedSource, ResolvedTrackInfo), String>,
         cx: &mut Context<Self>,
     ) {
@@ -1172,13 +1174,17 @@ impl PlaybackModel {
             return;
         }
         self.standby = StandbyPhase::Idle;
+        let next_track_matches = self
+            .next_upcoming_track()
+            .is_some_and(|next| next.provider == track.provider && next.id == track.id);
         if generation != self.state.generation
+            || queue_epoch != self.state.queue_epoch()
             || !self.seamless_playback
             || !matches!(
                 self.state.status,
                 PlaybackStatus::Playing | PlaybackStatus::Paused
             )
-            || self.next_upcoming_id().as_deref() != Some(track.id.as_str())
+            || !next_track_matches
         {
             // Stale or superseded; the normal on-end path takes over.
             return;
@@ -1202,6 +1208,7 @@ impl PlaybackModel {
         self.standby = StandbyPhase::Armed(ArmedStandby {
             track,
             generation,
+            queue_epoch,
             duration,
             quality,
             audio_info: Some(info),
@@ -1250,8 +1257,13 @@ impl PlaybackModel {
             status: self.state.status,
             generation: self.state.generation,
             armed_generation: armed.generation,
+            queue_epoch: self.state.queue_epoch(),
+            armed_queue_epoch: armed.queue_epoch,
+            armed_provider: armed.track.provider,
             armed_target: armed.track.id.clone(),
-            upcoming_first: self.next_upcoming_id(),
+            upcoming_first: self
+                .next_upcoming_track()
+                .map(|track| (track.provider, track.id)),
         });
         match outcome {
             standby::BoundaryOutcome::Ignore => {}
@@ -1288,7 +1300,9 @@ impl PlaybackModel {
             cx.notify();
             return;
         };
-        if self.state.current_id() != Some(armed.track.id.as_str()) {
+        if !self.state.current().is_some_and(|current| {
+            current.provider == armed.track.provider && current.id == armed.track.id
+        }) {
             // The selection diverged; fall back to a regular load.
             self.start(generation, cx);
             return;
@@ -1344,15 +1358,14 @@ impl PlaybackModel {
         matches!(
             self.state.status,
             PlaybackStatus::Playing | PlaybackStatus::Paused
-        ) && self.next_upcoming_id().as_deref() == Some(armed.track.id.as_str())
+        ) && self.state.queue_epoch() == armed.queue_epoch
+            && self.next_upcoming_track().is_some_and(|track| {
+                track.provider == armed.track.provider && track.id == armed.track.id
+            })
             && self
                 .engine
                 .as_ref()
                 .is_ok_and(|engine| engine.owns_probe(&armed.probe))
-    }
-
-    fn next_upcoming_id(&self) -> Option<String> {
-        self.next_upcoming_track().map(|track| track.id)
     }
 
     fn next_upcoming_track(&self) -> Option<PlaybackTrack> {

@@ -11,6 +11,8 @@ use gpui_component::{
 };
 
 use super::{
+    local_persistence::LocalPlaylistMutationOutcome,
+    local_playlist_controller::LocalPlaylistCompletion,
     local_playlist_store::LocalPlaylist,
     playlist_cover_editor::{CROP_PREVIEW_SIZE, PlaylistCoverEditor, cover_editor},
     playlist_create_dialog::{
@@ -413,13 +415,38 @@ impl LocalPlaylistDialog {
         cx: &mut Context<Self>,
     ) {
         let initial_tracks = self.initial_tracks.clone();
+        self.saving = true;
+        let dialog = cx.entity().clone();
         let result = match &self.mode {
             LocalPlaylistDialogMode::Create => self.library.update(cx, |library, cx| {
+                let dialog = dialog.clone();
+                let completion: LocalPlaylistCompletion = Box::new(
+                    move |result: Result<
+                        LocalPlaylistMutationOutcome,
+                        super::local_playlist_store::LocalPlaylistError,
+                    >,
+                          _view: &mut LibraryView,
+                          cx: &mut Context<LibraryView>| {
+                        dialog.update(cx, |dialog, cx| {
+                            dialog.saving = false;
+                            match result {
+                                Ok(LocalPlaylistMutationOutcome::Created) => {
+                                    dialog.error = None;
+                                    dialog.completed = true;
+                                }
+                                Err(error) => dialog.error = Some(error.to_string().into()),
+                                _ => {}
+                            }
+                            cx.notify();
+                        });
+                    },
+                );
                 if initial_tracks.is_empty() {
                     library.create_local_playlist_with_artwork(
                         title.clone(),
                         description.clone(),
                         artwork_jpeg.as_deref(),
+                        completion,
                         cx,
                     )
                 } else {
@@ -428,26 +455,47 @@ impl LocalPlaylistDialog {
                         description.clone(),
                         &initial_tracks,
                         artwork_jpeg.as_deref(),
+                        completion,
                         cx,
                     )
                 }
             }),
             LocalPlaylistDialogMode::Edit { id } => self.library.update(cx, |library, cx| {
+                let dialog = dialog.clone();
+                let completion: LocalPlaylistCompletion = Box::new(
+                    move |result: Result<
+                        LocalPlaylistMutationOutcome,
+                        super::local_playlist_store::LocalPlaylistError,
+                    >,
+                          _view: &mut LibraryView,
+                          cx: &mut Context<LibraryView>| {
+                        dialog.update(cx, |dialog, cx| {
+                            dialog.saving = false;
+                            match result {
+                                Ok(LocalPlaylistMutationOutcome::Updated) => {
+                                    dialog.error = None;
+                                    dialog.completed = true;
+                                }
+                                Err(error) => dialog.error = Some(error.to_string().into()),
+                                _ => {}
+                            }
+                            cx.notify();
+                        });
+                    },
+                );
                 library.update_local_playlist_with_artwork(
                     id.clone(),
                     title.clone(),
                     description.clone(),
                     artwork_jpeg.as_deref(),
+                    completion,
                     cx,
                 )
             }),
         };
-        match result {
-            Ok(()) => {
-                self.error = None;
-                self.completed = true;
-            }
-            Err(error) => self.error = Some(error.to_string().into()),
+        if let Err(error) = result {
+            self.saving = false;
+            self.error = Some(error.to_string().into());
         }
         cx.notify();
     }

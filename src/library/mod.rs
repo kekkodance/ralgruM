@@ -11,6 +11,7 @@ mod favorite_controller;
 mod favorite_state;
 mod filter;
 pub(crate) mod flow_controls;
+mod local_persistence;
 mod local_playlist_actions;
 mod local_playlist_artwork;
 mod local_playlist_controller;
