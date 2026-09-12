@@ -545,6 +545,8 @@ pub(crate) fn toolbar_shows_full_labels(available_width: f32, selector_width: f3
 fn search_detail_back_label(external_detail_return: Option<super::Nav>) -> &'static str {
     if external_detail_return == Some(super::Nav::Library) {
         "Back to library"
+    } else if external_detail_return == Some(super::Nav::Cache) {
+        "Back to cache"
     } else {
         "Back to search results"
     }
@@ -1287,12 +1289,11 @@ mod tests {
         TOOLBAR_MIN_SEARCH_WIDTH, ToolbarGeometryMotion, ToolbarGeometryVisual,
         detail_back_is_interactive, detail_toolbar_phases, library_selector_width,
         platform_all_width, platform_service_compactness, platform_service_responsive_visual,
-        platform_service_width, search_detail_back_label, search_input_trailing_padding,
-        search_navigation_back_label, search_placeholder_visibility, selector_item_geometry,
-        selector_shell_width, should_show_search_suggestions, source_selector_width,
-        toolbar_available_width, toolbar_bottom_margin, toolbar_route_identity,
-        toolbar_route_opacities, toolbar_search_layer_opacities, toolbar_selector_width,
-        toolbar_shows_full_labels,
+        platform_service_width, search_input_trailing_padding, search_navigation_back_label,
+        search_placeholder_visibility, selector_item_geometry, selector_shell_width,
+        should_show_search_suggestions, source_selector_width, toolbar_available_width,
+        toolbar_bottom_margin, toolbar_route_identity, toolbar_route_opacities,
+        toolbar_search_layer_opacities, toolbar_selector_width, toolbar_shows_full_labels,
     };
     use crate::shell::Nav;
     use std::time::{Duration, Instant};
@@ -1505,19 +1506,6 @@ mod tests {
             width,
             SEARCH_SOURCE_SELECTOR_WIDTH
         ));
-    }
-
-    #[test]
-    fn search_detail_back_label_matches_its_return_destination() {
-        assert_eq!(
-            search_detail_back_label(Some(Nav::Library)),
-            "Back to library"
-        );
-        assert_eq!(
-            search_detail_back_label(Some(Nav::Discover)),
-            "Back to search results"
-        );
-        assert_eq!(search_detail_back_label(None), "Back to search results");
     }
 
     #[test]

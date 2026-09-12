@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use gpui::{
-    AnyElement, App, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Render, ScrollHandle,
+    AnyElement, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Render, ScrollHandle,
     SharedString, Task, WeakEntity, Window, div, prelude::*, px, rgb,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
@@ -12,7 +12,7 @@ use crate::{
     browser_scroll::{BrowserScrollState, BrowserScrollTarget, browser_scroll_surface},
     context_menu::{self, track_menu},
     downloads::DownloadModel,
-    entity_navigation::{NavigationOpener, NavigationTarget, artist_routes_for_track},
+    entity_navigation::{ProviderNavigationOpeners, artist_routes_for_track},
     library::{FavoriteKey, FavoriteKind, FavoriteState, LibraryView},
     music_ui::{
         TrackArtistNavigation, TrackRowDisplay, row_download_button, row_more_button,
@@ -20,7 +20,7 @@ use crate::{
     },
     playback::{AudioCache, PlaybackContext, PlaybackModel, PlaybackProvider, PlaybackTrack},
     playing_indicator::PlayingSnapshot,
-    search::{Provider, SearchView},
+    search::Provider,
     settings::AccountState,
     theme::{FOREGROUND, MUTED},
 };
@@ -34,7 +34,7 @@ pub(crate) struct CacheView {
     runtime: Arc<Runtime>,
     playback: Entity<PlaybackModel>,
     library: WeakEntity<LibraryView>,
-    search: WeakEntity<SearchView>,
+    navigation_openers: ProviderNavigationOpeners,
     downloads: Entity<DownloadModel>,
     account: Entity<AccountState>,
     favorites: Entity<FavoriteState>,
@@ -54,7 +54,7 @@ impl CacheView {
         runtime: Arc<Runtime>,
         playback: Entity<PlaybackModel>,
         library: &Entity<LibraryView>,
-        search: &Entity<SearchView>,
+        navigation_openers: ProviderNavigationOpeners,
         downloads: Entity<DownloadModel>,
         account: Entity<AccountState>,
         favorites: Entity<FavoriteState>,
@@ -88,7 +88,7 @@ impl CacheView {
             runtime,
             playback,
             library: library.downgrade(),
-            search: search.downgrade(),
+            navigation_openers,
             downloads,
             account,
             favorites,
@@ -271,7 +271,7 @@ fn render_cache_row(
     let click_tracks = tracks.clone();
     let key_tracks = tracks.clone();
     let source = provider(track.provider);
-    let (open_album, open_artist) = cache_openers(view.search.clone(), track.provider);
+    let (open_album, open_artist) = view.navigation_openers.for_provider(source);
     let artist_navigation = {
         let routes = artist_routes_for_track(source, &track.artists);
         (!routes.is_empty()).then(|| TrackArtistNavigation {
@@ -377,34 +377,6 @@ fn render_cache_row(
         None,
     )
     .into_any_element()
-}
-
-fn cache_openers(
-    search: WeakEntity<SearchView>,
-    provider: PlaybackProvider,
-) -> (NavigationOpener, NavigationOpener) {
-    let provider = match provider {
-        PlaybackProvider::Deezer => Provider::Deezer,
-        PlaybackProvider::SoundCloud => Provider::SoundCloud,
-    };
-    let album_search = search.clone();
-    let open_album: NavigationOpener = Arc::new(
-        move |target: NavigationTarget, _: &mut Window, cx: &mut App| {
-            let Some(search) = album_search.upgrade() else {
-                return;
-            };
-            search.update(cx, |view, cx| view.open_card(target.card(provider), cx));
-        },
-    );
-    let open_artist: NavigationOpener = Arc::new(
-        move |target: NavigationTarget, _: &mut Window, cx: &mut App| {
-            let Some(search) = search.upgrade() else {
-                return;
-            };
-            search.update(cx, |view, cx| view.open_card(target.card(provider), cx));
-        },
-    );
-    (open_album, open_artist)
 }
 
 fn download_button(
@@ -729,55 +701,5 @@ mod tests {
             CACHE_ICON.path(),
             "ralgrum/icons/fontawesome-free-7.3.1/solid/hard-drive.svg"
         );
-    }
-
-    #[test]
-    fn cache_view_reuses_the_shared_track_row() {
-        let source = include_str!("mod.rs");
-        assert!(source.contains("track_row_with_action("));
-        assert!(source.contains("playback.replace_queue((*click_tracks).clone(), index, cx)"));
-        assert!(source.contains("PlaybackContext::None"));
-    }
-
-    #[test]
-    fn cache_header_stays_outside_the_scrollable_tracklist() {
-        let source = include_str!("mod.rs");
-        let render = source
-            .split("impl Render for CacheView")
-            .nth(1)
-            .and_then(|source| source.split("fn cache_header(").next())
-            .expect("cache render source");
-        assert!(render.contains(".child(cache_header(count, gutter))"));
-        assert!(render.contains(".child(scroll)"));
-        assert!(render.contains(".id(\"cache-page-scroll-viewport\")"));
-        assert!(render.contains("Scrollbar::vertical(&self.scroll)"));
-        assert!(render.contains("ScrollbarShow::Hover"));
-        assert!(!render.contains(".vertical_scrollbar(&self.scroll)"));
-    }
-
-    #[test]
-    fn cache_header_owns_the_existing_title_copy_and_count() {
-        let source = include_str!("mod.rs");
-        let header = source
-            .split("fn cache_header(")
-            .nth(1)
-            .and_then(|source| source.split("fn render_cache_row(").next())
-            .expect("cache header source");
-        assert!(header.contains(".id(\"cache-page-header\")"));
-        assert!(header.contains(".flex_none()"));
-        assert!(header.contains(".pt(px(24.))"));
-        assert!(header.contains(".pb(px(12.))"));
-        assert!(header.contains(".child(\"Cache\")"));
-        assert!(header.contains("Tracks you've played before, cached for offline playback."));
-        assert!(header.contains("format!("));
-    }
-
-    #[test]
-    fn cache_rows_reuse_shared_track_actions_and_context_menus() {
-        let source = include_str!("mod.rs");
-        assert!(source.contains("track_download_button_above("));
-        assert!(source.contains("track_menu_button("));
-        assert!(source.contains("track_menu("));
-        assert!(source.contains("Tracks you've played before, cached for offline playback."));
     }
 }

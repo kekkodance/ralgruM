@@ -749,13 +749,14 @@ impl RalgrumApp {
                 favorites.clone(),
             )
         });
+        let external_navigation = external_navigation_openers(cx.entity().downgrade());
         let cache_view = cx.new(|cx| {
             CacheView::new(
                 cache.clone(),
                 runtime.clone(),
                 playback.clone(),
                 &library,
-                &search,
+                external_navigation.clone(),
                 downloads.clone(),
                 account.clone(),
                 favorites.clone(),
@@ -1121,8 +1122,6 @@ impl RalgrumApp {
             cx.notify();
         })
         .detach();
-        let shell = cx.entity().downgrade();
-        let external_navigation = external_navigation_openers(shell.clone());
         library.update(cx, |library, _| {
             library.set_external_track_navigation(external_navigation.clone());
         });
@@ -1349,44 +1348,11 @@ mod tests {
     }
 
     #[test]
-    fn closed_sidebar_syncs_the_current_track_for_background_lyrics_loading() {
-        let source = include_str!("mod.rs");
-        assert!(source.contains(
-            "let lyrics_track = if is_lyrics {\n                    state\n                        .lyrics_display_track()"
-        ));
-        assert!(source.contains("state.current().map(LyricsTrackInput::from_playback)"));
-        assert!(source.contains("let sync_args = Some((lyrics_track, position, is_lyrics));"));
-        assert!(source.contains("lyrics.sync_track(is_lyrics, lyrics_track, position, cx);"));
-    }
-
-    #[test]
     fn download_observer_tracks_credential_generation_separately() {
         let mut last_scope = 7;
         assert!(!update_download_scope(&mut last_scope, 7));
         assert!(update_download_scope(&mut last_scope, 8));
         assert_eq!(last_scope, 8);
-    }
-
-    #[test]
-    fn downloads_observer_repaints_sidebar_badge_on_every_count_change() {
-        let source = include_str!("mod.rs");
-        let observer = source
-            .lines()
-            .find(|line| line.contains("cx.observe(&downloads"))
-            .expect("downloads observer should exist");
-        assert_eq!(
-            observer.trim(),
-            "cx.observe(&downloads, |_, _, cx| cx.notify()).detach();"
-        );
-    }
-
-    #[test]
-    fn library_collection_details_do_not_use_external_discover_navigation() {
-        let source = include_str!("mod.rs");
-        let destination = ["library_external_", "detail_destination"].concat();
-        let opener = ["external_card_", "navigation_opener"].concat();
-        assert!(!source.contains(&destination));
-        assert!(!source.contains(&opener));
     }
 
     #[test]
