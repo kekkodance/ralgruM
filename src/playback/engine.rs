@@ -1,0 +1,1186 @@
+use std::{
+    fs::File,
+    io::{BufReader, Seek, SeekFrom},
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
+};
+
+use futures::channel::oneshot;
+use ogg::reading::PacketReader;
+use opus_decoder::OpusDecoder;
+use rodio::{
+    Decoder, OutputStream, OutputStreamBuilder, Sink, Source, buffer::SamplesBuffer,
+    source::SeekError,
+};
+use tokio_util::sync::CancellationToken;
+
+use super::progressive::{ProgressiveReader, TimelineSeekSession};
+use super::ramped_gain::RampedGain;
+use super::resolver::{AudioFormat, ResolvedAudio, ResolvedProgressiveAudio};
+use super::standby::{PreparedSource, ProgressiveSeek, SinkProbe};
+
+type DecodedSource = Box<dyn Source + Send>;
+
+struct PendingProgressiveReload {
+    position: Duration,
+    cancellation: Arc<AtomicBool>,
+    timeline_cancellation: Option<CancellationToken>,
+    receiver: mpsc::Receiver<Result<(DecodedSource, Option<tempfile::NamedTempFile>), String>>,
+}
+
+struct ProgressiveReloadResult {
+    source: DecodedSource,
+    position: Duration,
+    file: Option<tempfile::NamedTempFile>,
+    timeline_cancellation: Option<CancellationToken>,
+}
+
+pub(crate) struct SeekCompletion {
+    receiver: oneshot::Receiver<()>,
+}
+
+impl SeekCompletion {
+    pub(crate) async fn wait(self) {
+        let _ = self.receiver.await;
+    }
+}
+
+pub(crate) trait AudioEngine {
+    fn load(&mut self, prepared: PreparedSource, volume: f32) -> Option<Duration>;
+    fn play(&self);
+    fn pause(&self);
+    fn stop(&mut self);
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, String>;
+    fn take_seek_completion(&mut self) -> Option<SeekCompletion> {
+        None
+    }
+    fn set_playback_intent(&self, _playing: bool) {}
+    fn apply_deferred_seek(&mut self) -> Result<SeekOutcome, String> {
+        Ok(SeekOutcome::Deferred)
+    }
+    fn set_transport_gain_target(&self, target: f32);
+    fn reset_transport_gain(&self, gain: f32);
+    fn transport_gain_settled(&self, target: f32) -> bool;
+    fn set_volume(&self, volume: f32);
+    fn position(&self) -> Duration;
+    fn ended(&self) -> bool;
+    fn append_standby(&mut self, prepared: PreparedSource);
+    fn skip_to_standby(&mut self);
+    fn activate_standby(&mut self);
+    fn sink_probe(&self) -> SinkProbe;
+    fn owns_probe(&self, probe: &SinkProbe) -> bool;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SeekOutcome {
+    Applied,
+    AppliedStandbyDropped,
+    Deferred,
+}
+
+pub(crate) struct RodioEngine {
+    stream: OutputStream,
+    sink: Arc<Sink>,
+    retained_files: Vec<tempfile::NamedTempFile>,
+    progressive_seek: Option<ProgressiveSeek>,
+    standby_progressive_seek: Option<ProgressiveSeek>,
+    position_base: Duration,
+    pending_progressive_reload: Option<PendingProgressiveReload>,
+    pending_seek_completion: Option<SeekCompletion>,
+    pending_position: Option<Duration>,
+    active_timeline_cancellation: Option<CancellationToken>,
+    playback_intent: Arc<AtomicBool>,
+    transport_gain: Arc<RampedGain>,
+}
+
+impl RodioEngine {
+    pub(crate) fn new() -> Result<Self, String> {
+        let stream = OutputStreamBuilder::open_default_stream()
+            .map_err(|_| "No usable audio output device was found".to_string())?;
+        let sink = Arc::new(Sink::connect_new(stream.mixer()));
+        Ok(Self {
+            stream,
+            sink,
+            retained_files: Vec::new(),
+            progressive_seek: None,
+            standby_progressive_seek: None,
+            position_base: Duration::ZERO,
+            pending_progressive_reload: None,
+            pending_seek_completion: None,
+            pending_position: None,
+            active_timeline_cancellation: None,
+            playback_intent: Arc::new(AtomicBool::new(false)),
+            transport_gain: Arc::new(RampedGain::default()),
+        })
+    }
+
+    fn wrap_source(&self, source: DecodedSource) -> DecodedSource {
+        Box::new(self.transport_gain.wrap(source))
+    }
+
+    fn decoder(path: &Path, format: AudioFormat) -> Result<Decoder<BufReader<File>>, String> {
+        let file = File::open(path)
+            .map_err(|error| format!("The playback buffer could not be opened: {error}"))?;
+        let byte_len = file
+            .metadata()
+            .map_err(|error| format!("The playback buffer could not be inspected: {error}"))?
+            .len();
+        Decoder::builder()
+            .with_data(BufReader::with_capacity(64 * 1024, file))
+            .with_byte_len(byte_len)
+            .with_hint(format.extension())
+            .with_mime_type(format.mime_type())
+            .build()
+            .map_err(|error| format!("Could not decode {} audio: {error}", format.label()))
+    }
+
+    fn decoder_at(
+        path: &Path,
+        format: AudioFormat,
+        position: Duration,
+    ) -> Result<DecodedSource, String> {
+        let mut decoder = Self::decoder(path, format)?;
+        if format == AudioFormat::M4a {
+            discard_decoder_samples(&mut decoder, position, None)?;
+        } else {
+            decoder
+                .try_seek(position)
+                .map_err(|error| format!("This stream could not seek to that position: {error}"))?;
+        }
+        Ok(Box::new(decoder))
+    }
+
+    fn decoder_at_with_cancellation(
+        path: &Path,
+        format: AudioFormat,
+        position: Duration,
+        cancellation: &AtomicBool,
+    ) -> Result<DecodedSource, String> {
+        let mut decoder = Self::decoder(path, format)?;
+        if format == AudioFormat::M4a {
+            discard_decoder_samples(&mut decoder, position, Some(cancellation))?;
+        } else {
+            decoder
+                .try_seek(position)
+                .map_err(|error| format!("This stream could not seek to that position: {error}"))?;
+        }
+        Ok(Box::new(decoder))
+    }
+
+    fn opus(path: &Path) -> Result<SamplesBuffer, String> {
+        let file = File::open(path)
+            .map_err(|error| format!("The playback buffer could not be opened: {error}"))?;
+        let mut packets = PacketReader::new(BufReader::new(file));
+        let head = packets
+            .read_packet_expected()
+            .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?;
+        if head.data.len() < 19 || &head.data[..8] != b"OpusHead" {
+            return Err("Could not decode Ogg Opus audio: invalid OpusHead".into());
+        }
+        let channels = usize::from(head.data[9]);
+        let pre_skip = usize::from(u16::from_le_bytes([head.data[10], head.data[11]]));
+        let gain = i16::from_le_bytes([head.data[16], head.data[17]]);
+        if gain != 0 {
+            return Err("Could not decode Ogg Opus audio: output gain is unsupported".into());
+        }
+        let tags = packets
+            .read_packet_expected()
+            .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?;
+        if !tags.data.starts_with(b"OpusTags") {
+            return Err("Could not decode Ogg Opus audio: invalid OpusTags".into());
+        }
+        let mut decoder = OpusDecoder::new(48_000, channels)
+            .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?;
+        let mut samples = Vec::with_capacity(120 * 48_000 * channels);
+        let mut decoded = vec![0.0; OpusDecoder::MAX_FRAME_SIZE_48K * channels];
+        let mut decoded_frames = 0;
+        while let Some(packet) = packets
+            .read_packet()
+            .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?
+        {
+            let frames = decoder
+                .decode_float(&packet.data, &mut decoded, false)
+                .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?;
+            let start_frames = pre_skip.saturating_sub(decoded_frames).min(frames);
+            decoded_frames += frames;
+            samples.extend_from_slice(&decoded[start_frames * channels..frames * channels]);
+        }
+        Ok(SamplesBuffer::new(channels as u16, 48_000, samples))
+    }
+
+    /// Decodes resolved audio into a source that can be appended to a sink
+    /// later without further work. The standby path runs this on a blocking
+    /// worker while the current track keeps playing.
+    pub(crate) fn decode(audio: ResolvedAudio) -> Result<PreparedSource, String> {
+        if audio.format == AudioFormat::OggOpus {
+            let decoded = Self::opus(&audio.path)?;
+            let duration = decoded.total_duration().or(audio.duration);
+            Ok(PreparedSource::new(decoded, duration, audio.file))
+        } else {
+            let decoded = Self::decoder(&audio.path, audio.format)?;
+            let duration = decoded.total_duration().or(audio.duration);
+            Ok(PreparedSource::new(decoded, duration, audio.file))
+        }
+    }
+
+    pub(crate) fn decode_progressive(
+        audio: ResolvedProgressiveAudio,
+    ) -> Result<PreparedSource, String> {
+        if audio.format == AudioFormat::OggOpus {
+            let decoded = ProgressiveOpus::new(audio.reader, audio.duration)?;
+            let duration = decoded.total_duration().or(audio.duration);
+            return Ok(PreparedSource::new(decoded, duration, audio.file));
+        }
+        let path = audio.file.path().to_owned();
+        let completion = audio.reader.completion();
+        let mut builder = Decoder::builder()
+            .with_data(audio.reader)
+            .with_hint(audio.format.extension())
+            .with_mime_type(audio.format.mime_type());
+        if let Some(total) = audio.total {
+            builder = builder.with_byte_len(total);
+        }
+        let decoded = builder
+            .build()
+            .map_err(|error| format!("Could not decode {} audio: {error}", audio.format.label()))?;
+        let duration = decoded.total_duration().or(audio.duration);
+        if audio.seekable_after_completion {
+            let progressive_seek = ProgressiveSeek {
+                path,
+                format: audio.format,
+                completion,
+                timeline_seek_session: audio.timeline_seek_session,
+            };
+            Ok(PreparedSource::new(decoded, duration, audio.file)
+                .with_progressive_seek(progressive_seek))
+        } else {
+            Ok(PreparedSource::new(decoded, duration, audio.file))
+        }
+    }
+
+    fn install_progressive_source(
+        &mut self,
+        source: DecodedSource,
+        position: Duration,
+        file: Option<tempfile::NamedTempFile>,
+        resume_after: Option<bool>,
+        timeline_cancellation: Option<CancellationToken>,
+    ) -> bool {
+        replace_active_timeline_cancellation(
+            &mut self.active_timeline_cancellation,
+            timeline_cancellation,
+        );
+        let standby_dropped = self.sink.len() > 1;
+        if standby_dropped {
+            discard_progressive_seek(&mut self.standby_progressive_seek);
+        }
+        let should_pause = should_pause_after_seek(resume_after, self.sink.is_paused());
+        let volume = self.sink.volume();
+        self.sink.stop();
+        let sink = Arc::new(Sink::connect_new(self.stream.mixer()));
+        sink.set_volume(volume);
+        sink.append(self.wrap_source(source));
+        if should_pause {
+            sink.pause();
+        } else {
+            sink.play();
+        }
+        self.sink = sink;
+        self.position_base = position;
+        self.pending_position = None;
+        if let Some(file) = file {
+            self.retained_files.push(file);
+            if self.retained_files.len() > 2 {
+                self.retained_files.remove(0);
+            }
+        }
+        standby_dropped
+    }
+
+    fn cancel_pending_progressive_reload(&mut self) {
+        cancel_active_timeline_cancellation(&mut self.active_timeline_cancellation);
+        self.pending_seek_completion.take();
+        if let Some(pending) = self.pending_progressive_reload.take() {
+            pending.cancellation.store(true, Ordering::Release);
+            if let Some(cancellation) = pending.timeline_cancellation {
+                cancellation.cancel();
+            }
+            if self.playback_intent.load(Ordering::Acquire) {
+                self.sink.play();
+            }
+        }
+        self.pending_position = None;
+    }
+
+    fn schedule_progressive_reload(&mut self, position: Duration) -> Result<(), String> {
+        let (path, format, timeline_seek_session) = {
+            let progressive_seek = self
+                .progressive_seek
+                .as_ref()
+                .ok_or_else(|| "The progressive source is unavailable".to_string())?;
+            (
+                progressive_seek.path.clone(),
+                progressive_seek.format,
+                progressive_seek.timeline_seek_session.clone(),
+            )
+        };
+        self.cancel_pending_progressive_reload();
+        if let Some(timeline_seek_session) = timeline_seek_session {
+            return self.schedule_timeline_reload(timeline_seek_session, position);
+        }
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let worker_cancellation = cancellation.clone();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (completion_sender, completion_receiver) = oneshot::channel();
+        self.sink.pause();
+        let spawn_result = thread::Builder::new()
+            .name("ralgrum-aac-seek".into())
+            .spawn(move || {
+                let result = Self::decoder_at_with_cancellation(
+                    &path,
+                    format,
+                    position,
+                    &worker_cancellation,
+                );
+                let _ = sender.send(result.map(|source| (source, None)));
+                let _ = completion_sender.send(());
+            });
+        if spawn_result.is_err() {
+            if self.playback_intent.load(Ordering::Acquire) {
+                self.sink.play();
+            }
+            return Err("The playback seek worker could not be started".to_string());
+        }
+        self.pending_position = Some(position);
+        self.pending_seek_completion = Some(SeekCompletion {
+            receiver: completion_receiver,
+        });
+        self.pending_progressive_reload = Some(PendingProgressiveReload {
+            position,
+            cancellation,
+            timeline_cancellation: None,
+            receiver,
+        });
+        Ok(())
+    }
+
+    fn schedule_timeline_reload(
+        &mut self,
+        session: Arc<dyn TimelineSeekSession>,
+        position: Duration,
+    ) -> Result<(), String> {
+        self.cancel_pending_progressive_reload();
+        let request = session.request(position)?;
+        let timeline_cancellation = request.cancellation.clone();
+        let format = request.format;
+        let intra_segment = request.intra_segment_offset;
+        let startup = request.startup;
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let worker_cancellation = cancellation.clone();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (completion_sender, completion_receiver) = oneshot::channel();
+        self.sink.pause();
+        let spawn_result = thread::Builder::new()
+            .name("ralgrum-timeline-seek".into())
+            .spawn(move || {
+                let result: Result<(DecodedSource, Option<tempfile::NamedTempFile>), String> =
+                    (|| {
+                        let startup = startup.recv().map_err(|_| {
+                            "The timeline seek worker stopped unexpectedly".to_string()
+                        })??;
+                        let mut decoder = Decoder::builder()
+                            .with_data(startup.reader)
+                            .with_hint(format.extension())
+                            .with_mime_type(format.mime_type())
+                            .build()
+                            .map_err(|error| {
+                                format!("Could not decode {} audio: {error}", format.label())
+                            })?;
+                        discard_decoder_samples(
+                            &mut decoder,
+                            intra_segment,
+                            Some(&worker_cancellation),
+                        )?;
+                        Ok((Box::new(decoder) as DecodedSource, Some(startup.file)))
+                    })();
+                let _ = sender.send(result);
+                let _ = completion_sender.send(());
+            });
+        if spawn_result.is_err() {
+            timeline_cancellation.cancel();
+            if self.playback_intent.load(Ordering::Acquire) {
+                self.sink.play();
+            }
+            return Err("The timeline seek worker could not be started".to_string());
+        }
+        self.pending_position = Some(position);
+        self.pending_seek_completion = Some(SeekCompletion {
+            receiver: completion_receiver,
+        });
+        self.pending_progressive_reload = Some(PendingProgressiveReload {
+            position,
+            cancellation,
+            timeline_cancellation: Some(timeline_cancellation),
+            receiver,
+        });
+        Ok(())
+    }
+
+    fn take_progressive_reload_result(
+        &mut self,
+    ) -> Result<Option<ProgressiveReloadResult>, String> {
+        let result = match self.pending_progressive_reload.as_ref() {
+            Some(pending) => pending.receiver.try_recv(),
+            None => return Ok(None),
+        };
+        match result {
+            Ok(Ok(source)) => {
+                let pending = self
+                    .pending_progressive_reload
+                    .take()
+                    .expect("pending progressive reload disappeared");
+                self.pending_position = None;
+                self.pending_seek_completion.take();
+                Ok(Some(ProgressiveReloadResult {
+                    source: source.0,
+                    position: pending.position,
+                    file: source.1,
+                    timeline_cancellation: pending.timeline_cancellation,
+                }))
+            }
+            Ok(Err(error)) => {
+                self.pending_seek_completion.take();
+                if let Some(pending) = self.pending_progressive_reload.take() {
+                    if let Some(cancellation) = pending.timeline_cancellation {
+                        cancellation.cancel();
+                    }
+                    if self.playback_intent.load(Ordering::Acquire) {
+                        self.sink.play();
+                    }
+                }
+                self.pending_position = None;
+                Err(error)
+            }
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.pending_seek_completion.take();
+                if let Some(pending) = self.pending_progressive_reload.take() {
+                    if let Some(cancellation) = pending.timeline_cancellation {
+                        cancellation.cancel();
+                    }
+                    if self.playback_intent.load(Ordering::Acquire) {
+                        self.sink.play();
+                    }
+                }
+                self.pending_position = None;
+                Err("The playback seek worker stopped unexpectedly".into())
+            }
+        }
+    }
+
+    fn reported_position(&self) -> Duration {
+        reported_position_with_pending(
+            self.pending_position,
+            self.position_base,
+            self.sink.get_pos(),
+        )
+    }
+}
+
+fn cancel_active_timeline_cancellation(active: &mut Option<CancellationToken>) {
+    if let Some(cancellation) = active.take() {
+        cancellation.cancel();
+    }
+}
+
+fn replace_active_timeline_cancellation(
+    active: &mut Option<CancellationToken>,
+    replacement: Option<CancellationToken>,
+) {
+    cancel_active_timeline_cancellation(active);
+    *active = replacement;
+}
+
+fn reported_position(base: Duration, sink_position: Duration) -> Duration {
+    base.saturating_add(sink_position)
+}
+
+fn reported_position_with_pending(
+    pending: Option<Duration>,
+    base: Duration,
+    sink_position: Duration,
+) -> Duration {
+    pending.unwrap_or_else(|| reported_position(base, sink_position))
+}
+
+fn should_pause_after_seek(resume_after: Option<bool>, current_paused: bool) -> bool {
+    resume_after.map_or(current_paused, |resume| !resume)
+}
+
+fn discard_decoder_samples<D>(
+    decoder: &mut D,
+    position: Duration,
+    cancellation: Option<&AtomicBool>,
+) -> Result<(), String>
+where
+    D: Source<Item = f32>,
+{
+    let target_samples = position
+        .as_nanos()
+        .saturating_mul(u128::from(decoder.sample_rate()))
+        .saturating_mul(u128::from(decoder.channels()))
+        / 1_000_000_000;
+    let target_samples = u64::try_from(target_samples).unwrap_or(u64::MAX);
+    for index in 0..target_samples {
+        if index % 4096 == 0 && cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            return Err("Playback request cancelled".into());
+        }
+        if decoder.next().is_none() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn discard_progressive_seek(progressive_seek: &mut Option<ProgressiveSeek>) {
+    if let Some(progressive_seek) = progressive_seek.take() {
+        progressive_seek.completion.clear_pending_seek();
+    }
+}
+
+struct ProgressiveOpus {
+    packets: Option<PacketReader<ProgressiveReader>>,
+    decoder: OpusDecoder,
+    channels: u16,
+    pre_skip: usize,
+    decoded_frames: usize,
+    samples: Vec<f32>,
+    cursor: usize,
+    duration: Option<Duration>,
+}
+
+impl ProgressiveOpus {
+    fn new(reader: ProgressiveReader, duration: Option<Duration>) -> Result<Self, String> {
+        let (packets, channels, pre_skip) = Self::packet_reader(reader)?;
+        let decoder = OpusDecoder::new(48_000, usize::from(channels))
+            .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?;
+        Ok(Self {
+            packets: Some(packets),
+            decoder,
+            channels,
+            pre_skip,
+            decoded_frames: 0,
+            samples: Vec::new(),
+            cursor: 0,
+            duration,
+        })
+    }
+
+    fn packet_reader(
+        reader: ProgressiveReader,
+    ) -> Result<(PacketReader<ProgressiveReader>, u16, usize), String> {
+        let mut packets = PacketReader::new(reader);
+        let head = packets
+            .read_packet_expected()
+            .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?;
+        if head.data.len() < 19 || &head.data[..8] != b"OpusHead" {
+            return Err("Could not decode Ogg Opus audio: invalid OpusHead".into());
+        }
+        let channels = u16::from(head.data[9]);
+        let pre_skip = usize::from(u16::from_le_bytes([head.data[10], head.data[11]]));
+        let gain = i16::from_le_bytes([head.data[16], head.data[17]]);
+        if gain != 0 {
+            return Err("Could not decode Ogg Opus audio: output gain is unsupported".into());
+        }
+        let tags = packets
+            .read_packet_expected()
+            .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?;
+        if !tags.data.starts_with(b"OpusTags") {
+            return Err("Could not decode Ogg Opus audio: invalid OpusTags".into());
+        }
+        Ok((packets, channels, pre_skip))
+    }
+}
+
+impl Iterator for ProgressiveOpus {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.cursor < self.samples.len() {
+                let sample = self.samples[self.cursor];
+                self.cursor += 1;
+                return Some(sample);
+            }
+            self.samples.clear();
+            self.cursor = 0;
+            let packet = self.packets.as_mut()?.read_packet().ok()??;
+            let mut decoded =
+                vec![0.0; OpusDecoder::MAX_FRAME_SIZE_48K * usize::from(self.channels)];
+            let frames = self
+                .decoder
+                .decode_float(&packet.data, &mut decoded, false)
+                .ok()?;
+            let start_frames = self
+                .pre_skip
+                .saturating_sub(self.decoded_frames)
+                .min(frames);
+            self.decoded_frames += frames;
+            self.samples.extend_from_slice(
+                &decoded[start_frames * usize::from(self.channels)
+                    ..frames * usize::from(self.channels)],
+            );
+        }
+    }
+}
+
+impl Source for ProgressiveOpus {
+    fn current_span_len(&self) -> Option<usize> {
+        let remaining = self.samples.len().saturating_sub(self.cursor);
+        (remaining > 0).then_some(remaining)
+    }
+
+    fn channels(&self) -> rodio::ChannelCount {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> rodio::SampleRate {
+        48_000
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
+        let target = self
+            .duration
+            .map_or(position, |duration| position.min(duration));
+        let packets = self.packets.take().ok_or_else(|| {
+            SeekError::Other(Box::new(std::io::Error::other(
+                "The Ogg Opus stream is unavailable",
+            )))
+        })?;
+        let mut reader = packets.into_inner();
+        reader
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| SeekError::Other(Box::new(error)))?;
+        let (packets, channels, pre_skip) = Self::packet_reader(reader)
+            .map_err(|error| SeekError::Other(Box::new(std::io::Error::other(error))))?;
+        self.packets = Some(packets);
+        self.channels = channels;
+        self.pre_skip = pre_skip;
+        self.decoded_frames = 0;
+        self.samples.clear();
+        self.cursor = 0;
+        self.decoder = OpusDecoder::new(48_000, usize::from(channels)).map_err(|error| {
+            SeekError::Other(Box::new(std::io::Error::other(error.to_string())))
+        })?;
+        let samples = (target.as_secs_f64() * 48_000.0).floor() as u64 * u64::from(channels);
+        for _ in 0..samples {
+            if self.next().is_none() {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AudioEngine for RodioEngine {
+    fn load(&mut self, prepared: PreparedSource, volume: f32) -> Option<Duration> {
+        self.set_playback_intent(false);
+        self.cancel_pending_progressive_reload();
+        discard_progressive_seek(&mut self.progressive_seek);
+        discard_progressive_seek(&mut self.standby_progressive_seek);
+        self.sink.stop();
+        self.sink = Arc::new(Sink::connect_new(self.stream.mixer()));
+        self.sink.set_volume(volume);
+        self.transport_gain.reset(1.0);
+        self.position_base = Duration::ZERO;
+        let duration = prepared.duration();
+        let (source, file, progressive_seek) = prepared.into_parts();
+        self.sink.append(self.wrap_source(source));
+        self.set_playback_intent(true);
+        self.sink.play();
+        self.progressive_seek = progressive_seek;
+        self.retained_files.push(file);
+        if self.retained_files.len() > 2 {
+            self.retained_files.remove(0);
+        }
+        duration
+    }
+
+    fn play(&self) {
+        self.set_playback_intent(true);
+        self.sink.play();
+    }
+    fn pause(&self) {
+        self.set_playback_intent(false);
+        self.sink.pause();
+    }
+    fn stop(&mut self) {
+        self.set_playback_intent(false);
+        self.cancel_pending_progressive_reload();
+        discard_progressive_seek(&mut self.progressive_seek);
+        discard_progressive_seek(&mut self.standby_progressive_seek);
+        self.sink.stop();
+    }
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, String> {
+        if let Some(progressive_seek) = self.progressive_seek.as_ref() {
+            if let Some(timeline_seek_session) = progressive_seek.timeline_seek_session.clone() {
+                self.schedule_timeline_reload(timeline_seek_session, position)?;
+                return Ok(SeekOutcome::Deferred);
+            }
+            if !progressive_seek.completion.is_complete() {
+                progressive_seek.completion.request_seek(position);
+                self.pending_position = Some(position);
+                return Ok(SeekOutcome::Deferred);
+            }
+            progressive_seek.completion.clear_pending_seek();
+            if progressive_seek.format == AudioFormat::M4a {
+                self.schedule_progressive_reload(position)?;
+                return Ok(SeekOutcome::Deferred);
+            }
+            let decoder =
+                Self::decoder_at(&progressive_seek.path, progressive_seek.format, position)?;
+            let standby_dropped =
+                self.install_progressive_source(decoder, position, None, None, None);
+            return Ok(if standby_dropped {
+                SeekOutcome::AppliedStandbyDropped
+            } else {
+                SeekOutcome::Applied
+            });
+        }
+        self.sink
+            .try_seek(position)
+            .map_err(|_| "This stream could not seek to that position".into())
+            .map(|_| {
+                self.position_base = Duration::ZERO;
+                SeekOutcome::Applied
+            })
+    }
+    fn take_seek_completion(&mut self) -> Option<SeekCompletion> {
+        self.pending_seek_completion.take()
+    }
+    fn set_playback_intent(&self, playing: bool) {
+        self.playback_intent.store(playing, Ordering::Release);
+    }
+    fn apply_deferred_seek(&mut self) -> Result<SeekOutcome, String> {
+        if let Some(result) = self.take_progressive_reload_result()? {
+            let resume_after = self.playback_intent.load(Ordering::Acquire);
+            let standby_dropped = self.install_progressive_source(
+                result.source,
+                result.position,
+                result.file,
+                Some(resume_after),
+                result.timeline_cancellation,
+            );
+            return Ok(if standby_dropped {
+                SeekOutcome::AppliedStandbyDropped
+            } else {
+                SeekOutcome::Applied
+            });
+        }
+        let Some(progressive_seek) = self.progressive_seek.as_ref() else {
+            return Ok(SeekOutcome::Deferred);
+        };
+        if progressive_seek.timeline_seek_session.is_some() {
+            return Ok(SeekOutcome::Deferred);
+        }
+        if !progressive_seek.completion.is_complete() {
+            return Ok(SeekOutcome::Deferred);
+        }
+        let Some(position) = progressive_seek.completion.take_pending_seek() else {
+            return Ok(SeekOutcome::Deferred);
+        };
+        if progressive_seek.format == AudioFormat::M4a {
+            self.schedule_progressive_reload(position)?;
+            return Ok(SeekOutcome::Deferred);
+        }
+        let decoder = Self::decoder_at(&progressive_seek.path, progressive_seek.format, position)?;
+        let standby_dropped = self.install_progressive_source(decoder, position, None, None, None);
+        Ok(if standby_dropped {
+            SeekOutcome::AppliedStandbyDropped
+        } else {
+            SeekOutcome::Applied
+        })
+    }
+    fn set_transport_gain_target(&self, target: f32) {
+        self.transport_gain.set_target(target);
+    }
+    fn reset_transport_gain(&self, gain: f32) {
+        self.transport_gain.reset(gain);
+    }
+    fn transport_gain_settled(&self, target: f32) -> bool {
+        self.transport_gain.is_at_target(target)
+    }
+    fn set_volume(&self, volume: f32) {
+        self.sink.set_volume(volume);
+    }
+    fn position(&self) -> Duration {
+        self.reported_position()
+    }
+    fn ended(&self) -> bool {
+        !self.sink.is_paused() && self.sink.empty()
+    }
+    fn append_standby(&mut self, prepared: PreparedSource) {
+        discard_progressive_seek(&mut self.standby_progressive_seek);
+        let (source, file, progressive_seek) = prepared.into_parts();
+        self.sink.append(self.wrap_source(source));
+        self.standby_progressive_seek = progressive_seek;
+        self.retained_files.push(file);
+        if self.retained_files.len() > 2 {
+            self.retained_files.remove(0);
+        }
+    }
+    fn skip_to_standby(&mut self) {
+        self.cancel_pending_progressive_reload();
+        self.sink.skip_one();
+    }
+    fn activate_standby(&mut self) {
+        self.cancel_pending_progressive_reload();
+        discard_progressive_seek(&mut self.progressive_seek);
+        self.progressive_seek = self.standby_progressive_seek.take();
+        self.position_base = Duration::ZERO;
+    }
+    fn sink_probe(&self) -> SinkProbe {
+        SinkProbe::new(self.sink.clone())
+    }
+    fn owns_probe(&self, probe: &SinkProbe) -> bool {
+        probe.is_sink(&self.sink)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use std::{path::PathBuf, process::Command};
+
+    use super::*;
+
+    const MP3: &str = "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYyLjEyLjEwMQAAAAAAAAAAAAAA/+M4wAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAAbAAqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV////////////////////////////////////////////AAAAAExhdmM2Mi4yOAAAAAAAAAAAAAAAACQC8AAAAAAAAAGwJxQu6wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/+MYxAAMSJKUeU8AAAQJKAL3ve973vSlKUpSlL3u/f337xKp8t4t4m4uZc1WGxACAYrB9//+U9/R/gQ5z/QqyypquH9pKtLZ/+MYxAkOONqsAZgwAPpZTWjVJzuG5TKo07UpBdEwrDLwHpekaeFCSmCJCSNVVtBO9BgrWo4ShIGso6CsS5IkTWxjn/qSKSYp/+MYxAsMKMY0AckIAQy0qKSWMkQqFTOSlLVQqGXoSVlZE0qhlFCyaFDAp5sLgV+Jv/+KTEFNRTMuMTAwqqqqqqqqqqqqqqqq";
+    const FLAC: &str = "ZkxhQwAAACICQAJAAADsAADsAfQA8AAAAZDc4wSniVrUdsvJq5fhZrQqhAAALg0AAABMYXZmNjIuMTIuMTAxAQAAABUAAABlbmNvZGVyPUxhdmY2Mi4xMi4xMDH/+HQIAAGPJE4BIgU/CkgNtg/BD8QODAqP5jFGjwprR9+4EI+MQUE+rwigEg/MnK73aeqOqCKCCKMEqUAoBkDhZBKmRJISwRonpphaIWIoDYlEKQwkgSUIOI5cJhKCi8jTWkoQBhCUkRCiFCYGEMx7TrCYiQTERk07QsJhYULLIYhk0siRQhWXzRqwRhQlC5GJGuKgsEYJlya+ExEigomE7kZSRChFCRieQ1aKEkJK4hiE4rBYoLJl6dkwTCBAMMCKVlITAMIZg0jQoGBMAp0SKWgQokKNAiRoMSBBhQ5E+xl9K5IOo9ApgGAqOw==";
+    const WAV: &str = "UklGRmYDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAATElTVBoAAABJTkZPSVNGVA4AAABMYXZmNjIuMTIuMTAxAGRhdGEgAwAAIgE/BUgKtg3BD8QPDA6PCucFfwAR+zH2f/Jj8CHwv/EN9aX5/v52BGcJOw1+D+0Peg5QC9AGggEG/AP3D/Ok8AnwUvFX9Lz4/v19A5IIpAw3D/0P4A4ADLUHgQIB/dz3rfPz8AHw8/Cs89v3Af2AArUHAAzfDv0PNw+kDJMIfgMA/r34V/RS8Qnwo/AP8wL3BfyBAc8GTwt5Du0Pfw87DWcJdwT//qb5DfW/8SHwY/B+8jL2DvuAAOMFlAoEDs0Ptw/FDTMKbAUAAJX6zvU78krwM/D78Wz1HPp///EEzgmCDZwP3w9BDvQKWwYCAYrB9//+U9/R/gQ5z/QqyypquH9pKtLZ/+MYxAkOONqsAZgwAPpZTWjVJzuG5TKo07UpBdEwrDLwHpekaeFCSmCJCSNVVtBO9BgrWo4ShIGso6CsS5IkTWxjn/qSKSYp/+MYxAsMKMY0AckIAQy0qKSWMkQqFTOSlLVQqGXoSVlZE0qhlFCyaFDAp5sLgV+Jv/+KTEFNRTMuMTAwqqqqqqqqqqqqqqqq";
+
+    #[test]
+    fn hinted_rodio_decoder_reads_core_format_fixtures() {
+        for (format, encoded) in [
+            (AudioFormat::Mp3, MP3),
+            (AudioFormat::Flac, FLAC),
+            (AudioFormat::Wav, WAV),
+        ] {
+            let file = tempfile::Builder::new()
+                .suffix(&format!(".{}", format.extension()))
+                .tempfile()
+                .unwrap();
+            std::fs::write(file.path(), STANDARD.decode(encoded).unwrap()).unwrap();
+            let mut decoder = RodioEngine::decoder(file.path(), format).unwrap();
+            assert!(
+                decoder.next().is_some(),
+                "{} fixture was empty",
+                format.label()
+            );
+        }
+    }
+
+    #[test]
+    fn decode_prepares_a_source_with_its_decoded_duration() {
+        let file = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
+        std::fs::write(file.path(), STANDARD.decode(WAV).unwrap()).unwrap();
+        let audio = ResolvedAudio {
+            path: file.path().to_owned(),
+            file,
+            duration: None,
+            format: AudioFormat::Wav,
+            declared_bitrate: None,
+        };
+        let prepared = RodioEngine::decode(audio).unwrap();
+        assert!(prepared.duration().is_some());
+    }
+
+    #[test]
+    fn decode_errors_include_safe_format_and_underlying_error() {
+        let file = tempfile::Builder::new().suffix(".flac").tempfile().unwrap();
+        std::fs::write(file.path(), b"not audio").unwrap();
+        let error = match RodioEngine::decoder(file.path(), AudioFormat::Flac) {
+            Ok(_) => panic!("invalid FLAC unexpectedly decoded"),
+            Err(error) => error,
+        };
+        assert!(error.starts_with("Could not decode FLAC audio: "));
+        assert!(!error.contains("http"));
+    }
+
+    #[test]
+    fn progressive_seek_keeps_only_the_latest_pending_target_and_can_cancel_it() {
+        let file = super::super::progressive::ProgressiveFile::new(AudioFormat::Wav, None).unwrap();
+        let reader = file.reader().unwrap();
+        let completion = reader.completion();
+        completion.request_seek(Duration::from_secs(2));
+        completion.request_seek(Duration::from_secs(3));
+        assert_eq!(completion.pending_seek(), Some(Duration::from_secs(3)));
+        completion.clear_pending_seek();
+        assert_eq!(completion.pending_seek(), None);
+    }
+
+    #[test]
+    fn reported_position_preserves_the_preseeked_reload_offset() {
+        assert_eq!(
+            reported_position(Duration::from_secs(42), Duration::from_millis(250)),
+            Duration::from_millis(42_250)
+        );
+        assert_eq!(
+            reported_position(Duration::ZERO, Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn pending_hls_seek_reports_the_requested_position_without_moving_the_sink() {
+        assert_eq!(
+            reported_position_with_pending(
+                Some(Duration::from_secs(2_399)),
+                Duration::from_secs(12),
+                Duration::from_millis(250),
+            ),
+            Duration::from_secs(2_399)
+        );
+        assert_eq!(
+            reported_position_with_pending(
+                None,
+                Duration::from_secs(12),
+                Duration::from_millis(250),
+            ),
+            Duration::from_millis(12_250)
+        );
+    }
+
+    #[tokio::test]
+    async fn seek_completion_waits_for_the_worker_signal() {
+        let (sender, receiver) = oneshot::channel();
+        let completion = SeekCompletion { receiver };
+        sender.send(()).unwrap();
+        completion.wait().await;
+    }
+
+    #[test]
+    fn timeline_seek_uses_the_latest_shared_playback_intent() {
+        let intent = Arc::new(AtomicBool::new(true));
+        intent.store(false, Ordering::Release);
+        assert!(!intent.load(Ordering::Acquire));
+        intent.store(true, Ordering::Release);
+        assert!(intent.load(Ordering::Acquire));
+        assert!(!should_pause_after_seek(Some(true), true));
+        assert!(!should_pause_after_seek(Some(true), false));
+        assert!(should_pause_after_seek(Some(false), true));
+        assert!(should_pause_after_seek(Some(false), false));
+        assert!(should_pause_after_seek(None, true));
+        assert!(!should_pause_after_seek(None, false));
+    }
+
+    #[test]
+    fn active_timeline_cancellation_transfers_from_pending_and_cancels_replaced_work() {
+        let old = CancellationToken::new();
+        let pending = CancellationToken::new();
+        let mut active = Some(old.clone());
+
+        replace_active_timeline_cancellation(&mut active, Some(pending.clone()));
+
+        assert!(old.is_cancelled());
+        assert!(!pending.is_cancelled());
+        assert!(
+            active
+                .as_ref()
+                .is_some_and(|cancellation| !cancellation.is_cancelled())
+        );
+
+        cancel_active_timeline_cancellation(&mut active);
+
+        assert!(pending.is_cancelled());
+        assert!(active.is_none());
+    }
+
+    #[test]
+    fn standby_activation_discards_the_previous_progressive_seek() {
+        let file = super::super::progressive::ProgressiveFile::new(AudioFormat::M4a, None).unwrap();
+        let reader = file.reader().unwrap();
+        let completion = reader.completion();
+        completion.request_seek(Duration::from_secs(12));
+        let mut progressive_seek = Some(ProgressiveSeek {
+            path: std::path::PathBuf::from("old-track.m4a"),
+            format: AudioFormat::M4a,
+            completion: completion.clone(),
+            timeline_seek_session: None,
+        });
+
+        discard_progressive_seek(&mut progressive_seek);
+
+        assert!(progressive_seek.is_none());
+        assert_eq!(completion.pending_seek(), None);
+    }
+
+    #[test]
+    fn sequential_seeked_decoders_do_not_restart_from_zero() {
+        let file = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
+        std::fs::write(file.path(), STANDARD.decode(WAV).unwrap()).unwrap();
+        let mut from_start = RodioEngine::decoder(file.path(), AudioFormat::Wav).unwrap();
+        let first_sample = from_start.next().unwrap();
+        let mut first_seek =
+            RodioEngine::decoder_at(file.path(), AudioFormat::Wav, Duration::from_millis(1))
+                .unwrap();
+        let first_seek_sample = first_seek.next().unwrap();
+        let mut second_seek =
+            RodioEngine::decoder_at(file.path(), AudioFormat::Wav, Duration::from_millis(2))
+                .unwrap();
+        let second_seek_sample = second_seek.next().unwrap();
+        assert_ne!(first_seek_sample, first_sample);
+        assert_ne!(second_seek_sample, first_seek_sample);
+    }
+
+    #[test]
+    fn bounded_discard_uses_only_the_intra_segment_offset() {
+        let samples = (0..10_000).map(|value| value as f32).collect::<Vec<_>>();
+        let mut source = SamplesBuffer::new(1, 1_000, samples);
+        discard_decoder_samples(&mut source, Duration::from_millis(7), None).unwrap();
+        assert_eq!(source.next(), Some(7.0));
+    }
+
+    #[test]
+    fn bounded_discard_honors_cancellation_before_long_work() {
+        let mut source = SamplesBuffer::new(1, 1_000, vec![0.0; 100_000]);
+        let cancellation = AtomicBool::new(true);
+        let error =
+            discard_decoder_samples(&mut source, Duration::from_secs(40), Some(&cancellation))
+                .expect_err("cancelled discard must stop before decoding the track prefix");
+        assert_eq!(error, "Playback request cancelled");
+    }
+
+    #[test]
+    fn fragmented_aac_seek_reaches_the_requested_nonzero_region() {
+        let Some(file) = make_fragmented_aac_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping fragmented AAC fixture test");
+            return;
+        };
+        let mut from_start = RodioEngine::decoder(file.path(), AudioFormat::M4a).unwrap();
+        let start_samples = from_start.by_ref().take(4_096).collect::<Vec<_>>();
+        let mut seeked =
+            RodioEngine::decoder_at(file.path(), AudioFormat::M4a, Duration::from_millis(800))
+                .unwrap();
+        let seeked_samples = seeked.by_ref().take(4_096).collect::<Vec<_>>();
+        let start_rms = sample_rms(&start_samples);
+        let seeked_rms = sample_rms(&seeked_samples);
+        assert!(start_rms < 0.05, "start RMS was {start_rms}");
+        assert!(seeked_rms > 0.2, "seeked RMS was {seeked_rms}");
+    }
+
+    #[test]
+    fn hls_suffix_decodes_the_target_segment_without_prefix_media() {
+        let Some((directory, init, segments)) = make_hls_fmp4_fixture() else {
+            eprintln!("HLS fMP4 fixture could not be generated; skipping suffix fixture test");
+            return;
+        };
+        let Some(target) = segments.get(2) else {
+            panic!("ffmpeg HLS fixture did not produce enough media segments");
+        };
+        let suffix = tempfile::Builder::new().suffix(".m4a").tempfile().unwrap();
+        let mut bytes = std::fs::read(init).unwrap();
+        bytes.extend(std::fs::read(target).unwrap());
+        std::fs::write(suffix.path(), bytes).unwrap();
+
+        let mut decoder = RodioEngine::decoder(suffix.path(), AudioFormat::M4a).unwrap();
+        discard_decoder_samples(&mut decoder, Duration::from_millis(100), None).unwrap();
+        let samples = decoder.by_ref().take(4_096).collect::<Vec<_>>();
+        let rms = sample_rms(&samples);
+
+        assert!(
+            rms > 0.2,
+            "target HLS suffix should contain the later tone, RMS was {rms}"
+        );
+        drop(directory);
+    }
+
+    fn make_fragmented_aac_fixture() -> Option<tempfile::NamedTempFile> {
+        let file = tempfile::Builder::new().suffix(".m4a").tempfile().ok()?;
+        let status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=if(lt(t\\,0.6)\\,0\\,0.7*sin(2*PI*880*t)):s=44100:d=1.2",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
+                "-movflags",
+                "frag_keyframe+empty_moov+default_base_moof",
+                "-f",
+                "mp4",
+                "-y",
+            ])
+            .arg(file.path())
+            .status()
+            .ok()?;
+        status.success().then_some(file)
+    }
+
+    fn make_hls_fmp4_fixture() -> Option<(tempfile::TempDir, PathBuf, Vec<PathBuf>)> {
+        let directory = tempfile::tempdir().ok()?;
+        let playlist = directory.path().join("playlist.m3u8");
+        let init = directory.path().join("init.mp4");
+        let status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=if(lt(t\\,2)\\,0\\,0.7*sin(2*PI*880*t)):s=44100:d=4",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+                "-f",
+                "hls",
+                "-hls_time",
+                "1",
+                "-hls_playlist_type",
+                "vod",
+                "-hls_segment_type",
+                "fmp4",
+                "-hls_flags",
+                "independent_segments",
+                "-hls_fmp4_init_filename",
+            ])
+            .arg(&init)
+            .arg("-hls_segment_filename")
+            .arg(directory.path().join("segment%03d.m4s"))
+            .arg(&playlist)
+            .status()
+            .ok()?;
+        if !status.success() || !init.is_file() {
+            return None;
+        }
+        let body = std::fs::read_to_string(playlist).ok()?;
+        let segments = body
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| directory.path().join(line))
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>();
+        (segments.len() >= 3).then_some((directory, init, segments))
+    }
+
+    fn sample_rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+}

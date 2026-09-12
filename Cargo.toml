@@ -1,0 +1,85 @@
+[package]
+name = "ralgrum-gpui"
+version = "0.4.1"
+edition = "2024"
+default-run = "ralgruM"
+
+[[bin]]
+name = "ralgruM"
+path = "src/main.rs"
+
+[features]
+default = []
+live-soundcloud-tests = []
+
+[dependencies]
+# Cargo.lock pins the tested Zed commit; do not add a direct rev because it would split package identity.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed" }
+reqwest_client = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { path = "vendor/gpui-component/crates/ui" }
+gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
+rust-embed = { version = "8.12.0", features = ["debug-embed", "include-exclude"] }
+base64 = "0.22.1"
+image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+rfd = "0.15.4"
+dirs = "6.0.0"
+sys-locale = "0.3.2"
+discord-rich-presence = "1.1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.24.1", features = ["v4"] }
+url = "2.5.8"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "stream", "gzip", "brotli", "deflate", "zstd", "cookies", "rustls-tls-webpki-roots"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+futures = "0.3"
+rodio = { version = "0.21.1", default-features = false, features = ["playback", "flac", "mp3", "mp4", "symphonia-aac", "symphonia-aiff", "vorbis", "wav"] }
+roxmltree = "0.20.0"
+ogg = "0.8.0"
+opus-decoder = "0.1.1"
+blowfish = "0.9.1"
+md-5 = "0.10.6"
+sha2 = "0.10"
+tempfile = "3.23.0"
+
+[dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+
+[build-dependencies]
+embed-resource = "3.0.11"
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+tray-icon = { version = "=0.24.1", default-features = false }
+wry = { version = "0.55.1", default-features = false }
+windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-registry = "0.6.0"
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+wmi = { version = "0.18.4", default-features = false }
+
+# Linux MPRIS support is intentionally cfg'd out: souvlaki would pull its
+# dbus/zbus dependency tree into the build for a platform this port does not
+# target yet. Windows (SMTC) and macOS (MPRemoteCommandCenter) need no extra
+# features beyond the defaults.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+souvlaki = "0.8.3"
+
+[profile.dev]
+opt-level = 1
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[patch."https://github.com/zed-industries/zed"]
+# Keep this small Windows backend patch until GPUI handles stale atlas batches upstream.
+gpui_windows = { path = "vendor/gpui_windows" }

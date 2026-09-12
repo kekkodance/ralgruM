@@ -1,0 +1,52 @@
+Font Awesome Free 7.3.1
+=======================
+
+The Font Awesome SVG assets under assets/icons/fontawesome-free-7.3.1
+are from Font Awesome Free 7.3.1 by Fonticons, Inc. The solid icons are sourced
+from:
+https://raw.githubusercontent.com/FortAwesome/Font-Awesome/7.3.1/svgs/solid/
+The regular icons are sourced from:
+https://raw.githubusercontent.com/FortAwesome/Font-Awesome/7.3.1/svgs/regular/
+The brand icons (Deezer, SoundCloud, GitHub, Telegram, PayPal, Bitcoin) are
+sourced from:
+https://raw.githubusercontent.com/FortAwesome/Font-Awesome/7.3.1/svgs/brands/
+Source repository and tag: https://github.com/FortAwesome/Font-Awesome/tree/7.3.1
+
+The SVG icons are licensed under the Creative Commons Attribution 4.0
+International License (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+Font Awesome Free license: https://fontawesome.com/license/free
+License text: https://raw.githubusercontent.com/FortAwesome/Font-Awesome/7.3.1/LICENSE.txt
+
+Copyright (c) 2026 Fonticons, Inc. The SVG files retain Font Awesome's embedded
+attribution comments. Brand icons are trademarks of their respective owners;
+their use here represents the corresponding company, product, or service and
+does not indicate endorsement.
+
+Chromium cursor resources
+=========================
+
+The cursor files under assets/cursors are base64-encoded copies of official
+Chromium cursor resources:
+
+https://chromium.googlesource.com/chromium/src/+/main/ui/resources/cursors/
+
+They are used for Windows drag and browser autoscroll cursor bridges.
+Chromium source files are distributed under the BSD 3-Clause license:
+
+https://chromium.googlesource.com/chromium/src/+/refs/heads/main/LICENSE
+
+GPUI
+====
+
+The native UI is built with GPUI from Zed Industries:
+
+https://github.com/zed-industries/zed
+
+gpui-component
+==============
+
+Dropdowns, dialogs, and other widgets come from gpui-component, licensed
+under Apache 2.0:
+
+https://github.com/longbridge/gpui-component

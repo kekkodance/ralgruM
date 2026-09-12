@@ -1,0 +1,33 @@
+# Dependencies and Rust build output
+/node_modules/
+/target/
+/lyrics-core/target/
+/target-*/
+
+# Local application and build artifacts
+/dist/
+/build/
+/traces/
+/src/murglar_backend/implementation/
+*.part
+*.log
+/logs/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Captured network sessions
+*.har
+
+# Local editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.user
+*.userosscache
+*.sln.docstates
