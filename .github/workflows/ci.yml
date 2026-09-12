@@ -36,6 +36,8 @@ jobs:
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
         run: cargo fmt --package ralgrum-gpui -- --check
@@ -43,9 +45,7 @@ jobs:
       - name: Check Cargo metadata
         run: cargo metadata --locked --no-deps
 
-      - name: Compile all targets
-        run: cargo check --locked --all-targets
-
+      # cargo test compiles all targets, so a separate cargo check would duplicate work.
       - name: Run tests
         run: cargo test --locked --all-targets
 
