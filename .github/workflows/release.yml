@@ -1,0 +1,113 @@
+name: Release application
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semantic version, for example 0.5.0 or 0.5.0-rc.1'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  require-private-access:
+    name: Check private repository access
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the private repository token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$PRIVATE_TOKEN" ]; then
+            echo "::error::Set MURGLAR_PRIVATE_REPO_TOKEN with read access to kekkodance/ralgrum-murglar-private."
+            exit 1
+          fi
+
+  release:
+    name: Build and publish release
+    needs: require-private-access
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Check out the parent and private submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          persist-credentials: true
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Validate version and tag
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_VERSION.Trim()
+          if ($version.StartsWith('v')) {
+            $version = $version.Substring(1)
+          }
+          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') {
+            throw "Invalid semantic version '$version'."
+          }
+          $tag = "v$version"
+          git ls-remote --exit-code origin "refs/tags/$tag" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Tag '$tag' already exists."
+          }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Update Cargo package version
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version $env:RELEASE_VERSION -NoBuild
+
+      - name: Run full release tests
+        run: cargo test --locked --all-targets
+
+      - name: Build the full release
+        run: cargo build --locked --release
+
+      - name: Commit the version bump
+        shell: pwsh
+        run: |
+          git add Cargo.toml Cargo.lock
+          git commit -m "Release $env:RELEASE_TAG"
+
+      - name: Package the release
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          $shortSha = $sha.Substring(0, 12)
+          $exe = Join-Path $env:GITHUB_WORKSPACE "artifacts\ralgruM-$env:RELEASE_VERSION.exe"
+          New-Item -ItemType Directory -Path (Split-Path $exe) -Force | Out-Null
+          Copy-Item target\release\ralgruM.exe $exe
+          "RELEASE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Push version commit and release tag
+        shell: pwsh
+        run: |
+          git push origin HEAD:main
+          git tag -a $env:RELEASE_TAG -m "Release $env:RELEASE_TAG"
+          git push origin $env:RELEASE_TAG
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create $env:RELEASE_TAG $env:RELEASE_EXE --title "ralgruM $env:RELEASE_VERSION" --generate-notes
