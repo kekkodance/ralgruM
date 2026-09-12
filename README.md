@@ -3,10 +3,10 @@
     <img src="assets/app-icon.png" width="48" height="48" valign="middle" alt="ralgruM logo" />
     ralgruM Desktop
   </h1>
-  <p>A desktop music player for the Murglar music service.</p>
+  <p>A desktop music player for the [Murglar](https://murglar.app) music service.</p>
 </div>
 
-ralgruM is a third-party client for Murglar. It is not made by, affiliated with, or endorsed by Murglar, Deezer, or SoundCloud. If you have a Murglar account, ralgruM gives you a fast desktop app to search, browse, play, and download your music in one place.
+ralgruM is a third-party client for [Murglar](https://murglar.app). It is not made by, affiliated with, or endorsed by Murglar, Deezer, or SoundCloud. If you have a Murglar account, ralgruM gives you a fast, native desktop app to search, browse, play, and download all your music in one place.
 
 ## Who is it for?
 
