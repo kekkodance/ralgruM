@@ -1,0 +1,86 @@
+name: Full application build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  require-private-access:
+    name: Check private repository access
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the private repository token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$PRIVATE_TOKEN" ]; then
+            echo "::error::Set MURGLAR_PRIVATE_REPO_TOKEN with read access to kekkodance/ralgrum-murglar-private."
+            exit 1
+          fi
+
+  build:
+    name: Build full Windows application
+    needs: require-private-access
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      BUILD_SHA: ${{ github.sha }}
+      BUILD_REF: ${{ github.ref_name }}
+    steps:
+      - name: Check out the parent and private submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build the full application
+        run: cargo build --locked --release
+
+      - name: Package the full application
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $package = $metadata.packages | Where-Object { $_.name -eq 'ralgrum-gpui' }
+          $shortSha = $env:BUILD_SHA.Substring(0, 12)
+          $stage = Join-Path $env:GITHUB_WORKSPACE "artifacts\ralgruM-$shortSha"
+          $zip = Join-Path $env:GITHUB_WORKSPACE "artifacts\ralgruM-$shortSha.zip"
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          New-Item -ItemType Directory -Path (Split-Path $zip) -Force | Out-Null
+          Copy-Item target\release\ralgruM.exe (Join-Path $stage 'ralgruM.exe')
+          Copy-Item LICENSE (Join-Path $stage 'LICENSE')
+          Copy-Item THIRD_PARTY_NOTICES (Join-Path $stage 'THIRD_PARTY_NOTICES')
+          Copy-Item vendor\gpui_windows\LICENSE-APACHE (Join-Path $stage 'LICENSE-APACHE-ZED')
+          Copy-Item vendor\gpui-component\LICENSE-APACHE (Join-Path $stage 'LICENSE-APACHE-GPUI-COMPONENT')
+          Copy-Item vendor\gpui-component\crates\ui\LICENSE-APACHE (Join-Path $stage 'LICENSE-APACHE-GPUI-COMPONENT-UI')
+          Copy-Item vendor\gpui-component\crates\macros\LICENSE-APACHE (Join-Path $stage 'LICENSE-APACHE-GPUI-COMPONENT-MACROS')
+          $privateSha = git -C src/murglar_backend/implementation rev-parse HEAD
+          @"
+          package_version=$($package.version)
+          parent_commit=$env:BUILD_SHA
+          ref=$env:BUILD_REF
+          private_backend_commit=$privateSha
+          "@ | Set-Content (Join-Path $stage 'build-info.txt')
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
+          Write-Host "Created $zip"
+
+      - name: Upload full application artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ralgruM-${{ github.sha }}
+          path: artifacts/*.zip
+          if-no-files-found: error

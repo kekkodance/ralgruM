@@ -1,0 +1,44 @@
+name: Dependency audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the public repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        id: audit
+        continue-on-error: true
+        shell: bash
+        run: cargo audit --locked --json > cargo-audit.json
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-${{ github.run_id }}
+          path: cargo-audit.json
+          if-no-files-found: error
+
+      - name: Explain non-blocking audit result
+        if: steps.audit.outcome == 'failure'
+        run: echo "cargo audit reported advisories; see the uploaded JSON report."
