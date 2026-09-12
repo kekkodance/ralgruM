@@ -83,6 +83,7 @@ impl<T: SourceCacheValue> ResolvedSourceCache<T> {
         value
     }
 
+    #[cfg(test)]
     pub(crate) fn insert(&self, key: impl Into<String>, value: T) {
         self.insert_at(key.into(), value, Instant::now());
     }
@@ -132,6 +133,7 @@ impl<T: SourceCacheValue> ResolvedSourceCache<T> {
         true
     }
 
+    #[cfg(test)]
     fn insert_at(&self, key: String, value: T, now: Instant) {
         if key.is_empty() || !value.is_cacheable() {
             return;
@@ -158,6 +160,7 @@ impl<T: SourceCacheValue> ResolvedSourceCache<T> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn invalidate(&self, key: &str) {
         if key.is_empty() {
             return;

@@ -176,9 +176,7 @@ pub(super) fn dialog_max_height(viewport_height: f32) -> f32 {
 }
 
 pub(super) fn list_max_height(viewport_height: f32) -> f32 {
-    (viewport_height * PICKER_LIST_VIEWPORT_FRACTION)
-        .min(PICKER_LIST_MAX_HEIGHT)
-        .max(0.)
+    (viewport_height * PICKER_LIST_VIEWPORT_FRACTION).clamp(0., PICKER_LIST_MAX_HEIGHT)
 }
 
 pub(super) fn picker_dialog_width(viewport_width: f32) -> f32 {
@@ -224,6 +222,7 @@ pub(super) fn playlist_track_meta(track_count: Option<u64>) -> Option<String> {
     track_count.map(track_count_label)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn filter_playlists(
     playlists: &[super::playlist_client::OwnedPlaylist],
     query: &str,
@@ -251,6 +250,7 @@ fn filter_picker_playlists(playlists: &[PickerPlaylist], query: &str) -> Vec<Pic
         .collect()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn selection_index_for_id(
     filtered: &[super::playlist_client::OwnedPlaylist],
     selected: Option<&str>,

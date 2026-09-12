@@ -1,5 +1,5 @@
 use std::{
-    sync::mpsc::{self, Receiver, Sender, TryRecvError},
+    sync::mpsc::{self, Receiver, Sender},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -237,11 +237,8 @@ impl DiscordPresence {
     }
 
     fn sync(&mut self, enabled: bool, state: &PlaybackState) {
-        loop {
-            match self.events.try_recv() {
-                Ok(WorkerEvent::Acknowledged(sequence)) => self.protocol.acknowledge(sequence),
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-            }
+        while let Ok(WorkerEvent::Acknowledged(sequence)) = self.events.try_recv() {
+            self.protocol.acknowledge(sequence);
         }
         let track = presence_track(state);
         let action = self.protocol.transition(enabled, track.as_ref());

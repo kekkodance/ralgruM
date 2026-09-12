@@ -278,7 +278,8 @@ mod windows_impl {
             return None;
         }
         // Prefer the color image when a CUR file also carries a monochrome fallback.
-        let mut best: Option<(u16, u16, &[u8], (u16, usize))> = None;
+        type CursorCandidate<'a> = (u16, u16, &'a [u8], (u16, usize));
+        let mut best: Option<CursorCandidate<'_>> = None;
         for index in 0..entry_count {
             let entry = 6usize.checked_add(index.checked_mul(16)?)?;
             let hotspot_x = le_u16(bytes, entry + 4)?;
@@ -312,29 +313,6 @@ mod windows_impl {
         ))
     }
 
-    #[cfg(test)]
-    mod cursor_tests {
-        use base64::Engine as _;
-
-        use super::{CLOSED_HAND, STANDARD, cursor_resource, le_u16};
-
-        #[test]
-        fn embedded_closed_cursor_has_a_valid_cursor_resource() {
-            let bytes = STANDARD.decode(CLOSED_HAND.trim()).unwrap();
-            let resource = cursor_resource(&bytes).unwrap();
-
-            assert_eq!(le_u16(&bytes, 0), Some(0));
-            assert_eq!(le_u16(&bytes, 2), Some(2));
-            assert_eq!(le_u16(&bytes, 4), Some(2));
-            assert_eq!(bytes.get(6), Some(&32));
-            assert_eq!(bytes.get(7), Some(&32));
-            assert_eq!(le_u16(&bytes, 10), Some(13));
-            assert_eq!(le_u16(&bytes, 12), Some(13));
-            assert_eq!(le_u16(&resource, 18), Some(24));
-            assert!(resource.len() > 4);
-        }
-    }
-
     unsafe extern "system" fn window_proc(
         hwnd: HWND,
         message: u32,
@@ -351,7 +329,12 @@ mod windows_impl {
             };
             (hook.original_proc, hook.cursor)
         };
-        let original_proc: WNDPROC = Some(unsafe { std::mem::transmute(original_proc) });
+        let original_proc: WNDPROC = Some(unsafe {
+            std::mem::transmute::<
+                isize,
+                unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+            >(original_proc)
+        });
         let result = unsafe { CallWindowProcW(original_proc, hwnd, message, wparam, lparam) };
 
         if matches!(message, WM_SETCURSOR | GPUI_CURSOR_STYLE_CHANGED)
@@ -373,6 +356,29 @@ mod windows_impl {
         }
 
         result
+    }
+
+    #[cfg(test)]
+    mod cursor_tests {
+        use base64::Engine as _;
+
+        use super::{CLOSED_HAND, STANDARD, cursor_resource, le_u16};
+
+        #[test]
+        fn embedded_closed_cursor_has_a_valid_cursor_resource() {
+            let bytes = STANDARD.decode(CLOSED_HAND.trim()).unwrap();
+            let resource = cursor_resource(&bytes).unwrap();
+
+            assert_eq!(le_u16(&bytes, 0), Some(0));
+            assert_eq!(le_u16(&bytes, 2), Some(2));
+            assert_eq!(le_u16(&bytes, 4), Some(2));
+            assert_eq!(bytes.get(6), Some(&32));
+            assert_eq!(bytes.get(7), Some(&32));
+            assert_eq!(le_u16(&bytes, 10), Some(13));
+            assert_eq!(le_u16(&bytes, 12), Some(13));
+            assert_eq!(le_u16(&resource, 18), Some(24));
+            assert!(resource.len() > 4);
+        }
     }
 }
 

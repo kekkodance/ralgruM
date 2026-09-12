@@ -597,7 +597,7 @@ mod tests {
         block_on(writer.flush()).unwrap();
         writer.mark_startup_ready();
         ready_rx.recv().unwrap();
-        assert!(!writer.shared.state.lock().unwrap().terminal.is_some());
+        assert!(writer.shared.state.lock().unwrap().terminal.is_none());
         block_on(writer.finish()).unwrap();
         waiter.join().unwrap();
     }

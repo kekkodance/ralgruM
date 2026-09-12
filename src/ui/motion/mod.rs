@@ -202,7 +202,7 @@ mod tests {
 
         assert_eq!(visual.from, 1.0);
         assert_eq!(visual.target, 1.0);
-        assert_eq!(visual.target_compact, true);
+        assert!(visual.target_compact);
         assert_eq!(visual.epoch, 0);
     }
 
@@ -216,7 +216,7 @@ mod tests {
 
         assert_eq!(changed.from, 0.0);
         assert_eq!(changed.target, 1.0);
-        assert_eq!(changed.target_compact, true);
+        assert!(changed.target_compact);
         assert_eq!(changed.epoch, 1);
         assert_eq!(repeated, changed);
     }
@@ -233,7 +233,7 @@ mod tests {
 
         assert!((reversed.from - displayed).abs() < f32::EPSILON);
         assert_eq!(reversed.target, 0.0);
-        assert_eq!(reversed.target_compact, false);
+        assert!(!reversed.target_compact);
         assert_eq!(reversed.epoch, 2);
     }
 

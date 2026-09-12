@@ -791,7 +791,7 @@ impl StreamResolver {
                     Err(error) if error == "Playback request cancelled" => return Err(error),
                     Err(_) => continue,
                 };
-                (SourceData::Hls(descriptor), 0)
+                (SourceData::Hls(Box::new(descriptor)), 0)
             } else {
                 validate_soundcloud_stream_url(&stream_url)?;
                 let stream_url = stream_url.to_string();

@@ -534,7 +534,7 @@ impl StreamResolver {
         let timeline_seek_session: Option<Arc<dyn TimelineSeekSession>> = match &source.data {
             SourceData::Hls(descriptor) => Some(Arc::new(soundcloud_hls::HlsSeekSession::new(
                 self.client.clone(),
-                descriptor.clone(),
+                (**descriptor).clone(),
                 tokio::runtime::Handle::current(),
                 cancellation.clone(),
                 MAX_AUDIO_SIZE,

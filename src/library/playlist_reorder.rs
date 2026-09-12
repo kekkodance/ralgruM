@@ -78,8 +78,8 @@ fn all_unique_numeric_ids<T>(items: &[T], id_fn: impl Fn(&T) -> &str) -> bool {
     if items.len() <= 32 {
         for i in 0..items.len() {
             let id_i = id_fn(&items[i]);
-            for j in (i + 1)..items.len() {
-                if id_i == id_fn(&items[j]) {
+            for item in items.iter().skip(i + 1) {
+                if id_i == id_fn(item) {
                     return false;
                 }
             }

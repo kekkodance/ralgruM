@@ -366,6 +366,7 @@ pub(super) fn picker_add_failed(provider: Provider) -> &'static str {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn picker_title(provider: Provider) -> &'static str {
     match provider {
         Provider::Deezer => "Add to Deezer playlist",

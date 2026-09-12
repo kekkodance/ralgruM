@@ -23,6 +23,7 @@ pub fn extract_musixmatch_lyrics(value: &Value) -> Vec<LyricsResponse> {
     result
 }
 
+#[cfg(test)]
 pub fn extract_genius_hits(value: &Value) -> Vec<Value> {
     value
         .pointer("/response/sections/0/hits")

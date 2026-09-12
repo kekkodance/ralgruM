@@ -114,7 +114,7 @@ struct CachedDownloadFallback {
 }
 
 enum DownloadSource {
-    Resolved(ResolvedSource),
+    Resolved(Box<ResolvedSource>),
     Cached {
         cached: CachedDownload,
         fallback: Box<CachedDownloadFallback>,
@@ -544,7 +544,7 @@ impl DownloadModel {
                     cancellation,
                 )
                 .await
-                .map(DownloadSource::Resolved)
+                .map(|source| DownloadSource::Resolved(Box::new(source)))
         });
         let entity = cx.entity().clone();
         cx.spawn(async move |_, cx| {
@@ -997,7 +997,7 @@ impl DownloadModel {
                     DownloadSource::Resolved(source) => {
                         let resolver = resolver.map_err(DownloadTransferError::Failed)?;
                         resolver
-                            .download_source(source, output, &cancellation, Some(progress))
+                            .download_source(*source, output, &cancellation, Some(progress))
                             .await
                     }
                     DownloadSource::Cached { cached, fallback } => {

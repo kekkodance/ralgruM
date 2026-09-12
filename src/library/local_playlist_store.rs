@@ -168,6 +168,7 @@ impl LocalPlaylistStore {
         self.playlists.iter().find(|playlist| playlist.id == id)
     }
 
+    #[cfg(test)]
     pub(crate) fn create(
         &mut self,
         title: impl Into<String>,
@@ -215,6 +216,7 @@ impl LocalPlaylistStore {
         Ok(playlist)
     }
 
+    #[cfg(test)]
     pub(crate) fn create_with_tracks(
         &mut self,
         title: impl Into<String>,
@@ -273,6 +275,7 @@ impl LocalPlaylistStore {
         Ok(playlist)
     }
 
+    #[cfg(test)]
     pub(crate) fn update(
         &mut self,
         playlist_id: &str,
@@ -381,25 +384,6 @@ impl LocalPlaylistStore {
         }
         playlist.tracks.extend(additions);
         self.persist(playlists)
-    }
-
-    pub(crate) fn remove_track_at(
-        &mut self,
-        playlist_id: &str,
-        index: usize,
-    ) -> Result<Option<LocalTrack>, LocalPlaylistError> {
-        let playlist_id = normalize_id(playlist_id.to_owned())?;
-        let mut playlists = self.playlists.clone();
-        let playlist = playlists
-            .iter_mut()
-            .find(|playlist| playlist.id == playlist_id)
-            .ok_or(LocalPlaylistError::NotFound)?;
-        if index >= playlist.tracks.len() {
-            return Ok(None);
-        }
-        let track = playlist.tracks.remove(index);
-        self.persist(playlists)?;
-        Ok(Some(track))
     }
 
     pub(crate) fn remove_track(

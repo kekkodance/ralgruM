@@ -117,7 +117,7 @@ pub(crate) enum StandbyPhase {
     #[default]
     Idle,
     Pending,
-    Armed(ArmedStandby),
+    Armed(Box<ArmedStandby>),
 }
 
 /// A standby is only prepared while playing without repeat one, when a next

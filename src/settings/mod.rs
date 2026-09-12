@@ -103,10 +103,9 @@ impl CacheMeterMotion {
                 self.from = target;
                 self.started_at = None;
             }
-        } else if reduced_motion {
-            self.from = self.target;
-            self.started_at = None;
-        } else if self.started_at.is_some() && self.animation_progress(now) >= 1. {
+        } else if reduced_motion
+            || (self.started_at.is_some() && self.animation_progress(now) >= 1.)
+        {
             self.from = self.target;
             self.started_at = None;
         }
@@ -433,7 +432,7 @@ impl SettingsView {
                 if let SelectEvent::Confirm(Some(value)) = event
                     && let Some(limit) = LIMITS_MB
                         .iter()
-                        .find(|limit| SharedString::from(cache_limit_label(**limit)) == *value)
+                        .find(|limit| cache_limit_label(**limit).as_str() == value.as_ref())
                 {
                     this.update_draft_and_persist(|draft| draft.audio_cache_limit_mb = *limit, cx);
                 }
@@ -740,6 +739,131 @@ fn cache_overview_refresh_needed(
     refresh_after_loading || cache_revision_changed(last_revision, current_revision)
 }
 
+impl Render for SettingsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let viewport = window.viewport_size();
+        let viewport_width = f32::from(viewport.width);
+        let header_padding = layout::content_padding(viewport_width);
+        let category = self.category;
+        let panel = div()
+            .w_full()
+            .relative()
+            .child(match category {
+                Category::General => self.render_general(cx).into_any_element(),
+                Category::Murglar => self.render_murglar(cx).into_any_element(),
+                Category::Providers => self.render_providers(cx).into_any_element(),
+                Category::About => self.render_about(cx).into_any_element(),
+            })
+            .with_animation(
+                format!("settings-category-body-{}", category.label()),
+                crate::motion::quick_content(),
+                move |this, delta| {
+                    this.opacity(crate::motion::lerp(0.0, 1.0, delta))
+                        .top(px(crate::motion::lerp(6.0, 0.0, delta)))
+                },
+            )
+            .into_any_element();
+        let scroll_content = div()
+            .id("settings-panel-scroll-content")
+            .size_full()
+            .min_h_0()
+            .track_scroll(&self.scroll)
+            .overflow_y_scroll()
+            .px(px(header_padding))
+            .pt(px(24.))
+            // Breathing room above the player bar. Padding lives inside the
+            // scrollable viewport so it only shows at the tail and the
+            // scrollbar track still matches the viewport height.
+            .pb(px(SETTINGS_CONTENT_BOTTOM_PADDING_PX))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(layout::SETTINGS_CONTENT_MAX_WIDTH))
+                    .mx_auto()
+                    .when_some(self.save_error.clone(), |this, error| {
+                        this.child(
+                            div()
+                                .mb(px(12.))
+                                .text_size(px(12.))
+                                .text_color(rgb(0xf87171))
+                                .child(error),
+                        )
+                    })
+                    .child(panel),
+            );
+        let scroll_viewport = div()
+            .id("settings-panel-scroll-viewport")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(scroll_content)
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(Scrollbar::vertical(&self.scroll).scrollbar_show(ScrollbarShow::Hover)),
+            )
+            .into_any_element();
+        let scroll_panel = browser_scroll_surface(
+            "settings-panel-scroll",
+            scroll_viewport,
+            BrowserScrollTarget::Handle(self.scroll.clone()),
+            self.browser_scroll.clone(),
+        );
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .bg(rgb(BACKGROUND))
+            .text_color(rgb(FOREGROUND))
+            .text_size(px(13.))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .px(px(header_padding))
+                    .py(px(17.))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .text_size(px(16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(local_icon(LocalIcon::Settings, FOREGROUND).size_4())
+                            .child("Settings"),
+                    )
+                    .child(div().text_color(rgb(MUTED)).child("/"))
+                    .child(
+                        div()
+                            .relative()
+                            .top(px(SETTINGS_CATEGORY_BREADCRUMB_OFFSET_PX))
+                            .flex()
+                            .items_center()
+                            .gap(px(9.))
+                            .child(
+                                local_icon(self.category.icon(), self.category.active_icon_color())
+                                    .size(px(14.)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(MUTED))
+                                    .child(self.category.label()),
+                            ),
+                    ),
+            )
+            .child(scroll_panel)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -951,130 +1075,5 @@ mod tests {
         assert!(!settled.active);
         assert!(!stable.active);
         assert_eq!(stable.epoch, first.epoch);
-    }
-}
-
-impl Render for SettingsView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let viewport = window.viewport_size();
-        let viewport_width = f32::from(viewport.width);
-        let header_padding = layout::content_padding(viewport_width);
-        let category = self.category;
-        let panel = div()
-            .w_full()
-            .relative()
-            .child(match category {
-                Category::General => self.render_general(cx).into_any_element(),
-                Category::Murglar => self.render_murglar(cx).into_any_element(),
-                Category::Providers => self.render_providers(cx).into_any_element(),
-                Category::About => self.render_about(cx).into_any_element(),
-            })
-            .with_animation(
-                format!("settings-category-body-{}", category.label()),
-                crate::motion::quick_content(),
-                move |this, delta| {
-                    this.opacity(crate::motion::lerp(0.0, 1.0, delta))
-                        .top(px(crate::motion::lerp(6.0, 0.0, delta)))
-                },
-            )
-            .into_any_element();
-        let scroll_content = div()
-            .id("settings-panel-scroll-content")
-            .size_full()
-            .min_h_0()
-            .track_scroll(&self.scroll)
-            .overflow_y_scroll()
-            .px(px(header_padding))
-            .pt(px(24.))
-            // Breathing room above the player bar. Padding lives inside the
-            // scrollable viewport so it only shows at the tail and the
-            // scrollbar track still matches the viewport height.
-            .pb(px(SETTINGS_CONTENT_BOTTOM_PADDING_PX))
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(layout::SETTINGS_CONTENT_MAX_WIDTH))
-                    .mx_auto()
-                    .when_some(self.save_error.clone(), |this, error| {
-                        this.child(
-                            div()
-                                .mb(px(12.))
-                                .text_size(px(12.))
-                                .text_color(rgb(0xf87171))
-                                .child(error),
-                        )
-                    })
-                    .child(panel),
-            );
-        let scroll_viewport = div()
-            .id("settings-panel-scroll-viewport")
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .child(scroll_content)
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(Scrollbar::vertical(&self.scroll).scrollbar_show(ScrollbarShow::Hover)),
-            )
-            .into_any_element();
-        let scroll_panel = browser_scroll_surface(
-            "settings-panel-scroll",
-            scroll_viewport,
-            BrowserScrollTarget::Handle(self.scroll.clone()),
-            self.browser_scroll.clone(),
-        );
-
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .bg(rgb(BACKGROUND))
-            .text_color(rgb(FOREGROUND))
-            .text_size(px(13.))
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(9.))
-                    .px(px(header_padding))
-                    .py(px(17.))
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(local_icon(LocalIcon::Settings, FOREGROUND).size_4())
-                            .child("Settings"),
-                    )
-                    .child(div().text_color(rgb(MUTED)).child("/"))
-                    .child(
-                        div()
-                            .relative()
-                            .top(px(SETTINGS_CATEGORY_BREADCRUMB_OFFSET_PX))
-                            .flex()
-                            .items_center()
-                            .gap(px(9.))
-                            .child(
-                                local_icon(self.category.icon(), self.category.active_icon_color())
-                                    .size(px(14.)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(14.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(MUTED))
-                                    .child(self.category.label()),
-                            ),
-                    ),
-            )
-            .child(scroll_panel)
     }
 }

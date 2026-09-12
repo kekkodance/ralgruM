@@ -1206,7 +1206,7 @@ impl PlaybackModel {
         };
         let probe = engine.sink_probe();
         engine.append_standby(prepared);
-        self.standby = StandbyPhase::Armed(ArmedStandby {
+        self.standby = StandbyPhase::Armed(Box::new(ArmedStandby {
             track,
             generation,
             queue_epoch,
@@ -1214,7 +1214,7 @@ impl PlaybackModel {
             quality,
             audio_info: Some(info),
             probe: probe.clone(),
-        });
+        }));
         self.watch_standby_boundary(probe, cx);
     }
 
@@ -1283,7 +1283,7 @@ impl PlaybackModel {
                     cx.notify();
                 }
             }
-            standby::BoundaryOutcome::Commit => self.commit_standby(armed, cx),
+            standby::BoundaryOutcome::Commit => self.commit_standby(*armed, cx),
         }
     }
 
@@ -1622,7 +1622,7 @@ impl PlaybackModel {
             if let Ok(engine) = self.engine.as_mut() {
                 engine.skip_to_standby();
             }
-            self.commit_standby(armed, cx);
+            self.commit_standby(*armed, cx);
             return;
         }
         self.finish_deezer_listen(cx);

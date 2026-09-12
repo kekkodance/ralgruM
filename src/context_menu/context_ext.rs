@@ -9,6 +9,8 @@ use gpui::{
 
 use super::{ContextMenuLease, PopupMenu, PopupMenuArrowEdge};
 
+type ContextMenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
+
 /// Gap between the trigger top edge and the menu bottom edge when the
 /// menu is placed above its trigger, leaving room for the chevron.
 pub(crate) const CONTEXT_MENU_ABOVE_GAP_PX: f32 = 8.;
@@ -58,7 +60,7 @@ impl<E: InteractiveElement + ParentElement + Styled> ContextMenuExt for E {}
 pub(crate) struct ContextMenu<E: ParentElement + Styled + Sized> {
     id: ElementId,
     element: Option<E>,
-    menu: Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>>,
+    menu: Option<ContextMenuBuilder>,
     ignore_style: StyleRefinement,
     anchor: Anchor,
     placement: ContextMenuPlacement,

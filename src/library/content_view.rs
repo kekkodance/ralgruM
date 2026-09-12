@@ -1692,6 +1692,7 @@ pub(super) fn playback_context(view: &LibraryView) -> crate::playback::PlaybackC
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn playback_context_for_route(
     route: &Route,
     flow_mode: super::deezer_radio::FlowMode,

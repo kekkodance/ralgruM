@@ -1298,8 +1298,10 @@ mod tests {
     fn fixed_shuffle_seeds_produce_distinct_complete_orders_with_current_pinned() {
         let queue = fixed_shuffle_queue();
 
-        let mut first = PlaybackState::default();
-        first.shuffle_seed = 0x0123_4567_89AB_CDEF;
+        let mut first = PlaybackState {
+            shuffle_seed: 0x0123_4567_89AB_CDEF,
+            ..PlaybackState::default()
+        };
         let _ = first.replace(queue.clone(), 3);
         first.set_shuffle_enabled(true);
         let first_order = first.upcoming_indices();
@@ -1310,8 +1312,10 @@ mod tests {
             (0..8).filter(|index| *index != 3).collect::<HashSet<_>>()
         );
 
-        let mut second = PlaybackState::default();
-        second.shuffle_seed = 0xFEDC_BA98_7654_3211;
+        let mut second = PlaybackState {
+            shuffle_seed: 0xFEDC_BA98_7654_3211,
+            ..PlaybackState::default()
+        };
         let _ = second.replace(queue, 3);
         second.set_shuffle_enabled(true);
         let second_order = second.upcoming_indices();

@@ -71,10 +71,12 @@ impl AlbumInfoPrefetch {
         Some((page.route.clone(), info))
     }
 
+    #[cfg(test)]
     pub(crate) fn contains(&self, key: &AlbumInfoCacheKey) -> bool {
         self.pages.contains_key(key)
     }
 
+    #[cfg(test)]
     pub(crate) fn is_in_flight(&self, key: &AlbumInfoCacheKey) -> bool {
         self.in_flight.contains(key)
     }

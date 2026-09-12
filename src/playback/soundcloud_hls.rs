@@ -1179,13 +1179,6 @@ fn parse_manifest(base_url: &Url, body: &str) -> Result<HlsDescriptor, String> {
                 || line.starts_with("#EXT-X-MEDIA-SEQUENCE:")
             {
                 // These tags do not alter the ordered VOD fragment layout.
-            } else if line.starts_with("#EXT-X-KEY:")
-                || line.starts_with("#EXT-X-SESSION-KEY:")
-                || line.starts_with("#EXT-X-STREAM-INF:")
-                || line.starts_with("#EXT-X-I-FRAMES-ONLY")
-                || line.starts_with("#EXT-X-BYTERANGE:")
-            {
-                return Err("SoundCloud returned an unsupported HLS manifest".into());
             } else {
                 return Err("SoundCloud returned an unsupported HLS manifest".into());
             }

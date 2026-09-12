@@ -16,7 +16,7 @@ use super::{
 use crate::search::Provider;
 
 pub(crate) enum LocalLibraryMutation {
-    SetSaved { track: LocalTrack, saved: bool },
+    SetSaved { track: Box<LocalTrack>, saved: bool },
     Reorder { from: usize, to: usize },
 }
 
@@ -219,7 +219,7 @@ fn apply_library(
         LocalLibraryMutation::SetSaved { track, saved } => {
             if saved {
                 store
-                    .upsert_track(track)
+                    .upsert_track(*track)
                     .map(|()| LocalLibraryMutationOutcome::Saved)
             } else {
                 store

@@ -146,6 +146,7 @@ impl DeezerTracksCache {
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn store(
         &self,
         key: &DeezerTracksCacheKey,

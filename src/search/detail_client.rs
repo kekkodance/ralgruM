@@ -605,10 +605,7 @@ pub(crate) fn rich_text_to_plain(html: &str) -> String {
     let drop_tags = ["script", "style", "iframe", "object", "embed"];
     let mut working = trimmed.to_owned();
     for tag in drop_tags {
-        loop {
-            let Some(open_start) = working.to_ascii_lowercase().find(&format!("<{tag}")) else {
-                break;
-            };
+        while let Some(open_start) = working.to_ascii_lowercase().find(&format!("<{tag}")) {
             let Some(open_end_rel) = working[open_start..].find('>') else {
                 break;
             };
@@ -642,9 +639,8 @@ pub(crate) fn rich_text_to_plain(html: &str) -> String {
             .next()
             .unwrap_or_default()
             .to_ascii_lowercase();
-        if tag_name == "br" {
-            output.push('\n');
-        } else if block_tags.contains(&tag_name.as_str()) && !output.ends_with('\n') {
+        if tag_name == "br" || (block_tags.contains(&tag_name.as_str()) && !output.ends_with('\n'))
+        {
             output.push('\n');
         }
         rest = &after_angle[close + 1..];

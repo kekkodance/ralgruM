@@ -7,8 +7,12 @@ const MAX_PLAINTEXT_LEN: usize = 64 * 1024;
 const MAX_PROTECTED_LEN: usize = 256 * 1024;
 const APP_ENTROPY: &[u8] = b"ralgruM account session v1";
 
+#[cfg(all(windows, test))]
+type BeforeFree = Box<dyn FnOnce(&[u8])>;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProtectionError {
+    #[cfg(all(not(windows), not(test)))]
     Unavailable,
     InvalidEnvelope,
     TooLarge,
@@ -18,6 +22,7 @@ pub(crate) enum ProtectionError {
 impl fmt::Display for ProtectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            #[cfg(all(not(windows), not(test)))]
             Self::Unavailable => "account session protection is unavailable",
             Self::InvalidEnvelope => "account session protection envelope is invalid",
             Self::TooLarge => "account session protection payload is too large",
@@ -175,7 +180,7 @@ struct DpapiBufferGuard {
     pointer: *mut u8,
     length: usize,
     #[cfg(test)]
-    before_free: Option<Box<dyn FnOnce(&[u8])>>,
+    before_free: Option<BeforeFree>,
 }
 
 #[cfg(windows)]

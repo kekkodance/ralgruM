@@ -419,7 +419,7 @@ fn direct_seek_preview_cancels_old_motion_before_release() {
     motion.prepare(1, 0.2, 0.8, started_at, false);
     motion.set_displayed(preview);
 
-    assert!(!motion.started_at.is_some());
+    assert!(motion.started_at.is_none());
     assert_eq!(motion.displayed_at(release_at), preview);
 
     let release = motion.prepare(2, preview, 0.9, release_at, false);

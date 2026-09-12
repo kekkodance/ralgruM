@@ -391,9 +391,7 @@ mod tests {
     fn matching_track_indices_preserve_source_positions_and_duplicates() {
         let tracks = (0..48)
             .map(|index| Track {
-                title: if index == 43 {
-                    "Keep this track".into()
-                } else if index == 44 {
+                title: if index == 43 || index == 44 {
                     "Keep this track".into()
                 } else {
                     format!("Track {index}")

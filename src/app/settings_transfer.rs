@@ -563,9 +563,11 @@ mod tests {
     fn valid_round_trip_has_exact_envelope_and_no_account_keys() {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("settings.json");
-        let mut settings = AppSettings::default();
-        settings.audio_cache_limit_mb = 4096;
-        settings.search_history = vec!["Tracks".into(), "Albums".into()];
+        let settings = AppSettings {
+            audio_cache_limit_mb: 4096,
+            search_history: vec!["Tracks".into(), "Albums".into()],
+            ..AppSettings::default()
+        };
         export_settings(&path, &settings).unwrap();
 
         let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -849,8 +851,10 @@ mod tests {
         export_settings(&path, &AppSettings::default()).unwrap();
         let first = fs::read(&path).unwrap();
 
-        let mut changed = AppSettings::default();
-        changed.volume = 0.25;
+        let changed = AppSettings {
+            volume: 0.25,
+            ..AppSettings::default()
+        };
         export_settings(&path, &changed).unwrap();
         assert_ne!(first, fs::read(&path).unwrap());
         assert_eq!(import_settings(&path).unwrap(), changed);

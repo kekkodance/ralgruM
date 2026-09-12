@@ -246,6 +246,7 @@ pub(crate) fn cover_with_preview_from_path(path: &Path) -> Result<(CoverDraft, V
     CoverDraft::from_path(path).map(cover_with_preview)
 }
 
+#[cfg(test)]
 pub(crate) fn is_supported_cover_path(path: &Path) -> bool {
     is_supported_cover_path_for(path, Provider::Deezer)
 }

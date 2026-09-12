@@ -52,10 +52,9 @@ impl BufferedMotion {
                 self.from = target;
                 self.started_at = None;
             }
-        } else if reduced_motion {
-            self.from = self.target;
-            self.started_at = None;
-        } else if self.started_at.is_some() && self.animation_progress(now) >= 1. {
+        } else if reduced_motion
+            || (self.started_at.is_some() && self.animation_progress(now) >= 1.)
+        {
             self.from = self.target;
             self.started_at = None;
         }
@@ -173,10 +172,9 @@ impl SeekFillMotion {
                 self.from = target;
                 self.started_at = None;
             }
-        } else if reduced_motion {
-            self.from = self.target;
-            self.started_at = None;
-        } else if self.started_at.is_some() && self.animation_progress(now) >= 1. {
+        } else if reduced_motion
+            || (self.started_at.is_some() && self.animation_progress(now) >= 1.)
+        {
             self.from = self.target;
             self.started_at = None;
         }
@@ -292,11 +290,9 @@ impl PlayerBarMotion {
                 self.from_opacity = target_opacity;
                 self.started_at = None;
             }
-        } else if reduced_motion {
-            self.from_height = self.target_height;
-            self.from_opacity = self.target_opacity;
-            self.started_at = None;
-        } else if self.started_at.is_some() && self.animation_progress(now) >= 1. {
+        } else if reduced_motion
+            || (self.started_at.is_some() && self.animation_progress(now) >= 1.)
+        {
             self.from_height = self.target_height;
             self.from_opacity = self.target_opacity;
             self.started_at = None;
@@ -453,10 +449,7 @@ impl PlayerBarLayoutMotion {
             }
         }
 
-        if reduced_motion {
-            self.from = self.target;
-            self.started_at = None;
-        } else if self.started_at.is_some() && self.animation_progress(now) >= 1. {
+        if reduced_motion || (self.started_at.is_some() && self.animation_progress(now) >= 1.) {
             self.from = self.target;
             self.started_at = None;
         }

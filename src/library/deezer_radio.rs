@@ -331,8 +331,7 @@ fn parse_smart_tracklist(
     let tracks = items
         .iter()
         .filter(|item| valid_deezer_id(&value_string(item.get("SNG_ID"))).is_ok())
-        .cloned()
-        .map(|item| normalize::track(&item))
+        .map(normalize::track)
         .filter(|track| !track.id.trim().is_empty())
         .collect::<Vec<_>>();
     if tracks.is_empty() {

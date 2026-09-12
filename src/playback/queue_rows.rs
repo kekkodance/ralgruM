@@ -240,6 +240,40 @@ fn row_meta(
         .into_any_element()
 }
 
+/// Album and artist navigation from a queue row opens the search detail
+/// pages, the same routes the original queue context menu navigated.
+fn queue_openers(
+    search: gpui::WeakEntity<SearchView>,
+    provider: PlaybackProvider,
+) -> (NavigationOpener, NavigationOpener) {
+    let provider = match provider {
+        PlaybackProvider::Deezer => Provider::Deezer,
+        PlaybackProvider::SoundCloud => Provider::SoundCloud,
+    };
+    let album_search = search.clone();
+    let open_album: NavigationOpener = Arc::new(
+        move |target: NavigationTarget, _: &mut Window, cx: &mut gpui::App| {
+            let Some(search) = album_search.upgrade() else {
+                return;
+            };
+            search.update(cx, |view, cx| {
+                view.open_card(target.card(provider), cx);
+            });
+        },
+    );
+    let open_artist: NavigationOpener = Arc::new(
+        move |target: NavigationTarget, _: &mut Window, cx: &mut gpui::App| {
+            let Some(search) = search.upgrade() else {
+                return;
+            };
+            search.update(cx, |view, cx| {
+                view.open_card(target.card(provider), cx);
+            });
+        },
+    );
+    (open_album, open_artist)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::music_ui::{
@@ -250,7 +284,7 @@ mod tests {
     fn remove_button_keeps_the_original_hit_target_and_smaller_glyph() {
         assert_eq!(DANGER_REMOVE_HIT_TARGET_PX, 26.);
         assert_eq!(DANGER_REMOVE_ICON_SIZE_PX, 10.);
-        assert!(DANGER_REMOVE_ICON_SIZE_PX < 11.);
+        const { assert!(DANGER_REMOVE_ICON_SIZE_PX < 11.) };
     }
 
     #[test]
@@ -302,38 +336,4 @@ mod tests {
         assert!(row.contains(".text_size(px(12.5))"));
         assert!(row.contains(".text_size(px(11.5))"));
     }
-}
-
-/// Album and artist navigation from a queue row opens the search detail
-/// pages, the same routes the original queue context menu navigated.
-fn queue_openers(
-    search: gpui::WeakEntity<SearchView>,
-    provider: PlaybackProvider,
-) -> (NavigationOpener, NavigationOpener) {
-    let provider = match provider {
-        PlaybackProvider::Deezer => Provider::Deezer,
-        PlaybackProvider::SoundCloud => Provider::SoundCloud,
-    };
-    let album_search = search.clone();
-    let open_album: NavigationOpener = Arc::new(
-        move |target: NavigationTarget, _: &mut Window, cx: &mut gpui::App| {
-            let Some(search) = album_search.upgrade() else {
-                return;
-            };
-            search.update(cx, |view, cx| {
-                view.open_card(target.card(provider), cx);
-            });
-        },
-    );
-    let open_artist: NavigationOpener = Arc::new(
-        move |target: NavigationTarget, _: &mut Window, cx: &mut gpui::App| {
-            let Some(search) = search.upgrade() else {
-                return;
-            };
-            search.update(cx, |view, cx| {
-                view.open_card(target.card(provider), cx);
-            });
-        },
-    );
-    (open_album, open_artist)
 }

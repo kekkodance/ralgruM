@@ -1197,7 +1197,7 @@ fn track_artist_text_and_ranges(
     if provider == Provider::SoundCloud && routes.len() == 1 {
         let text = artist.to_owned();
         let end = text.len();
-        return (text, vec![0..end]);
+        return (text, std::iter::once(0..end).collect());
     }
     artist_text_and_ranges(routes)
 }

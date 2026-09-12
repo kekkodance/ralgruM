@@ -255,7 +255,6 @@ pub(super) fn render_card_with_presentation(
                 .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
                 .on_click({
                     let host = host.clone();
-                    let preserve_discover_channel = preserve_discover_channel;
                     move |_, _, app| {
                         host.update(app, |this, cx| {
                             if preserve_discover_channel {
@@ -268,7 +267,6 @@ pub(super) fn render_card_with_presentation(
                 })
                 .on_key_down({
                     let host = host.clone();
-                    let preserve_discover_channel = preserve_discover_channel;
                     move |event: &KeyDownEvent, window, app| {
                         if crate::tab_keyboard::is_activation_key(event.keystroke.key.as_str()) {
                             window.prevent_default();

@@ -1074,8 +1074,10 @@ mod tests {
 
     #[test]
     fn all_card_results_keep_bounded_non_virtual_preview_mode() {
-        let mut groups = Groups::default();
-        groups.albums = cards(25, ResultType::Albums);
+        let groups = Groups {
+            albums: cards(25, ResultType::Albums),
+            ..Groups::default()
+        };
         assert!(!is_dedicated_card_result(ResultType::All));
         assert!(!should_virtualize_results(
             ResultType::All,

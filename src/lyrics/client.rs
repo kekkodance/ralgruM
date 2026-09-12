@@ -380,6 +380,7 @@ fn split_genius_referent_ids(id: &str) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
+#[cfg(test)]
 fn parse_genius_referent(value: &Value) -> Result<GeniusReferent, String> {
     merge_genius_referent_values([value])
 }
@@ -433,7 +434,7 @@ fn merge_genius_referent_values<'a>(
         .into_iter()
         .filter_map(|key| by_id.remove(&key))
         .collect::<Vec<_>>();
-    annotations.sort_by(|left, right| right.votes.cmp(&left.votes));
+    annotations.sort_by_key(|annotation| std::cmp::Reverse(annotation.votes));
     if annotations.is_empty() {
         return Err("Annotation not found".into());
     }

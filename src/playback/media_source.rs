@@ -178,6 +178,7 @@ pub(crate) enum BackendProvider {
     SoundCloud,
 }
 
+#[cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
 #[derive(Clone, Debug)]
 pub(crate) struct MediaRequest {
     pub(crate) provider: BackendProvider,
@@ -227,16 +228,19 @@ pub(crate) struct BackendFormat {
     pub(crate) declared_bitrate: Option<u32>,
 }
 
+#[cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BackendProvenance {
     Deezer,
     SoundCloud,
 }
 
+#[cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BackendCacheIdentity(String);
 
 impl BackendCacheIdentity {
+    #[cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
     pub(crate) fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
@@ -302,6 +306,7 @@ impl fmt::Debug for BackendSource {
 }
 
 impl BackendSource {
+    #[cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
     pub(crate) fn from_ops(ops: Arc<dyn BackendSourceOps>) -> Self {
         Self(ops)
     }
@@ -347,6 +352,7 @@ impl BackendSource {
     }
 }
 
+#[cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) enum MediaResolveOutcome<T> {
     Source(T),

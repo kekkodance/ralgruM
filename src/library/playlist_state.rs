@@ -394,6 +394,7 @@ impl PlaylistState {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn remove_status_for(
         &self,
         provider: crate::search::Provider,

@@ -119,12 +119,6 @@ impl NavigationTarget {
 
 pub(crate) type NavigationOpener = Arc<dyn Fn(NavigationTarget, &mut Window, &mut App)>;
 
-/// Opens a complete collection card through the Search detail renderer.
-/// Unlike [`NavigationOpener`], this keeps the card's provider and all of its
-/// display metadata together so library cards do not need a second detail
-/// route implementation.
-pub(crate) type CardNavigationOpener = Arc<dyn Fn(Card, &mut Window, &mut App)>;
-
 /// Navigation callbacks for the two provider families used by track menus.
 /// Keeping the provider split at the wiring boundary lets menu renderers stay
 /// provider agnostic while still opening the canonical Search detail route.

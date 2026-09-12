@@ -99,9 +99,11 @@ mod tests {
         assert_eq!(result_type_from_stored("tracks"), ResultType::Tracks);
         assert_eq!(result_type_from_stored("unexpected"), ResultType::All);
 
-        let mut settings = AppSettings::default();
-        settings.right_sidebar_open = true;
-        settings.right_sidebar_view = RightSidebarView::Queue;
+        let mut settings = AppSettings {
+            right_sidebar_open: true,
+            right_sidebar_view: RightSidebarView::Queue,
+            ..AppSettings::default()
+        };
         assert_eq!(right_sidebar_from_stored(&settings), RightSidebar::Queue);
 
         settings.right_sidebar_open = false;

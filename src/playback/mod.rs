@@ -33,6 +33,7 @@ pub(crate) use download_variant::{
     deezer_collection_download_choices, selection_order,
 };
 pub(crate) use listen_history::ListenHistorySignal;
+#[allow(unused_imports)]
 pub(crate) use media_source::{AudioFormat, DownloadOutput, ProgressCallback, ProgressUpdate};
 pub(crate) use queue::QueuePanel;
 pub(crate) use resolver::{ResolvedSource, StreamResolver};

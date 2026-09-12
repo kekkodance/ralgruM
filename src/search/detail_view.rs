@@ -388,14 +388,14 @@ fn render_artist_section_list(
             playing.clone(),
             cx,
         ));
-        for index in 0..rows.len() {
+        for (index, track) in popular_tracks.iter().enumerate() {
             let rows = rows.clone();
             builders.push(Rc::new(move |_, app| {
                 super::rows_view::track_row_slot(rows.render(index, app), true)
             }));
             ordered_rows.push(format!(
                 "track:{}",
-                super::rows_view::search_track_identity(&popular_tracks[index])
+                super::rows_view::search_track_identity(track)
             ));
         }
     }
@@ -482,8 +482,7 @@ fn render_artist_section_list(
             let range = super::cards_view::card_grid_row_range(row_index, card_count, columns)
                 .expect("card row index must be in range");
             ordered_rows.push(format!(
-                "card-row:{}:{}",
-                format!("{section_kind:?}"),
+                "card-row:{section_kind:?}:{}",
                 cards[range]
                     .iter()
                     .map(super::cards_view::stable_card_identity)

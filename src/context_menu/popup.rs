@@ -12,6 +12,10 @@ use super::popup_actions::{
     Cancel, Confirm, SelectDown, SelectFirst, SelectLast, SelectLeft, SelectRight, SelectUp,
 };
 
+type PopupItemHandler = Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>;
+type PopupItemDisabled = Rc<dyn Fn(&mut App) -> bool>;
+type PopupItemRenderer = Box<dyn Fn(&mut Window, &mut App) -> gpui::AnyElement + 'static>;
+
 const POPUP_CONTEXT: &str = "PopupMenu";
 
 /// Bindings used by the app-owned popup menu. They intentionally use the same
@@ -37,15 +41,15 @@ pub(crate) enum PopupMenuItem {
         label: SharedString,
         shortcut: Option<SharedString>,
         disabled: bool,
-        handler: Option<Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>>,
+        handler: Option<PopupItemHandler>,
     },
     ElementItem {
         icon: Option<Icon>,
         disabled: bool,
-        dynamic_disabled: Option<Rc<dyn Fn(&mut App) -> bool>>,
+        dynamic_disabled: Option<PopupItemDisabled>,
         render_disabled: bool,
-        render: Box<dyn Fn(&mut Window, &mut App) -> gpui::AnyElement + 'static>,
-        handler: Option<Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>>,
+        render: PopupItemRenderer,
+        handler: Option<PopupItemHandler>,
     },
     Submenu {
         icon: Option<Icon>,
@@ -312,6 +316,7 @@ impl PopupMenu {
 
     /// Show a small chevron on the top edge for menus placed below
     /// their trigger, pointing up toward the trigger button.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn with_top_arrow(mut self) -> Self {
         self.show_arrow = true;
         self.arrow_edge = PopupMenuArrowEdge::Top;
@@ -772,7 +777,7 @@ mod tests {
 
     #[gpui::test]
     fn arrow_is_opt_in_and_tracks_its_edge(cx: &mut gpui::TestAppContext) {
-        let plain = cx.update(|cx| PopupMenu::new(cx));
+        let plain = cx.update(PopupMenu::new);
         assert!(!plain.show_arrow);
         assert!(plain.arrow_anchor_x.is_none());
         let above = cx.update(|cx| PopupMenu::new(cx).with_arrow());

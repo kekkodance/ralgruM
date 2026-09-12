@@ -592,9 +592,7 @@ impl Render for LocalPlaylistDialog {
         let viewport_height = f32::from(viewport.height);
         let stack_crop = crop_panel_stacks(viewport_width, viewport_height);
         let crop_preview_size = if stack_crop {
-            (dialog_width(viewport_width) - 60.)
-                .max(0.)
-                .min(CROP_PREVIEW_SIZE)
+            (dialog_width(viewport_width) - 60.).clamp(0., CROP_PREVIEW_SIZE)
         } else {
             CROP_PREVIEW_SIZE
         };

@@ -178,6 +178,7 @@ impl LibraryState {
         self.complete(generation, result)
     }
 
+    #[cfg(test)]
     pub(crate) fn complete_tracks_preview(&mut self, generation: u64, page: Page) -> bool {
         if generation != self.generation || !self.deezer_root_active(Category::Tracks) {
             return false;
@@ -394,6 +395,7 @@ impl LibraryState {
         self.page = Some(page);
     }
 
+    #[cfg(test)]
     pub(crate) fn complete_tracks_tail(&mut self, generation: u64, page: Page) -> bool {
         if generation != self.generation || !self.deezer_root_active(Category::Tracks) {
             return false;
@@ -419,6 +421,7 @@ impl LibraryState {
         load_id >= self.tracks_playback_generation_floor
     }
 
+    #[cfg(test)]
     pub(crate) fn complete_tracks_enrichment(
         &mut self,
         generation: u64,
@@ -436,6 +439,7 @@ impl LibraryState {
 
     /// A stale snapshot remains usable when its background refresh fails.
     /// Without a snapshot, retain the existing first-load failure behavior.
+    #[cfg(test)]
     pub(crate) fn complete_tracks_refresh_failure(
         &mut self,
         generation: u64,
@@ -455,6 +459,7 @@ impl LibraryState {
     /// Finish an accepted enrichment attempt while keeping its raw preview.
     /// The return value says whether the failed result still belongs to the
     /// active Tracks generation and is therefore safe to persist as fallback.
+    #[cfg(test)]
     pub(crate) fn accept_tracks_enrichment_failure(&mut self, generation: u64) -> bool {
         if generation != self.generation || !self.deezer_root_active(Category::Tracks) {
             return false;
@@ -614,6 +619,7 @@ impl LibraryState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn patch_deezer_playlist(&mut self, playlist: &OwnedPlaylist) {
         self.patch_playlist(crate::search::Provider::Deezer, playlist);
     }
@@ -2130,7 +2136,7 @@ mod tests {
 
         assert!(!state.accept_tracks_tail_pipeline(token, tracks_page("raw")));
         assert!(state.has_cached(Service::Deezer, Category::Tracks));
-        assert!(state.fail_tracks_pipeline_enrichment(token) == false);
+        assert!(!state.fail_tracks_pipeline_enrichment(token));
 
         let (_, cached) = state.select(Service::Deezer, Category::Tracks);
         assert_eq!(cached.as_ref().map(|page| page.title.as_str()), Some("raw"));

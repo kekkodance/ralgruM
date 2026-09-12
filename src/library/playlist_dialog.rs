@@ -551,8 +551,7 @@ impl Render for PlaylistDialog {
         let stack_crop = crop_panel_stacks(viewport_width, viewport_height);
         let crop_preview_size = if stack_crop {
             (dialog_width(viewport_width) - 60.)
-                .max(0.)
-                .min(super::playlist_cover_editor::CROP_PREVIEW_SIZE)
+                .clamp(0., super::playlist_cover_editor::CROP_PREVIEW_SIZE)
         } else {
             super::playlist_cover_editor::CROP_PREVIEW_SIZE
         };

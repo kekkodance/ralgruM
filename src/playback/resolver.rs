@@ -334,6 +334,7 @@ fn cache_key(source: &ResolvedSource) -> Option<String> {
     })
 }
 
+#[cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceVariant {
     Deezer,
@@ -382,7 +383,7 @@ fn stable_cache_identity(
 #[derive(Clone)]
 enum SourceData {
     Remote(String),
-    Hls(HlsDescriptor),
+    Hls(Box<HlsDescriptor>),
     Backend(BackendSource),
     Inline(Vec<u8>),
 }

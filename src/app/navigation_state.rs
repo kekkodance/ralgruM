@@ -37,10 +37,11 @@ struct LegacyPreferences {
 
 impl LegacyPreferences {
     fn into_settings(self) -> AppSettings {
-        let mut settings = AppSettings::default();
-        settings.audio_cache_limit_mb = normalize_audio_cache_limit_mb(self.audio_cache_limit_mb);
-        settings.downloads_dir = self.downloads_dir;
-        settings
+        AppSettings {
+            audio_cache_limit_mb: normalize_audio_cache_limit_mb(self.audio_cache_limit_mb),
+            downloads_dir: self.downloads_dir,
+            ..AppSettings::default()
+        }
     }
 }
 
@@ -764,8 +765,10 @@ mod tests {
         let defaults: AppSettings = serde_json::from_value(json!({})).unwrap();
         assert!(defaults.record_deezer_plays);
 
-        let mut settings = AppSettings::default();
-        settings.record_deezer_plays = false;
+        let settings = AppSettings {
+            record_deezer_plays: false,
+            ..AppSettings::default()
+        };
         let encoded = serde_json::to_value(&settings).unwrap();
         assert_eq!(encoded["recordDeezerPlays"], false);
         let decoded: AppSettings = serde_json::from_value(encoded).unwrap();
@@ -778,9 +781,11 @@ mod tests {
         assert!(defaults.soundcloud_search_suggestions);
         assert!(defaults.search_history.is_empty());
 
-        let mut settings = AppSettings::default();
-        settings.soundcloud_search_suggestions = false;
-        settings.search_history = vec!["Skrillex".into(), "Daft Punk".into()];
+        let settings = AppSettings {
+            soundcloud_search_suggestions: false,
+            search_history: vec!["Skrillex".into(), "Daft Punk".into()],
+            ..AppSettings::default()
+        };
         let encoded = serde_json::to_value(&settings).unwrap();
         assert_eq!(encoded["soundcloudSearchSuggestions"], false);
         assert_eq!(encoded["searchHistory"], json!(["Skrillex", "Daft Punk"]));
@@ -810,8 +815,10 @@ mod tests {
         let defaults: AppSettings = serde_json::from_value(json!({})).unwrap();
         assert!(defaults.close_to_tray);
 
-        let mut settings = AppSettings::default();
-        settings.close_to_tray = false;
+        let settings = AppSettings {
+            close_to_tray: false,
+            ..AppSettings::default()
+        };
         let encoded = serde_json::to_value(&settings).unwrap();
         assert_eq!(encoded["closeToTray"], false);
         assert!(

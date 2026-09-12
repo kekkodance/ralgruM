@@ -419,11 +419,7 @@ mod tests {
                 .iter()
                 .map(|request| request.category)
                 .collect::<Vec<_>>(),
-            ResultType::All
-                .categories()
-                .iter()
-                .copied()
-                .collect::<Vec<_>>()
+            ResultType::All.categories().to_vec()
         );
         assert!(expanded.iter().all(|request| {
             request.provider == Provider::SoundCloud && request.query == "query"

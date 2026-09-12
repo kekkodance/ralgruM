@@ -1099,8 +1099,8 @@ mod windows_impl {
 
         #[test]
         fn native_tray_menu_is_disabled_on_both_clicks() {
-            assert!(!NATIVE_MENU_ON_LEFT_CLICK);
-            assert!(!NATIVE_MENU_ON_RIGHT_CLICK);
+            const { assert!(!NATIVE_MENU_ON_LEFT_CLICK) };
+            const { assert!(!NATIVE_MENU_ON_RIGHT_CLICK) };
         }
 
         #[test]

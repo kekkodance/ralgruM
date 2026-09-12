@@ -136,7 +136,8 @@ fn cursor_resource(bytes: &[u8]) -> Option<Vec<u8>> {
     // Prefer the highest bit depth, then the largest payload. This mirrors
     // the selection used by the existing drag cursor bridge and keeps a
     // monochrome fallback from winning over the color image.
-    let mut best: Option<(u16, u16, &[u8], (u16, usize))> = None;
+    type CursorCandidate<'a> = (u16, u16, &'a [u8], (u16, usize));
+    let mut best: Option<CursorCandidate<'_>> = None;
     for index in 0..entry_count {
         let entry = 6usize.checked_add(index.checked_mul(16)?)?;
         let hotspot_x = le_u16(bytes, entry + 4)?;
@@ -412,7 +413,12 @@ mod windows_impl {
             };
             (hook.original_proc, hook.cursor)
         };
-        let original_proc: WNDPROC = Some(unsafe { std::mem::transmute(original_proc) });
+        let original_proc: WNDPROC = Some(unsafe {
+            std::mem::transmute::<
+                isize,
+                unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+            >(original_proc)
+        });
         // The previous procedure may be the drag cursor bridge. Always call
         // it first so existing window behavior and cursor ownership survive.
         let result = unsafe { CallWindowProcW(original_proc, hwnd, message, wparam, lparam) };

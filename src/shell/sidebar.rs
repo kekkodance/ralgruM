@@ -1373,8 +1373,8 @@ mod tests {
         assert!(!production.contains("\"Import / Export Settings\""));
         assert!(production.contains("SETTINGS_SECONDARY_SMALL_ICON_SIZE"));
         assert!(production.contains("settings.open_settings_transfer(window, cx)"));
-        assert!(SIDEBAR_EXPANDED_TRANSFER_BOTTOM_PX > 0.);
-        assert!(SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX > SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX);
+        const { assert!(SIDEBAR_EXPANDED_TRANSFER_BOTTOM_PX > 0.) };
+        const { assert!(SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX > SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX) };
         assert!(production.contains("neutral_secondary_button"));
         assert!(production.contains("is_activation_key(event.keystroke.key.as_str())"));
     }

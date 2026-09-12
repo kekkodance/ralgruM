@@ -1,3 +1,5 @@
+#![cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
+
 use std::fmt;
 
 use reqwest::Client;

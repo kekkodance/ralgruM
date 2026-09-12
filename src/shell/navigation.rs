@@ -240,8 +240,10 @@ mod tests {
     fn cache_navigation_round_trips_through_settings() {
         assert_eq!(nav_from_stored(MainDestination::Cache), Nav::Cache);
 
-        let mut settings = AppSettings::default();
-        settings.last_main_tab = MainDestination::Cache;
+        let settings = AppSettings {
+            last_main_tab: MainDestination::Cache,
+            ..AppSettings::default()
+        };
         assert_eq!(nav_from_stored(settings.last_main_tab), Nav::Cache);
     }
 }

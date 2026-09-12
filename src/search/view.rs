@@ -2516,12 +2516,8 @@ impl SearchView {
                 None
             }
         };
-        let Some((provider, deleted)) = deleted else {
-            return None;
-        };
-        let Some(deleted) = deleted else {
-            return None;
-        };
+        let (provider, deleted) = deleted?;
+        let deleted = deleted?;
         if self.detail.route.as_ref().is_some_and(|route| {
             route.provider == provider && route.kind == ResultType::Playlists && route.id == deleted
         }) {

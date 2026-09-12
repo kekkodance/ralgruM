@@ -311,6 +311,7 @@ fn capitalize(value: &str) -> String {
 /// Merges the REST track/album payloads, the pageTrack data, and the album
 /// track list into one tag set. Each source is optional so a partial fetch
 /// still renders the rows it resolved.
+#[allow(clippy::field_reassign_with_default)]
 pub(crate) fn parse_deezer_track_info(
     track: &Value,
     album: Option<&Value>,
@@ -377,6 +378,7 @@ pub(crate) fn parse_deezer_track_info(
     info
 }
 
+#[allow(clippy::field_reassign_with_default)]
 pub(crate) fn parse_soundcloud_track_info(track: &Value) -> TrackInfo {
     let mut info = TrackInfo::default();
     info.artists = [
@@ -969,8 +971,10 @@ mod tests {
         };
         assert_ne!(authenticated, other);
 
-        let mut info = TrackInfo::default();
-        info.title = "Cached".into();
+        let info = TrackInfo {
+            title: "Cached".into(),
+            ..TrackInfo::default()
+        };
         store_track_info(authenticated.clone(), info.clone());
         assert_eq!(cached_track_info(&authenticated), Some(info));
         assert_eq!(cached_track_info(&other), None);
@@ -1116,31 +1120,33 @@ mod tests {
 
     #[test]
     fn dialog_row_order_matches_the_original_tags_dialog() {
-        let mut info = TrackInfo::default();
-        info.artists = "a".into();
-        info.title = "b".into();
-        info.subtitle = "c".into();
-        info.album = "d".into();
-        info.release_date = "2021-08-09".into();
-        info.album_artist = "e".into();
-        info.album_type = "Single".into();
-        info.genre = "f".into();
-        info.explicit = Some(true);
-        info.composer = "g".into();
-        info.author = "h".into();
-        info.writer = "i".into();
-        info.record_label = "j".into();
-        info.copyright = "k".into();
-        info.isrc = "l".into();
-        info.barcode = "m".into();
-        info.track_number = Some(1);
-        info.total_tracks = Some(2);
-        info.disc_number = Some(3);
-        info.total_discs = Some(4);
-        info.duration_secs = Some(161);
-        info.bpm = Some(128);
-        info.gain_db = Some(-7.7);
-        info.peak = Some(0.98);
+        let info = TrackInfo {
+            artists: "a".into(),
+            title: "b".into(),
+            subtitle: "c".into(),
+            album: "d".into(),
+            release_date: "2021-08-09".into(),
+            album_artist: "e".into(),
+            album_type: "Single".into(),
+            genre: "f".into(),
+            explicit: Some(true),
+            composer: "g".into(),
+            author: "h".into(),
+            writer: "i".into(),
+            record_label: "j".into(),
+            copyright: "k".into(),
+            isrc: "l".into(),
+            barcode: "m".into(),
+            track_number: Some(1),
+            total_tracks: Some(2),
+            disc_number: Some(3),
+            total_discs: Some(4),
+            duration_secs: Some(161),
+            bpm: Some(128),
+            gain_db: Some(-7.7),
+            peak: Some(0.98),
+            ..TrackInfo::default()
+        };
         let labels = info
             .rows()
             .into_iter()

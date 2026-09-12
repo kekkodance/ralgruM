@@ -80,11 +80,15 @@ mod tests {
     fn latest_preferences_win_even_when_workers_finish_out_of_order() {
         let directory = TempDir::new().unwrap();
         let coordinator = Arc::new(WriteCoordinator::default());
-        let mut first = AppSettings::default();
-        first.volume = 0.2;
+        let first = AppSettings {
+            volume: 0.2,
+            ..AppSettings::default()
+        };
         let older = SettingsWrite::new(directory.path().into(), first, coordinator.clone());
-        let mut last = AppSettings::default();
-        last.volume = 0.7;
+        let last = AppSettings {
+            volume: 0.7,
+            ..AppSettings::default()
+        };
         let newer = SettingsWrite::new(directory.path().into(), last.clone(), coordinator);
         assert!(newer.persist().unwrap());
         assert!(!older.persist().unwrap());

@@ -48,6 +48,14 @@ pub(crate) use super::local_playlist_view::{local_playlist_page, local_playlists
 const FLOW_REQUEST_FAILURE: &str = "Flow request failed";
 const LIBRARY_CONTENT_BOTTOM_PADDING_PX: f32 = 16.;
 
+type LocalLibraryCompletion = Box<
+    dyn FnOnce(
+            Result<LocalLibraryMutationOutcome, super::local_store::LocalLibraryError>,
+            &mut LibraryView,
+            &mut Context<LibraryView>,
+        ) + Send,
+>;
+
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod tests;
@@ -1899,13 +1907,7 @@ impl LibraryView {
     pub(super) fn enqueue_local_library_mutation(
         &mut self,
         mutation: LocalLibraryMutation,
-        completion: Box<
-            dyn FnOnce(
-                    Result<LocalLibraryMutationOutcome, super::local_store::LocalLibraryError>,
-                    &mut Self,
-                    &mut Context<Self>,
-                ) + Send,
-        >,
+        completion: LocalLibraryCompletion,
         cx: &mut Context<Self>,
     ) -> Result<(), super::local_store::LocalLibraryError> {
         let (_, response) = self
@@ -2982,7 +2984,7 @@ impl crate::entity_navigation::TrackMenuHost for LibraryView {
         let title = track.title.clone();
         let result = self.enqueue_local_library_mutation(
             LocalLibraryMutation::SetSaved {
-                track: super::local_store::LocalTrack::from(&track),
+                track: Box::new(super::local_store::LocalTrack::from(&track)),
                 saved,
             },
             Box::new(move |result, _, cx| match result {

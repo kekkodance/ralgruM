@@ -4,6 +4,8 @@ use gpui::{App, ClickEvent, MouseButton, Window};
 
 use super::{ContextMenuExt, copied_toast, items, style_entity_menu};
 
+type DiscoverActionHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DiscoverMenuPrimary {
     PlayMix,
@@ -33,7 +35,7 @@ impl DiscoverMenuPrimary {
 #[derive(Clone)]
 pub(crate) struct DiscoverMenuAction {
     pub(crate) primary: DiscoverMenuPrimary,
-    pub(crate) on_activate: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
+    pub(crate) on_activate: DiscoverActionHandler,
 }
 
 impl DiscoverMenuAction {
