@@ -36,12 +36,27 @@ jobs:
       RUST_BACKTRACE: 1
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
-      - name: Check out the parent and private submodule
+      - name: Check out the parent repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
-          token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          submodules: false
+          token: ${{ github.token }}
           persist-credentials: true
+
+      - name: Initialize the private submodule
+        env:
+          PRIVATE_TOKEN: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+        shell: pwsh
+        run: |
+          $privateUrl = 'https://github.com/kekkodance/ralgrum-murglar-private.git'
+          $authUrl = "https://x-access-token:$env:PRIVATE_TOKEN@github.com/kekkodance/ralgrum-murglar-private.git"
+          $configKey = "url.$authUrl.insteadOf"
+          git config --global $configKey $privateUrl
+          try {
+            git submodule update --init --recursive
+          } finally {
+            git config --global --unset-all $configKey
+          }
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
