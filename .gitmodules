@@ -1,0 +1,3 @@
+[submodule "src/murglar_backend/implementation"]
+	path = src/murglar_backend/implementation
+	url = https://github.com/kekkodance/ralgrum-murglar-private.git

@@ -10,7 +10,6 @@
 /dist/
 /build/
 /traces/
-/src/murglar_backend/implementation/
 *.part
 *.log
 /logs/
