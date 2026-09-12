@@ -1,6 +1,10 @@
-# ralgruM Desktop
-
-A desktop music player for the Murglar music service.
+<div align="center">
+  <h1>
+    <img src="assets/app-icon.png" width="48" height="48" valign="middle" alt="ralgruM logo" />
+    ralgruM Desktop
+  </h1>
+  <p>A desktop music player for the Murglar music service.</p>
+</div>
 
 ralgruM is a third-party client for Murglar. It is not made by, affiliated with, or endorsed by Murglar, Deezer, or SoundCloud. If you have a Murglar account, ralgruM gives you a fast desktop app to search, browse, play, and download your music in one place.
 
@@ -25,7 +29,7 @@ You can browse without signing into everything, but signing in unlocks your pers
 
 ## Getting started
 
-1. Download the latest ralgruM release for Windows and open it.
+1. Download the [latest ralgruM release](https://github.com/kekkodance/ralgruM/releases/latest) for Windows and open it.
 2. Log in with your Murglar account to unlock the full service.
 3. Go to Settings and connect Deezer and SoundCloud if you use them.
 
@@ -37,6 +41,12 @@ That is it. Your logins stay saved on your PC so you do not have to sign in ever
 - Some tracks, especially in high quality, require an active Murglar Pass. If you hit a limit, the app will tell you.
 - On Windows, ralgruM uses the built-in secure storage for your OS user account to keep your login safe.
 - If music stops or a login expires, try signing out and back in from Settings.
+
+## Releases
+
+Grab the latest Windows build here:
+
+**[Download the latest release](https://github.com/kekkodance/ralgruM/releases/latest)**
 
 ---
 
@@ -126,3 +136,7 @@ Removing the override restores the default backend selection.
 ### Session storage notes
 
 On Windows, the session is stored under `%APPDATA%\ralgruM` in `auth_session.dat` and `auth_session.backup.dat`. Both copies are encrypted with Windows current-user DPAPI in a versioned, size-bounded container (64 KiB session limit, 256 KiB encrypted payload limit). DPAPI protects data in the Windows user context, but it does not protect against code running as that user.
+
+## License
+
+Copyright © 2026 kekkodance. All rights reserved. See LICENSE.
