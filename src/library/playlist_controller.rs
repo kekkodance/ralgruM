@@ -112,14 +112,14 @@ impl LibraryView {
                     .complete_create(scope, generation, Err(error));
             }
         };
-        if add.is_some() {
-            if !self.playlists.create_phase(
+        if add.is_some()
+            && !self.playlists.create_phase(
                 scope,
                 generation,
                 super::playlist_state::CreatePhase::Adding,
-            ) {
-                return false;
-            }
+            )
+        {
+            return false;
         }
         let Some(add) = add else {
             if !self.playlists.complete_create(scope, generation, Ok(id)) {
@@ -413,17 +413,17 @@ impl LibraryView {
             return false;
         }
         let account = self.account.read(cx);
-        if let Some(profile) = account.deezer_profile() {
-            if !profile.username.is_empty()
-                && profile.username.eq_ignore_ascii_case(subtitle.trim())
-            {
-                return true;
-            }
+        if let Some(profile) = account.deezer_profile()
+            && !profile.username.is_empty()
+            && profile.username.eq_ignore_ascii_case(subtitle.trim())
+        {
+            return true;
         }
-        if let Some(user_id) = account.deezer_user_id() {
-            if !user_id.is_empty() && user_id.trim() == subtitle.trim() {
-                return true;
-            }
+        if let Some(user_id) = account.deezer_user_id()
+            && !user_id.is_empty()
+            && user_id.trim() == subtitle.trim()
+        {
+            return true;
         }
         false
     }

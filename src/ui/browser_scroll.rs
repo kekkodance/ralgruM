@@ -824,12 +824,13 @@ fn register_handlers(
 
     let up_state = state.clone();
     window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
-        if phase.bubble() && event.button == MouseButton::Middle {
-            if cancel_autoscroll_and_release(&up_state, window) {
-                window.prevent_default();
-                window.refresh();
-                cx.stop_propagation();
-            }
+        if phase.bubble()
+            && event.button == MouseButton::Middle
+            && cancel_autoscroll_and_release(&up_state, window)
+        {
+            window.prevent_default();
+            window.refresh();
+            cx.stop_propagation();
         }
     });
 }

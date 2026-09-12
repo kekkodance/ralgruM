@@ -241,9 +241,7 @@ impl<'de> Deserialize<'de> for NoDuplicateValue {
             }
         }
 
-        deserializer
-            .deserialize_any(NoDuplicateVisitor)
-            .map(|value| value)
+        deserializer.deserialize_any(NoDuplicateVisitor)
     }
 }
 

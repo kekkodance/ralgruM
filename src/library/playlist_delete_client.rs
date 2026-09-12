@@ -40,18 +40,15 @@ impl PlaylistClient {
                 format!("{SIDEBAR_QUERY}{PLAYLIST_FRAGMENT}"),
             )
             .await;
-        if let Ok(catalog) = &catalog {
-            if let Ok(playlists) = parse_catalog(catalog) {
-                if let Some(playlist) = playlists.into_iter().find(|p| p.id == playlist_id) {
-                    if playlist.is_from_favorite_tracks {
-                        return Err(
-                            "Deezer's Favorite Tracks playlist cannot be deleted here".into()
-                        );
-                    }
-                    if playlist.is_collaborative {
-                        return Err("Collaborative Deezer playlists cannot be deleted here".into());
-                    }
-                }
+        if let Ok(catalog) = &catalog
+            && let Ok(playlists) = parse_catalog(catalog)
+            && let Some(playlist) = playlists.into_iter().find(|p| p.id == playlist_id)
+        {
+            if playlist.is_from_favorite_tracks {
+                return Err("Deezer's Favorite Tracks playlist cannot be deleted here".into());
+            }
+            if playlist.is_collaborative {
+                return Err("Collaborative Deezer playlists cannot be deleted here".into());
             }
         }
         let response = self
@@ -80,10 +77,10 @@ impl PlaylistClient {
             .json()
             .await
             .map_err(|_| "Deezer returned an invalid response".to_string())?;
-        if let Some(error) = value.get("error") {
-            if deezer_envelope_has_error(error) {
-                return Err("Deezer playlist.delete failed".into());
-            }
+        if let Some(error) = value.get("error")
+            && deezer_envelope_has_error(error)
+        {
+            return Err("Deezer playlist.delete failed".into());
         }
         if value.get("results") == Some(&Value::Bool(true)) {
             Ok(true)

@@ -98,7 +98,7 @@ pub(crate) fn resolve_tooltip_geometry_with_gap_and_end_inset(
         VIEWPORT_MARGIN,
     );
 
-    let geometry = match preferred {
+    match preferred {
         TooltipPlacement::Right => {
             let bubble_y = clamp_axis(
                 y,
@@ -170,9 +170,7 @@ pub(crate) fn resolve_tooltip_geometry_with_gap_and_end_inset(
                 ),
             }
         }
-    };
-
-    geometry
+    }
 }
 
 /// Keep the arrow oriented toward the trigger when clamping makes a tooltip

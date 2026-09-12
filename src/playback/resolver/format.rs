@@ -200,8 +200,7 @@ pub(super) fn declared_bitrate(value: &str) -> Option<u32> {
     value
         .split(|character: char| !character.is_ascii_digit())
         .filter_map(|part| part.parse::<u32>().ok())
-        .filter(|value| (16..=10_000).contains(value))
-        .next_back()
+        .rfind(|value| (16..=10_000).contains(value))
 }
 
 pub(super) fn soundcloud_original_bitrate(value: &Value, format: AudioFormat) -> Option<u32> {
@@ -355,11 +354,7 @@ pub(super) fn soundcloud_format_from_media_headers(
 }
 
 pub(super) fn soundcloud_format_from_filename(value: &str) -> Option<AudioFormat> {
-    let filename = value
-        .trim()
-        .trim_matches('"')
-        .rsplit(|character| character == '/' || character == '\\')
-        .next()?;
+    let filename = value.trim().trim_matches('"').rsplit(['/', '\\']).next()?;
     let extension = filename.rsplit_once('.')?.1;
     soundcloud_format_from_extension(extension)
 }

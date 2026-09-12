@@ -1,5 +1,5 @@
 use gpui::{AnyElement, KeyDownEvent, SharedString, div, prelude::*, px, rgb};
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use crate::{
     assets::{LocalIcon, local_icon},
@@ -353,7 +353,7 @@ fn render_artist_section_list(
         let popular_total = artist.popular_total;
         let popular_count = popular_tracks.len();
         let section_host = host.clone();
-        builders.push(Arc::new(move |_, app| {
+        builders.push(Rc::new(move |_, app| {
             div()
                 .w_full()
                 .pb(px(9.))
@@ -370,7 +370,7 @@ fn render_artist_section_list(
                 .into_any_element()
         }));
         ordered_rows.push(format!("section:{tracks_title}"));
-        let rows = Arc::new(super::rows_view::SearchTrackRows::new(
+        let rows = Rc::new(super::rows_view::SearchTrackRows::new(
             view,
             &popular_tracks,
             false,
@@ -390,7 +390,7 @@ fn render_artist_section_list(
         ));
         for index in 0..rows.len() {
             let rows = rows.clone();
-            builders.push(Arc::new(move |_, app| {
+            builders.push(Rc::new(move |_, app| {
                 super::rows_view::track_row_slot(rows.render(index, app), true)
             }));
             ordered_rows.push(format!(
@@ -437,7 +437,7 @@ fn render_artist_section_list(
         let card_count = cards.len();
         let row_count = super::cards_view::card_grid_row_count(card_count, columns);
         let section_host = host.clone();
-        builders.push(Arc::new(move |_, app| {
+        builders.push(Rc::new(move |_, app| {
             div()
                 .w_full()
                 .pb(px(9.))
@@ -459,7 +459,7 @@ fn render_artist_section_list(
             let row_cards = cards.clone();
             let row_host = host.clone();
             let row_account = view.account.clone();
-            builders.push(Arc::new(move |_, _app| {
+            builders.push(Rc::new(move |_, _app| {
                 let range =
                     super::cards_view::card_grid_row_range(row_index, row_cards.len(), columns)
                         .expect("card row index must be in range");
@@ -506,7 +506,7 @@ fn render_artist_section_list(
     let browser_scroll = view.track_list_browser_scroll(&identity);
     browser_scroll_surface(
         "search-artist-section-list-scroll",
-        crate::library::virtualization::page_list(state.clone(), Arc::new(builders), narrow),
+        crate::library::virtualization::page_list(state.clone(), Rc::new(builders), narrow),
         BrowserScrollTarget::List(state),
         browser_scroll,
     )

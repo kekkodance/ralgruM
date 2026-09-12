@@ -315,7 +315,7 @@ mod windows_impl {
                 if let Some(interaction) = interaction {
                     match interaction {
                         TrayInteraction::Show => {
-                            cx.update(|cx| restore_main_window(cx));
+                            cx.update(restore_main_window);
                         }
                         TrayInteraction::OpenMenu { x, y, tray_rect } => {
                             cx.update(|cx| open_tray_menu(cx, (x, y), tray_rect));
@@ -639,10 +639,10 @@ mod windows_impl {
                             menu.set_selected_index(Some(TRAY_MENU_ACTIONS.len() - 1), cx)
                         }
                         TrayMenuCommand::Activate => {
-                            if let Some(index) = menu.selected_index {
-                                if let Some(action) = TRAY_MENU_ACTIONS.get(index).copied() {
-                                    menu.activate(action, window, cx);
-                                }
+                            if let Some(index) = menu.selected_index
+                                && let Some(action) = TRAY_MENU_ACTIONS.get(index).copied()
+                            {
+                                menu.activate(action, window, cx);
                             }
                         }
                         TrayMenuCommand::Close => menu.close(window, cx),

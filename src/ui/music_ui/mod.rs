@@ -80,7 +80,7 @@ pub(crate) const TRACK_PROVIDER_ICON_OPTICAL_OFFSET_PX: f32 = 1.;
 pub(crate) const TRACK_TITLE_ARTIST_GAP_PX: f32 = 1.;
 
 pub(crate) fn compact_desktop_viewport(width: f32) -> bool {
-    (MOBILE_MAX + 1.) <= width && width <= COMPACT_MAX
+    ((MOBILE_MAX + 1.)..=COMPACT_MAX).contains(&width)
 }
 
 pub(crate) fn narrow_content_viewport(width: f32) -> bool {
@@ -232,7 +232,7 @@ pub(crate) fn shell_metrics_for_viewport(width: f32, _height: f32) -> ShellMetri
             (width * 0.30).clamp(320., 400.)
         },
         toolbar_stacked: width <= TOOLBAR_STACK_MAX,
-        compact_player: (MOBILE_MAX + 1.) <= width && width <= COMPACT_PLAYER_MAX,
+        compact_player: ((MOBILE_MAX + 1.)..=COMPACT_PLAYER_MAX).contains(&width),
     }
 }
 

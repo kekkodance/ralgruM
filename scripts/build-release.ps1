@@ -1,12 +1,14 @@
 <#
 .SYNOPSIS
-    Bumps the package version, builds the release executable, and stages it under dist/.
+    Bumps the package version, builds the release executable, and stages it
+    with its license and notice files under dist/.
 
 .DESCRIPTION
     Reads the [package] version from Cargo.toml, computes the next version using
     strict Semantic Versioning 2.0.0 rules (see semver.org), writes it back to
     Cargo.toml and Cargo.lock, then runs a locked release build and copies the
-    executable to dist/ as ralgruM.exe.
+    executable to dist/ as ralgruM.exe. The package also contains the
+    application license, third-party notices, and licenses for vendored code.
 
     Precedence follows semver section 11: the numeric core compares first, a
     version with a prerelease has lower precedence than the same core without
@@ -637,10 +639,44 @@ try {
     }
 
     $distDirectory = Join-Path $projectRoot 'dist'
-    if ($PSCmdlet.ShouldProcess($distDirectory, 'Stage ralgruM.exe')) {
+    if ($PSCmdlet.ShouldProcess($distDirectory, 'Stage ralgruM.exe and release licenses')) {
         New-Item -ItemType Directory -Path $distDirectory -Force | Out-Null
         $distExe = Join-Path $distDirectory 'ralgruM.exe'
         Copy-Item -LiteralPath $builtExe -Destination $distExe -Force
+
+        $releaseMaterials = @(
+            @{
+                Source      = Join-Path $projectRoot 'LICENSE'
+                Destination = Join-Path $distDirectory 'LICENSE'
+            }
+            @{
+                Source      = Join-Path $projectRoot 'THIRD_PARTY_NOTICES'
+                Destination = Join-Path $distDirectory 'THIRD_PARTY_NOTICES'
+            }
+            @{
+                Source      = Join-Path $projectRoot 'vendor\gpui_windows\LICENSE-APACHE'
+                Destination = Join-Path $distDirectory 'LICENSE-APACHE-ZED'
+            }
+            @{
+                Source      = Join-Path $projectRoot 'vendor\gpui-component\LICENSE-APACHE'
+                Destination = Join-Path $distDirectory 'LICENSE-APACHE-GPUI-COMPONENT'
+            }
+            @{
+                Source      = Join-Path $projectRoot 'vendor\gpui-component\crates\ui\LICENSE-APACHE'
+                Destination = Join-Path $distDirectory 'LICENSE-APACHE-GPUI-COMPONENT-UI'
+            }
+            @{
+                Source      = Join-Path $projectRoot 'vendor\gpui-component\crates\macros\LICENSE-APACHE'
+                Destination = Join-Path $distDirectory 'LICENSE-APACHE-GPUI-COMPONENT-MACROS'
+            }
+        )
+
+        foreach ($material in $releaseMaterials) {
+            if (-not (Test-Path -LiteralPath $material.Source -PathType Leaf)) {
+                throw "Release material not found: $($material.Source)"
+            }
+            Copy-Item -LiteralPath $material.Source -Destination $material.Destination -Force
+        }
 
         $distPath = (Resolve-Path -LiteralPath $distExe).Path
         $sizeBytes = (Get-Item -LiteralPath $distPath).Length
@@ -648,6 +684,7 @@ try {
         Write-Host "New version: $newVersion"
         Write-Host "Release executable: $distPath"
         Write-Host "File size: $sizeBytes bytes"
+        Write-Host "Release materials: $($releaseMaterials.Count) files"
     }
 } finally {
     Pop-Location

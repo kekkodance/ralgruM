@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn reversed_saved_ranges_restore_the_start_as_the_active_end() {
         let range = clamp_saved_range(2..8, 5);
-        assert_eq!(range.end..range.start, 5..2);
+        assert_eq!((range.end, range.start), (5, 2));
     }
 
     #[test]
@@ -382,7 +382,7 @@ mod tests {
         visual.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value("abcdef", window, cx);
-                state.set_selected_range(5..2, cx);
+                state.set_selected_range(std::ops::Range { start: 5, end: 2 }, cx);
                 state.focus(window, cx);
             });
         });

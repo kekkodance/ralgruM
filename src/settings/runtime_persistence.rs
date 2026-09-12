@@ -15,13 +15,13 @@ impl SettingsView {
                 this.runtime.spawn_blocking(move || write.persist())
             });
             async move {
-                if let Some(task) = task {
-                    if let Ok(Err(error)) = task.await {
-                        crate::diagnostics::event(
-                            "WARN",
-                            format!("Could not save final preferences: {error}"),
-                        );
-                    }
+                if let Some(task) = task
+                    && let Ok(Err(error)) = task.await
+                {
+                    crate::diagnostics::event(
+                        "WARN",
+                        format!("Could not save final preferences: {error}"),
+                    );
                 }
             }
         })

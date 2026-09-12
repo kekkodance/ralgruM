@@ -3,7 +3,7 @@ use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use std::{
     hash::{Hash, Hasher},
     ops::Range,
-    sync::Arc,
+    rc::Rc,
 };
 
 pub(crate) const TRACK_ROW_HEIGHT: f32 = 58.0;
@@ -21,7 +21,7 @@ pub(crate) const CARD_GRID_OVERDRAW_ROWS: f32 = 2.0;
 const LIBRARY_SCROLLBAR_OUTSET_DESKTOP: f32 = crate::music_ui::MAIN_CONTENT_INSET;
 const LIBRARY_SCROLLBAR_OUTSET_NARROW: f32 = crate::music_ui::NARROW_MAIN_CONTENT_INSET;
 
-pub(crate) type PageItemBuilder = Arc<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>;
+pub(crate) type PageItemBuilder = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TrackListLayout {
@@ -190,7 +190,7 @@ where
 
 pub(crate) fn page_list(
     state: ListState,
-    builders: Arc<Vec<PageItemBuilder>>,
+    builders: Rc<Vec<PageItemBuilder>>,
     narrow: bool,
 ) -> AnyElement {
     let scrollbar_state = state.clone();

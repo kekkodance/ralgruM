@@ -42,14 +42,14 @@ fn handle_download_notice(
                     [
                         ToastAction::secondary("Ignore", move |_, _, cx| {
                             if let Some(downloads) = ignore_host.upgrade() {
-                                let _ = downloads.update(cx, |downloads, cx| {
+                                downloads.update(cx, |downloads, cx| {
                                     downloads.ignore_conflict(id, cx);
                                 });
                             }
                         }),
                         ToastAction::danger_secondary("Overwrite", move |_, _, cx| {
                             if let Some(downloads) = overwrite_host.upgrade() {
-                                let _ = downloads.update(cx, |downloads, cx| {
+                                downloads.update(cx, |downloads, cx| {
                                     downloads.overwrite_conflict(id, cx);
                                 });
                             }
@@ -77,14 +77,14 @@ fn handle_download_notice(
                     [
                         ToastAction::secondary("Ignore", move |_, _, cx| {
                             if let Some(downloads) = ignore_host.upgrade() {
-                                let _ = downloads.update(cx, |downloads, cx| {
+                                downloads.update(cx, |downloads, cx| {
                                     downloads.ignore_batch_conflict(key, cx);
                                 });
                             }
                         }),
                         ToastAction::danger_secondary("Overwrite", move |_, _, cx| {
                             if let Some(downloads) = overwrite_host.upgrade() {
-                                let _ = downloads.update(cx, |downloads, cx| {
+                                downloads.update(cx, |downloads, cx| {
                                     downloads.overwrite_batch_conflict(key, cx);
                                 });
                             }

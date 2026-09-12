@@ -56,9 +56,11 @@ pub(super) async fn read_response_range(
     let status = response.status();
     let content_length = response.content_length();
     let expected = (end - start + 1) as usize;
-    let mut skip = (status != StatusCode::PARTIAL_CONTENT)
-        .then_some(start)
-        .unwrap_or(0);
+    let mut skip = if status != StatusCode::PARTIAL_CONTENT {
+        start
+    } else {
+        0
+    };
     let mut bytes = Vec::with_capacity(expected);
     let mut stream = response.bytes_stream();
     while bytes.len() < expected {

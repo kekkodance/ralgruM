@@ -117,7 +117,7 @@ enum DownloadSource {
     Resolved(ResolvedSource),
     Cached {
         cached: CachedDownload,
-        fallback: CachedDownloadFallback,
+        fallback: Box<CachedDownloadFallback>,
     },
 }
 
@@ -214,7 +214,7 @@ impl DownloadModel {
                 .await
                 .map_err(|_| "Download capability probe stopped unexpectedly".to_string())
                 .and_then(|result| result);
-            let _ = entity.update(cx, |model, cx| {
+            entity.update(cx, |model, cx| {
                 let current_probe = model
                     .capability_cancellations
                     .finish(&completion_key, probe_id);
@@ -523,14 +523,14 @@ impl DownloadModel {
             {
                 return Ok(DownloadSource::Cached {
                     cached,
-                    fallback: CachedDownloadFallback {
+                    fallback: Box::new(CachedDownloadFallback {
                         resolver: resolver.clone(),
                         track: resolve_track.clone(),
                         deezer_arl: deezer_arl.clone(),
                         soundcloud_token: soundcloud_token.clone(),
                         murglar: murglar.clone(),
                         variant,
-                    },
+                    }),
                 });
             }
             let resolver = resolver?;
@@ -962,16 +962,15 @@ impl DownloadModel {
             while let Some((downloaded, total)) = progress_receiver.recv().await {
                 let is_complete = total.is_some_and(|total| downloaded >= total);
                 let should_notify = is_complete
-                    || last_notify
-                        .map_or(true, |last| last.elapsed() >= Duration::from_millis(100));
+                    || last_notify.is_none_or(|last| last.elapsed() >= Duration::from_millis(100));
                 if should_notify {
                     last_notify = Some(Instant::now());
                     progress_entity.update(cx, |model, cx| {
-                        if model.accepts_transfer(id, generation) {
-                            if let Some(job) = model.job_mut(id) {
-                                job.status = DownloadStatus::Downloading { downloaded, total };
-                                cx.notify();
-                            }
+                        if model.accepts_transfer(id, generation)
+                            && let Some(job) = model.job_mut(id)
+                        {
+                            job.status = DownloadStatus::Downloading { downloaded, total };
+                            cx.notify();
                         }
                     });
                 }

@@ -350,9 +350,11 @@ pub(super) fn current_text_available_width(
     compact: bool,
     has_favorite: bool,
 ) -> f32 {
-    let favorite_reservation = (!compact && has_favorite)
-        .then_some(34. + 12.)
-        .unwrap_or(0.);
+    let favorite_reservation = if !compact && has_favorite {
+        34. + 12.
+    } else {
+        0.
+    };
     (layout.side_width - 60. - 12. - favorite_reservation).max(0.)
 }
 

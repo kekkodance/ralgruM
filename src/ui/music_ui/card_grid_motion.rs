@@ -63,12 +63,12 @@ impl CardGridMotion {
             self.from_columns = self.to_columns;
             self.from_width = self.to_width;
             self.started_at = None;
-        } else if let Some(started_at) = self.started_at {
-            if now.saturating_duration_since(started_at) >= CONTENT_DURATION {
-                self.from_columns = self.to_columns;
-                self.from_width = self.to_width;
-                self.started_at = None;
-            }
+        } else if let Some(started_at) = self.started_at
+            && now.saturating_duration_since(started_at) >= CONTENT_DURATION
+        {
+            self.from_columns = self.to_columns;
+            self.from_width = self.to_width;
+            self.started_at = None;
         }
 
         CardGridVisual {

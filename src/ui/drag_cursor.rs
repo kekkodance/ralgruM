@@ -366,10 +366,10 @@ mod windows_impl {
             set_global_hook_state(hwnd, DragCursorState::Reset);
         }
 
-        if message == WM_NCDESTROY {
-            if let Ok(mut hooks) = window_hooks().lock() {
-                hooks.remove(&key);
-            }
+        if message == WM_NCDESTROY
+            && let Ok(mut hooks) = window_hooks().lock()
+        {
+            hooks.remove(&key);
         }
 
         result

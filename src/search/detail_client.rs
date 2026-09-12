@@ -113,7 +113,7 @@ impl SearchClient {
             ResultType::Playlists => ("playlist.getSongs", json!({"playlist_id": id, "nb": 2000})),
             _ => return Err(ProviderError::new("Unsupported Deezer collection")),
         };
-        let response = self.deezer_gateway(&session, operation, body).await?;
+        let response = self.deezer_gateway(session, operation, body).await?;
         let tracks = response
             .pointer("/results/data")
             .and_then(Value::as_array)
@@ -132,7 +132,7 @@ impl SearchClient {
             .filter_map(value_string)
             .collect::<Vec<_>>();
         let hydrated = self
-            .deezer_gateway(&session, "song.getListData", json!({"sng_ids": ids}))
+            .deezer_gateway(session, "song.getListData", json!({"sng_ids": ids}))
             .await?;
         let hydrated = hydrated
             .pointer("/results/data")

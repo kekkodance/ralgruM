@@ -4,7 +4,7 @@ use gpui::{
     IntoElement, ParentElement, RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement,
     Styled, Window, div, ease_in_out, prelude::FluentBuilder, px, relative,
 };
-use instant::Duration;
+use web_time::Duration;
 
 use super::ProgressState;
 

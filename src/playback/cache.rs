@@ -1016,13 +1016,12 @@ impl AudioCache {
             ..Overview::default()
         };
         while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-            if entry.path().extension().and_then(|v| v.to_str()) == Some("block") {
-                if let Ok(metadata) = entry.metadata().await {
-                    if metadata.is_file() {
-                        result.used_bytes = result.used_bytes.saturating_add(metadata.len());
-                        result.block_count += 1;
-                    }
-                }
+            if entry.path().extension().and_then(|v| v.to_str()) == Some("block")
+                && let Ok(metadata) = entry.metadata().await
+                && metadata.is_file()
+            {
+                result.used_bytes = result.used_bytes.saturating_add(metadata.len());
+                result.block_count += 1;
             }
         }
         Ok(result)
@@ -1082,10 +1081,10 @@ impl AudioCache {
             .await
             .map_err(|e| e.to_string())?;
         while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-            if entry.metadata().await.is_ok_and(|m| m.is_file()) {
-                if tokio::fs::remove_file(entry.path()).await.is_ok() {
-                    self.bump_revision();
-                }
+            if entry.metadata().await.is_ok_and(|m| m.is_file())
+                && tokio::fs::remove_file(entry.path()).await.is_ok()
+            {
+                self.bump_revision();
             }
         }
         if let Ok(mut complete) = self.complete_tracks.write() {

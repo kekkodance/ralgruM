@@ -483,30 +483,30 @@ impl LibraryView {
     ) -> Option<(crate::search::DetailRoute, crate::search::AlbumInfo)> {
         let search_card = card.search_card()?;
         let route = crate::search::DetailRoute::from_card(&search_card)?;
-        if let Some(page) = self.state.page.as_ref() {
-            if let Some(info) = page.album_info.as_ref().filter(|info| info.has_content()) {
-                let current = self.state.route();
-                if current.id == card.id
-                    && current.source == card.source
-                    && matches!(
-                        (current.category, route.kind),
-                        (Category::Albums, crate::search::ResultType::Albums)
-                            | (Category::Playlists, crate::search::ResultType::Playlists)
-                    )
-                {
-                    return Some((
-                        crate::search::DetailRoute {
-                            provider: current.source,
-                            kind: route.kind,
-                            id: current.id.clone(),
-                            title: current.title.clone(),
-                            subtitle: current.subtitle.clone(),
-                            artwork: current.artwork.clone(),
-                            release_date: current.release_date.clone(),
-                        },
-                        info.clone(),
-                    ));
-                }
+        if let Some(page) = self.state.page.as_ref()
+            && let Some(info) = page.album_info.as_ref().filter(|info| info.has_content())
+        {
+            let current = self.state.route();
+            if current.id == card.id
+                && current.source == card.source
+                && matches!(
+                    (current.category, route.kind),
+                    (Category::Albums, crate::search::ResultType::Albums)
+                        | (Category::Playlists, crate::search::ResultType::Playlists)
+                )
+            {
+                return Some((
+                    crate::search::DetailRoute {
+                        provider: current.source,
+                        kind: route.kind,
+                        id: current.id.clone(),
+                        title: current.title.clone(),
+                        subtitle: current.subtitle.clone(),
+                        artwork: current.artwork.clone(),
+                        release_date: current.release_date.clone(),
+                    },
+                    info.clone(),
+                ));
             }
         }
         self.album_info_prefetch.cached(&route)
@@ -2249,10 +2249,10 @@ impl LibraryView {
         let (generation, cached) = self.state.push(route.clone());
         if route.action == "flowTracks" {
             if reuse_cached_flow_page(&self.flow_detail_kind, cached.as_ref()) {
-                if let Some(page) = cached.as_ref() {
-                    if let Some(title) = page.resolved_smart_mix_title.as_deref() {
-                        self.emit_smart_mix_title_resolved(&route.id, title, cx);
-                    }
+                if let Some(page) = cached.as_ref()
+                    && let Some(title) = page.resolved_smart_mix_title.as_deref()
+                {
+                    self.emit_smart_mix_title_resolved(&route.id, title, cx);
                 }
                 cx.notify();
                 return;

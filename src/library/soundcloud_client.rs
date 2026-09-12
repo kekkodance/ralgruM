@@ -28,7 +28,7 @@ const MOBILE_ACCEPT_ENCODING: &str = "gzip,deflate,identity";
 const PLAYLIST_ACCEPT_ENCODING: &str = "gzip, deflate, identity, br";
 pub(super) const MAX_PLAYLIST_TRACKS: usize = 500;
 const MAX_ARTWORK_BYTES: usize = 10 * 1024 * 1024;
-const MAX_ARTWORK_BASE64_BYTES: usize = (MAX_ARTWORK_BYTES + 2) / 3 * 4;
+const MAX_ARTWORK_BASE64_BYTES: usize = MAX_ARTWORK_BYTES.div_ceil(3) * 4;
 
 #[derive(Clone)]
 pub(crate) struct SoundCloudLibraryClient {

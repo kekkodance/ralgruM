@@ -245,11 +245,9 @@ fn register_handlers(
     window: &mut Window,
 ) {
     let window_active = window.is_window_active();
-    if !window_active {
-        if drag.take().is_some() {
-            window.release_pointer();
-            set_drag_cursor_owned(window, DragCursorState::Reset, cursor_owner);
-        }
+    if !window_active && drag.take().is_some() {
+        window.release_pointer();
+        set_drag_cursor_owned(window, DragCursorState::Reset, cursor_owner);
     }
     if let Some(DragCursorState::Grabbing) =
         active_carousel_cursor_state(drag.get().map(|drag| drag.mode))

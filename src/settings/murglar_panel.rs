@@ -248,9 +248,9 @@ impl SettingsView {
                     let Ok((requested_token, payment_result)) = result else {
                         return;
                     };
-                    if !account
+                    if account
                         .murglar_credentials()
-                        .is_some_and(|(_, token)| token == requested_token)
+                        .is_none_or(|(_, token)| token != requested_token)
                     {
                         return;
                     }

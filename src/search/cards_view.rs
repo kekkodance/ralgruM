@@ -305,7 +305,7 @@ pub(super) fn render_card_with_presentation(
     let prefetch_card = (*card_arc).clone();
     let element = element.on_hover(move |hovered, _, cx| {
         if *hovered {
-            let _ = prefetch_host.update(cx, |view, cx| {
+            prefetch_host.update(cx, |view, cx| {
                 view.prefetch_card_info(prefetch_card.clone(), cx);
             });
         }

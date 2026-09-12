@@ -379,7 +379,7 @@ impl std::error::Error for SessionError {}
 
 enum StoredSession {
     Missing,
-    Valid(AuthSession),
+    Valid(Box<AuthSession>),
     Invalid,
 }
 
@@ -394,7 +394,7 @@ fn read_session(path: &Path) -> Result<StoredSession, SessionError> {
     let parsed = serde_json::from_slice(&plaintext).ok();
     super::session_protection::wipe(&mut plaintext);
     Ok(match parsed {
-        Some(session) => StoredSession::Valid(session),
+        Some(session) => StoredSession::Valid(Box::new(session)),
         None => StoredSession::Invalid,
     })
 }
@@ -406,7 +406,7 @@ fn read_legacy_session(path: &Path) -> Result<StoredSession, SessionError> {
     let parsed = parse_legacy_session(&bytes);
     super::session_protection::wipe(&mut bytes);
     Ok(match parsed {
-        Some(session) => StoredSession::Valid(session),
+        Some(session) => StoredSession::Valid(Box::new(session)),
         None => StoredSession::Invalid,
     })
 }
@@ -491,15 +491,15 @@ fn load_protected_pair(
             if primary != backup {
                 write_protected_session(backup_path, &primary)?;
             }
-            Ok(primary)
+            Ok(*primary)
         }
         (StoredSession::Valid(session), StoredSession::Missing | StoredSession::Invalid) => {
             write_protected_session(backup_path, &session)?;
-            Ok(session)
+            Ok(*session)
         }
         (StoredSession::Missing | StoredSession::Invalid, StoredSession::Valid(session)) => {
             write_protected_session(primary_path, &session)?;
-            Ok(session)
+            Ok(*session)
         }
         _ => Err(SessionError::ExistingSessionInvalid),
     }
@@ -513,10 +513,10 @@ fn load_legacy_pair(
     let backup = read_legacy_session(backup_path)?;
 
     match (primary, backup) {
-        (StoredSession::Valid(primary), StoredSession::Valid(_)) => Ok(Some(primary)),
+        (StoredSession::Valid(primary), StoredSession::Valid(_)) => Ok(Some(*primary)),
         (StoredSession::Valid(session), StoredSession::Missing | StoredSession::Invalid)
         | (StoredSession::Missing | StoredSession::Invalid, StoredSession::Valid(session)) => {
-            Ok(Some(session))
+            Ok(Some(*session))
         }
         (StoredSession::Missing, StoredSession::Missing) => Ok(None),
         _ => Err(SessionError::ExistingSessionInvalid),

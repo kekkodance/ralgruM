@@ -922,20 +922,21 @@ impl PlaybackModel {
         }
         let progress_target = self.download_progress.clone();
         let progress_callback: ProgressCallback = Arc::new(move |update: ProgressUpdate| {
-            if let Ok(mut progress) = progress_target.lock() {
-                if progress.generation == generation && !progress.fully_buffered {
-                    progress.downloaded = update.downloaded;
-                    progress.total = update.total;
-                    if update.completed {
-                        progress.fully_buffered = true;
-                    }
-                    if let Some(fraction) = update.buffered_fraction {
-                        progress.buffered_fraction = Some(
-                            progress
-                                .buffered_fraction
-                                .map_or(fraction, |current| current.max(fraction)),
-                        );
-                    }
+            if let Ok(mut progress) = progress_target.lock()
+                && progress.generation == generation
+                && !progress.fully_buffered
+            {
+                progress.downloaded = update.downloaded;
+                progress.total = update.total;
+                if update.completed {
+                    progress.fully_buffered = true;
+                }
+                if let Some(fraction) = update.buffered_fraction {
+                    progress.buffered_fraction = Some(
+                        progress
+                            .buffered_fraction
+                            .map_or(fraction, |current| current.max(fraction)),
+                    );
                 }
             }
         });
@@ -1394,7 +1395,7 @@ impl PlaybackModel {
         cx.spawn(async move |_, cx| {
             let request_succeeded = task.await.is_ok_and(|succeeded| succeeded);
             if listen_history_changed_on_completion(completed_listen, request_succeeded) {
-                let _ = entity.update(cx, |this, cx| {
+                entity.update(cx, |this, cx| {
                     if !listen_history_scope_matches(
                         &account_scope,
                         &this.account.read(cx).library_scope(),
@@ -1459,7 +1460,7 @@ impl PlaybackModel {
             .spawn(async move { resolver.record_soundcloud_listen(report, token).await });
         cx.spawn(async move |_, cx| {
             if task.await.is_ok_and(|succeeded| succeeded) {
-                let _ = entity.update(cx, |this, cx| {
+                entity.update(cx, |this, cx| {
                     if !listen_history_scope_matches(
                         &account_scope,
                         &this.account.read(cx).library_scope(),
@@ -1543,13 +1544,12 @@ impl PlaybackModel {
             self.cancel_pending_load(cx);
             return;
         }
-        if self.state.status == PlaybackStatus::Ended {
-            if let Some(index) = self.state.current_index {
-                if let Some(generation) = self.state.select(index) {
-                    self.start(generation, cx);
-                    return;
-                }
-            }
+        if self.state.status == PlaybackStatus::Ended
+            && let Some(index) = self.state.current_index
+            && let Some(generation) = self.state.select(index)
+        {
+            self.start(generation, cx);
+            return;
         }
         let may_fade = self.user_toggle_may_fade(cx);
         if let Some(playing) = self.state.toggle() {
@@ -1583,13 +1583,12 @@ impl PlaybackModel {
         self.consecutive_failures = 0;
         self.cancel_user_fade_and_sync_transport();
         self.cancel_seek_slider_interaction();
-        if self.state.status == PlaybackStatus::Ended {
-            if let Some(index) = self.state.current_index {
-                if let Some(generation) = self.state.select(index) {
-                    self.start(generation, cx);
-                    return;
-                }
-            }
+        if self.state.status == PlaybackStatus::Ended
+            && let Some(index) = self.state.current_index
+            && let Some(generation) = self.state.select(index)
+        {
+            self.start(generation, cx);
+            return;
         }
         match self.state.previous() {
             PreviousAction::None => {}

@@ -160,7 +160,7 @@ where
             {
                 let prefetch_host = host.clone();
                 let prefetch_card = card.clone();
-                let _ = prefetch_host.update(cx, |view, cx| {
+                prefetch_host.update(cx, |view, cx| {
                     view.prefetch_card_info(prefetch_card, cx);
                 });
             }
@@ -536,7 +536,7 @@ where
                 // fetches on its own when prefetch has not completed.
                 let prefetch_search = search.clone();
                 let prefetch_card = card.clone();
-                let _ = prefetch_search.update(cx, |view, cx| {
+                prefetch_search.update(cx, |view, cx| {
                     view.prefetch_card_info(prefetch_card, cx);
                 });
             }

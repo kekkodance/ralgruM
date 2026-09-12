@@ -131,10 +131,10 @@ pub(crate) fn preload_track_info(
     if cached_track_info(&key).is_some() {
         return;
     }
-    if let Ok(mut in_flight) = TRACK_INFO_IN_FLIGHT.lock() {
-        if !in_flight.insert(key.clone()) {
-            return;
-        }
+    if let Ok(mut in_flight) = TRACK_INFO_IN_FLIGHT.lock()
+        && !in_flight.insert(key.clone())
+    {
+        return;
     }
     runtime.spawn(async move {
         fetch_and_store_track_info(provider, &track_id, deezer_arl, soundcloud_token).await;

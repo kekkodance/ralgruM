@@ -61,7 +61,7 @@ pub(super) fn normalize_reference(playlist_id: &str, value: String) -> String {
     let valid = matches!(components.next(), Some(Component::Normal(part)) if part == COVERS_DIRECTORY)
         && matches!(components.next(), Some(Component::Normal(file)) if valid_filename(playlist_id, file.to_string_lossy().as_ref()))
         && components.next().is_none();
-    valid.then_some(value).unwrap_or_default()
+    if valid { value } else { Default::default() }
 }
 
 pub(super) fn resolve(directory: &Path, playlist_id: &str, reference: &str) -> Option<PathBuf> {

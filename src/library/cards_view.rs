@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, App, KeyDownEvent, StatefulInteractiveElement, Window, div, prelude::*, px, rgb,
 };
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use crate::{
     browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
@@ -141,7 +141,7 @@ pub(super) fn virtualized_cards(
     );
     let cards = Arc::new(cards.to_vec());
     let host = host.clone();
-    let snapshot = Arc::new(CardsRenderSnapshot::from_view(view, None));
+    let snapshot = Rc::new(CardsRenderSnapshot::from_view(view, None));
     let section_identity: Arc<str> = section_identity.to_owned().into();
     let list = gpui::list(state.clone(), move |row_index, _window, _app| {
         let range = virtualization::card_grid_row_range(cards.len(), layout.columns, row_index)
@@ -385,7 +385,7 @@ pub(super) fn cards_with_snapshot(
                 } else {
                     element.on_hover(move |hovered, _, cx| {
                         if *hovered {
-                            let _ = prefetch_host.update(cx, |view, cx| {
+                            prefetch_host.update(cx, |view, cx| {
                                 view.prefetch_card_info(prefetch_card.clone(), cx);
                             });
                         }

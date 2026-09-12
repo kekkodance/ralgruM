@@ -5,7 +5,7 @@ use gpui_component::{
     Icon, Sizable,
     button::{Button, ButtonVariants},
 };
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, rc::Rc, sync::Arc};
 
 use crate::{
     app_button::primary_button,
@@ -633,7 +633,7 @@ fn render_provider_header_snapshot(
     let route = view.state.route();
     let mut actions = Vec::new();
     if let Some(favorite) = snapshot.favorite.as_ref() {
-        actions.push(render_detail_favorite(&favorite, host));
+        actions.push(render_detail_favorite(favorite, host));
     }
     if let Some((provider, id)) = detail_edit_id(view) {
         actions.push(render_detail_edit(&id, provider, host));
@@ -670,7 +670,7 @@ fn provider_detail_route(
         page.album_info
             .as_ref()
             .and_then(|info| nonempty_copy(&info.release_date))
-            .unwrap_or_else(|| route.release_date.as_str())
+            .unwrap_or(route.release_date.as_str())
             .to_owned()
     } else {
         route.release_date.clone()
@@ -748,15 +748,17 @@ fn root_header_page(
 
 fn flow_detail_header_page(route: &Route, loaded_page: Option<&Page>, smart_mix: bool) -> Page {
     let (title, description) = flow_detail_header_copy(route, loaded_page, smart_mix);
-    let subtitle = smart_mix
-        .then(|| {
+    let subtitle = if smart_mix {
+        {
             loaded_page
                 .and_then(|page| nonempty_copy(&page.subtitle))
                 .or_else(|| nonempty_copy(&route.subtitle))
                 .unwrap_or("")
                 .to_owned()
-        })
-        .unwrap_or_default();
+        }
+    } else {
+        Default::default()
+    };
     let (show_count, total, count_noun) = loaded_page
         .map(|page| {
             (
@@ -797,7 +799,7 @@ fn detail_header_page(route: &Route, loaded_page: Option<&Page>) -> Page {
         });
     let artwork = loaded_page
         .and_then(|page| nonempty_copy(&page.artwork))
-        .unwrap_or_else(|| route.artwork.as_str());
+        .unwrap_or(route.artwork.as_str());
     let (show_count, total, count_noun) = loaded_page
         .map(|page| {
             (
@@ -1333,7 +1335,7 @@ fn render_section_page_list(
             controls_mode as u8,
             controls_catalog_option.as_deref().unwrap_or_default()
         ));
-        builders.push(Arc::new(move |_, _app| {
+        builders.push(Rc::new(move |_, _app| {
             flow_controls::render_page_controls_snapshot(
                 controls_kind,
                 controls_mode,
@@ -1416,7 +1418,7 @@ fn render_section_page_list(
             section.preview_limit.map_or(usize::MAX, |limit| limit),
             section.card_row,
         ));
-        builders.push(Arc::new(move |_, _| render_section_header(&section_header)));
+        builders.push(Rc::new(move |_, _| render_section_header(&section_header)));
         if section.tracks.is_empty() && section.cards.is_empty() {
             let empty_section = Arc::new(section.clone());
             page_items.push(super::virtualization::PageItem::Tail(section_index));
@@ -1424,12 +1426,12 @@ fn render_section_page_list(
                 "empty:{section_index}:{}",
                 empty_section.empty_message
             ));
-            builders.push(Arc::new(move |_, _| render_section_empty(&empty_section)));
+            builders.push(Rc::new(move |_, _| render_section_empty(&empty_section)));
             continue;
         }
         match section.layout {
             SectionLayout::Tracks => {
-                let rows = Arc::new(super::track_view::LibraryTrackRows::new(
+                let rows = Rc::new(super::track_view::LibraryTrackRows::new(
                     &section.tracks,
                     section.preview_limit,
                     narrow,
@@ -1461,7 +1463,7 @@ fn render_section_page_list(
                         .unwrap_or_else(|| format!("row-{index}"));
                     page_items.push(super::virtualization::PageItem::Track(index));
                     item_identities.push(format!("track:{section_index}:{identity}"));
-                    builders.push(Arc::new(move |_, app| {
+                    builders.push(Rc::new(move |_, app| {
                         div()
                             .w_full()
                             .h(super::virtualization::row_height())
@@ -1475,7 +1477,7 @@ fn render_section_page_list(
                 if section.preview_limit.is_none() {
                     let cards = Arc::new(section.cards.clone());
                     let section_identity: Arc<str> = format!("section-{section_index}").into();
-                    let cards_snapshot = Arc::new(
+                    let cards_snapshot = Rc::new(
                         super::cards_view::CardsRenderSnapshot::from_view(view, None),
                     );
                     let row_count = super::virtualization::card_grid_row_count(
@@ -1506,7 +1508,7 @@ fn render_section_page_list(
                             row_index,
                         });
                         item_identities.push(row_identity);
-                        builders.push(Arc::new(move |_, _app| {
+                        builders.push(Rc::new(move |_, _app| {
                             let start = row_index * card_layout.columns;
                             let end = (start + card_layout.columns).min(cards.len());
                             div()
@@ -1543,7 +1545,7 @@ fn render_section_page_list(
                         )
                     });
                     let cards_snapshot =
-                        Arc::new(super::cards_view::CardsRenderSnapshot::from_view(
+                        Rc::new(super::cards_view::CardsRenderSnapshot::from_view(
                             view,
                             scroll_id.as_deref(),
                         ));
@@ -1557,7 +1559,7 @@ fn render_section_page_list(
                             .collect::<Vec<_>>()
                             .join("|")
                     ));
-                    builders.push(Arc::new(move |_, _app| {
+                    builders.push(Rc::new(move |_, _app| {
                         super::cards_view::cards_with_snapshot(
                             &cards_snapshot,
                             &host,
@@ -1599,7 +1601,7 @@ fn render_section_page_list(
     };
     browser_scroll_surface(
         "library-section-page-list-scroll",
-        super::virtualization::page_list(state.clone(), Arc::new(builders), narrow),
+        super::virtualization::page_list(state.clone(), Rc::new(builders), narrow),
         BrowserScrollTarget::List(state),
         browser_scroll,
     )
@@ -1807,7 +1809,7 @@ fn reorder_for_page(
             route.id.clone()
         };
         return (page.tracks.len() > 1 && view.query(cx).trim().is_empty())
-            .then(|| (identity, true));
+            .then_some((identity, true));
     }
     if !super::playlist_reorder::route_eligible(route.source, &route.action, &route.id, &route.id) {
         return None;

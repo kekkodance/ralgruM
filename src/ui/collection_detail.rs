@@ -139,7 +139,8 @@ pub(crate) fn collection_card_content_with_presentation(
 ) -> AnyElement {
     let badge = (!badge.trim().is_empty()).then_some(badge);
     let effective_privacy = presentation.show_privacy.then_some(is_private).flatten();
-    let content = crate::music_ui::collection_card_with_title_alignment(
+
+    crate::music_ui::collection_card_with_title_alignment(
         title,
         subtitle,
         artwork,
@@ -149,8 +150,7 @@ pub(crate) fn collection_card_content_with_presentation(
         effective_privacy,
         id,
         presentation.title_alignment,
-    );
-    content
+    )
 }
 
 pub(crate) struct ProviderHeaderSpec {

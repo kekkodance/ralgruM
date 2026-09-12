@@ -133,17 +133,17 @@ mod tests {
     #[test]
     fn plan_quotes_executable_paths_with_spaces_and_unicode() {
         let plan = RegistrationPlan::for_executable(Path::new(
-            r#"C:\Users\Kekko\Music Apps\ralgruM 日本.exe"#,
+            r#"C:\Users\Test User\Music Apps\ralgruM 日本.exe"#,
         ))
         .unwrap();
 
         assert_eq!(
             plan.default_icon,
-            r#""C:\Users\Kekko\Music Apps\ralgruM 日本.exe",0"#
+            r#""C:\Users\Test User\Music Apps\ralgruM 日本.exe",0"#
         );
         assert_eq!(
             plan.open_command,
-            r#""C:\Users\Kekko\Music Apps\ralgruM 日本.exe" --open-url="%1""#
+            r#""C:\Users\Test User\Music Apps\ralgruM 日本.exe" --open-url="%1""#
         );
     }
 

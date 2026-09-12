@@ -38,9 +38,11 @@ fn heading_visible(route: &Route, requested: bool) -> bool {
 pub(super) fn track_count(available_height: f32, collection_heading: bool) -> usize {
     track_skeleton_count(
         available_height,
-        collection_heading
-            .then_some(COLLECTION_HEADING_HEIGHT_PX)
-            .unwrap_or_default(),
+        if collection_heading {
+            COLLECTION_HEADING_HEIGHT_PX
+        } else {
+            Default::default()
+        },
     )
 }
 

@@ -147,10 +147,10 @@ async fn validate_deezer(
             return Err(error);
         }
     };
-    if let Some(expected) = user_id.filter(|value| !value.trim().is_empty()) {
-        if expected.trim() != profile.user_id {
-            return Err("The Deezer user ID does not match the ARL session.".into());
-        }
+    if let Some(expected) = user_id.filter(|value| !value.trim().is_empty())
+        && expected.trim() != profile.user_id
+    {
+        return Err("The Deezer user ID does not match the ARL session.".into());
     }
     Ok(ValidatedCredentials {
         desktop: arl.expose().to_owned(),

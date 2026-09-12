@@ -524,15 +524,14 @@ fn open_card_info_dialog_inner<T: AlbumInfoCacheHost + 'static>(
     let Some(route) = DetailRoute::from_card(&card) else {
         return;
     };
-    if let Some((prefetched_route, prefetched_info)) = prefetched {
-        if prefetched_route.provider == route.provider
-            && prefetched_route.kind == route.kind
-            && prefetched_route.id == route.id
-            && prefetched_info.has_content()
-        {
-            let _ = open_album_info_dialog_entity(prefetched_route, prefetched_info, window, cx);
-            return;
-        }
+    if let Some((prefetched_route, prefetched_info)) = prefetched
+        && prefetched_route.provider == route.provider
+        && prefetched_route.kind == route.kind
+        && prefetched_route.id == route.id
+        && prefetched_info.has_content()
+    {
+        let _ = open_album_info_dialog_entity(prefetched_route, prefetched_info, window, cx);
+        return;
     }
     // Seed the dialog with what the card already knows (artist and release
     // date, plus the playlist track count from the card badge). Rows for

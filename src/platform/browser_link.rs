@@ -287,7 +287,7 @@ pub(crate) fn parse_ralgrum_url(input: &str) -> Option<BrowserEntity> {
     if !lower.starts_with("ralgrum://open") && !lower.starts_with("ralgrum:open") {
         return None;
     }
-    let query = input.splitn(2, '?').nth(1).unwrap_or("");
+    let query = input.split_once('?').map(|x| x.1).unwrap_or("");
     let mut provider = None;
     let mut kind = None;
     let mut id = String::new();

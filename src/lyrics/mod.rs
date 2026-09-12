@@ -589,18 +589,18 @@ impl LyricsPanel {
                     return;
                 }
                 if primary_done {
-                    if let Ok(value) = alternate_result {
-                        if this.cache.get(&alternate_key).is_none() {
-                            this.cache.set(alternate_key.clone(), value);
-                        }
+                    if let Ok(value) = alternate_result
+                        && this.cache.get(&alternate_key).is_none()
+                    {
+                        this.cache.set(alternate_key.clone(), value);
                     }
                     return;
                 }
                 if this.response.is_some() {
-                    if let Ok(value) = alternate_result {
-                        if this.cache.get(&alternate_key).is_none() {
-                            this.cache.set(alternate_key.clone(), value);
-                        }
+                    if let Ok(value) = alternate_result
+                        && this.cache.get(&alternate_key).is_none()
+                    {
+                        this.cache.set(alternate_key.clone(), value);
                     }
                     return;
                 }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{AnyElement, Entity, FontWeight, KeyDownEvent, px, rgb};
@@ -78,9 +78,11 @@ struct DiscoverSectionGeometry {
 
 fn section_heading_height(has_subtitle: bool) -> f32 {
     DISCOVER_SECTION_TITLE_HEIGHT_PX
-        + has_subtitle
-            .then_some(DISCOVER_SECTION_TEXT_GAP_PX + DISCOVER_SECTION_SUBTITLE_HEIGHT_PX)
-            .unwrap_or(0.)
+        + if has_subtitle {
+            DISCOVER_SECTION_TEXT_GAP_PX + DISCOVER_SECTION_SUBTITLE_HEIGHT_PX
+        } else {
+            0.
+        }
 }
 
 fn section_geometry(narrow: bool, has_subtitle: bool) -> DiscoverSectionGeometry {
@@ -232,7 +234,7 @@ fn render_feed(
         entries.len(),
         row_height,
     );
-    let entries = Arc::new(entries);
+    let entries = Rc::new(entries);
     let host = host.clone();
     let account = view.account.clone();
     let list = gpui::list(state.clone(), move |index, _window, _app| {
@@ -267,7 +269,7 @@ fn append_loading_overdraw(
 ) {
     let loading_providers: Vec<_> = source
         .providers()
-        .into_iter()
+        .iter()
         .copied()
         .filter(|provider| {
             matches!(

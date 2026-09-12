@@ -302,11 +302,11 @@ impl ToastStack {
     }
 
     fn set_hovered(&mut self, id: u64, hovered: bool, cx: &mut Context<Self>) {
-        if let Some(toast) = self.toasts.iter_mut().find(|toast| toast.id == id) {
-            if toast.hovered != hovered {
-                toast.hovered = hovered;
-                cx.notify();
-            }
+        if let Some(toast) = self.toasts.iter_mut().find(|toast| toast.id == id)
+            && toast.hovered != hovered
+        {
+            toast.hovered = hovered;
+            cx.notify();
         }
     }
 

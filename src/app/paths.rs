@@ -167,9 +167,9 @@ fn paths_refer_to_same_location(left: &Path, right: &Path) -> bool {
                     .to_ascii_lowercase(),
             )
         }
-        return key(left)
+        key(left)
             .zip(key(right))
-            .is_some_and(|(left, right)| left == right);
+            .is_some_and(|(left, right)| left == right)
     }
     #[cfg(not(windows))]
     false

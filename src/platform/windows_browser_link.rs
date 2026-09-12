@@ -132,13 +132,10 @@ fn prepare_with_names_and_queue(
     let mutex = OwnedKernelHandle(mutex);
 
     if already_owned {
-        if let Some((raw, _entity)) = valid {
-            if enqueue(&raw).is_none() {
-                crate::diagnostics::event(
-                    "WARN",
-                    "could not queue browser link for the running app",
-                );
-            }
+        if let Some((raw, _entity)) = valid
+            && enqueue(&raw).is_none()
+        {
+            crate::diagnostics::event("WARN", "could not queue browser link for the running app");
         }
         if !signal_owner(event_name) {
             crate::diagnostics::event(

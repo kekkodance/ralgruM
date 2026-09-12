@@ -440,7 +440,7 @@ impl LibraryClient {
                         if item
                             .get("PARENT_USERNAME")
                             .and_then(Value::as_str)
-                            .map_or(true, |s| s.trim().is_empty())
+                            .is_none_or(|s| s.trim().is_empty())
                         {
                             item["PARENT_USERNAME"] = Value::String(owner.to_owned());
                         }

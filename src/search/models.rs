@@ -527,10 +527,10 @@ impl SearchState {
     }
 
     fn derive_snapshot(&self) -> Option<SearchCacheSnapshot> {
-        if self.source == Source::All {
-            if let Some(merged) = self.merge_provider_snapshots() {
-                return Some(merged);
-            }
+        if self.source == Source::All
+            && let Some(merged) = self.merge_provider_snapshots()
+        {
+            return Some(merged);
         }
         let query = self.query.clone();
         let parents = [

@@ -388,7 +388,7 @@ impl Render for PlaybackView {
         let favorite_button = favorite_key.is_some().then(|| {
             let (feedback_start, feedback_end) = favorite_feedback_opacity(favorite_pending);
             let interactive = Rc::new(Cell::new(
-                favorite_visual.map_or(true, |visual| !visual.active),
+                favorite_visual.is_none_or(|visual| !visual.active),
             ));
             let listener_interactive = interactive.clone();
             let button = bare_action_button_with_interactivity(
@@ -598,13 +598,13 @@ impl Render for PlaybackView {
             );
 
         let center = if !narrow && layout_visual.active {
-            let center_layout_visual = layout_visual.clone();
+            let center_layout_visual = layout_visual;
             center
                 .with_animation(
                     ("player-center-layout", layout_visual.epoch),
                     crate::motion::panel(),
                     move |this, delta| {
-                        let width = center_layout_visual.clone().at(delta).center_width;
+                        let width = center_layout_visual.at(delta).center_width;
                         this.w(px(width)).min_w(px(width))
                     },
                 )
@@ -648,7 +648,7 @@ impl Render for PlaybackView {
         };
 
         let right = if !narrow && layout_visual.active {
-            let right_layout_visual = layout_visual.clone();
+            let right_layout_visual = layout_visual;
             div()
                 .w(px(side_width))
                 .min_w(px(side_width))
@@ -659,7 +659,7 @@ impl Render for PlaybackView {
                     ("player-right-layout", layout_visual.epoch),
                     crate::motion::panel(),
                     move |this, delta| {
-                        let width = right_layout_visual.clone().at(delta).side_width;
+                        let width = right_layout_visual.at(delta).side_width;
                         this.w(px(width)).min_w(px(width))
                     },
                 )
@@ -674,13 +674,13 @@ impl Render for PlaybackView {
             .min_w_0()
             .child(current_block);
         let current_column = if !narrow && layout_visual.active {
-            let current_layout_visual = layout_visual.clone();
+            let current_layout_visual = layout_visual;
             current_column
                 .with_animation(
                     ("player-current-column-layout", layout_visual.epoch),
                     crate::motion::panel(),
                     move |this, delta| {
-                        let width = current_layout_visual.clone().at(delta).side_width;
+                        let width = current_layout_visual.at(delta).side_width;
                         this.w(px(width)).min_w(px(width))
                     },
                 )
@@ -703,13 +703,13 @@ impl Render for PlaybackView {
             .child(right);
 
         let player_row = if !narrow && layout_visual.active {
-            let row_layout_visual = layout_visual.clone();
+            let row_layout_visual = layout_visual;
             player_row
                 .with_animation(
                     ("player-row-layout", layout_visual.epoch),
                     crate::motion::panel(),
                     move |this, delta| {
-                        let layout = row_layout_visual.clone().at(delta);
+                        let layout = row_layout_visual.at(delta);
                         this.gap(px(layout.column_gap)).px(px(layout.padding))
                     },
                 )

@@ -935,7 +935,7 @@ impl StreamResolver {
         let owned_host = host.eq_ignore_ascii_case("soundcloud.com")
             || host.to_ascii_lowercase().ends_with(".soundcloud.com");
         if !url.scheme().eq_ignore_ascii_case("https")
-            || !url.port().is_none_or(|port| port == 443)
+            || url.port().is_some_and(|port| port != 443)
             || !owned_host
             || !url.username().is_empty()
             || url.password().is_some()

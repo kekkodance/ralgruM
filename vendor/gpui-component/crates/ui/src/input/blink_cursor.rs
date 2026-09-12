@@ -1,4 +1,4 @@
-use instant::Duration;
+use web_time::Duration;
 use gpui::{Context, Pixels, Task, px};
 
 static INTERVAL: Duration = Duration::from_millis(500);

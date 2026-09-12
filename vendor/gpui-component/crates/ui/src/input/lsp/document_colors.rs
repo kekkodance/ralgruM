@@ -1,5 +1,5 @@
 use std::ops::Range;
-use instant::Duration;
+use web_time::Duration;
 use anyhow::Result;
 use gpui::{App, Context, Hsla, Task, Window};
 use lsp_types::ColorInformation;

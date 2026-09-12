@@ -736,9 +736,8 @@ impl SearchView {
             let favorites = self.favorites.read(cx);
             self.favorite_actions
                 .iter()
-                .filter_map(|(key, action)| {
-                    (!favorites.pending(key)).then(|| (key.clone(), action.expected))
-                })
+                .filter(|&(key, _)| !favorites.pending(key))
+                .map(|(key, action)| (key.clone(), action.expected))
                 .collect::<Vec<_>>()
         };
         if completed.is_empty() {
@@ -2459,17 +2458,17 @@ impl SearchView {
             return false;
         }
         let account = self.account.read(cx);
-        if let Some(profile) = account.deezer_profile() {
-            if !profile.username.is_empty()
-                && profile.username.eq_ignore_ascii_case(subtitle.trim())
-            {
-                return true;
-            }
+        if let Some(profile) = account.deezer_profile()
+            && !profile.username.is_empty()
+            && profile.username.eq_ignore_ascii_case(subtitle.trim())
+        {
+            return true;
         }
-        if let Some(user_id) = account.deezer_user_id() {
-            if !user_id.is_empty() && user_id.trim() == subtitle.trim() {
-                return true;
-            }
+        if let Some(user_id) = account.deezer_user_id()
+            && !user_id.is_empty()
+            && user_id.trim() == subtitle.trim()
+        {
+            return true;
         }
         false
     }

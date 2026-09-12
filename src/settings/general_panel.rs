@@ -503,7 +503,7 @@ fn format_storage_size(bytes: u64) -> String {
     }
 }
 pub(super) fn cache_limit_label(limit_mb: u64) -> String {
-    if limit_mb >= 1024 && limit_mb % 1024 == 0 {
+    if limit_mb >= 1024 && limit_mb.is_multiple_of(1024) {
         format!("{} GB", limit_mb / 1024)
     } else {
         format!("{limit_mb} MB")

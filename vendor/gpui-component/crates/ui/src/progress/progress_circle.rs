@@ -6,7 +6,7 @@ use gpui::{
     ease_in_out, px, relative,
 };
 use gpui::{Bounds, div};
-use instant::Duration;
+use web_time::Duration;
 use std::f32::consts::TAU;
 
 use super::ProgressState;

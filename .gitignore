@@ -3,6 +3,8 @@
 /target/
 /lyrics-core/target/
 /target-*/
+/vendor/**/target/
+/vendor/gpui-component/Cargo.lock
 
 # Local application and build artifacts
 /dist/

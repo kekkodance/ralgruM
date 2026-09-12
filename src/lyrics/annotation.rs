@@ -195,13 +195,9 @@ pub(super) fn panel(
         AnnotationState::Ready(value) => {
             let count = value.annotations.len();
             let selected = selected_index.min(count.saturating_sub(1));
-            let footer = if let Some(annotation) = value.annotations.get(selected) {
-                Some(contribution_footer(
-                    annotation, selected, count, on_prev, on_next,
-                ))
-            } else {
-                None
-            };
+            let footer = value.annotations.get(selected).map(|annotation| {
+                contribution_footer(annotation, selected, count, on_prev, on_next)
+            });
             (ready_body(value, selected), footer)
         }
         AnnotationState::Error(error) => (error_body(error), None),

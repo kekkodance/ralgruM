@@ -141,9 +141,11 @@ impl MediaHotkeyRegistration {
             let had_state = self.attempted || self.registered_mask != 0;
             let registered_mask = self.registered_mask;
             *self = Self::default();
-            had_state
-                .then_some(MediaHotkeySync::Unregister(registered_mask))
-                .unwrap_or(MediaHotkeySync::None)
+            if had_state {
+                MediaHotkeySync::Unregister(registered_mask)
+            } else {
+                MediaHotkeySync::None
+            }
         }
     }
 
@@ -827,7 +829,7 @@ fn create_transport_icon(
     height: usize,
 ) -> Result<HICON, String> {
     let bgra = transport_pixels(glyph, width, height);
-    let mut bitmap_info = BITMAPINFO {
+    let bitmap_info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: width as i32,
@@ -840,17 +842,9 @@ fn create_transport_icon(
         ..Default::default()
     };
     let mut color_bits = std::ptr::null_mut();
-    let color_bitmap = unsafe {
-        CreateDIBSection(
-            None,
-            &mut bitmap_info,
-            DIB_RGB_COLORS,
-            &mut color_bits,
-            None,
-            0,
-        )
-    }
-    .map_err(|error| format!("could not create taskbar icon bitmap: {error}"))?;
+    let color_bitmap =
+        unsafe { CreateDIBSection(None, &bitmap_info, DIB_RGB_COLORS, &mut color_bits, None, 0) }
+            .map_err(|error| format!("could not create taskbar icon bitmap: {error}"))?;
     unsafe {
         std::ptr::copy_nonoverlapping(bgra.as_ptr(), color_bits.cast::<u8>(), bgra.len());
     }

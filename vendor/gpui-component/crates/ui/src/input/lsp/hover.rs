@@ -1,4 +1,4 @@
-use instant::Duration;
+use web_time::Duration;
 use anyhow::Result;
 use gpui::{App, Context, Task, Window};
 use ropey::Rope;

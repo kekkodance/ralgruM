@@ -131,7 +131,7 @@ pub(crate) fn neutral_secondary_button(
     icon_size: f32,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    let control = div()
+    div()
         .id(id)
         .role(Role::Button)
         .aria_label(label)
@@ -190,9 +190,7 @@ pub(crate) fn neutral_secondary_button(
                 ),
         )
         .when(!options.icon_only, |this| this.child(label))
-        .on_click(on_click);
-
-    control
+        .on_click(on_click)
 }
 
 pub(super) fn secondary_action_button(

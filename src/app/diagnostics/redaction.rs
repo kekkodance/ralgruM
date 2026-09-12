@@ -91,10 +91,11 @@ fn assignment_redaction_range(message: &str, start: usize) -> Option<(usize, usi
     }
     if cookie || authorization {
         let quoted_header = is_inside_double_quoted_string(message, start);
-        if authorization && !quoted_header {
-            if let Some(scheme_end) = auth_scheme_end(message, value_start, AUTH_SCHEMES) {
-                return authorization_value_range(message, auth_value_start(message, scheme_end));
-            }
+        if authorization
+            && !quoted_header
+            && let Some(scheme_end) = auth_scheme_end(message, value_start, AUTH_SCHEMES)
+        {
+            return authorization_value_range(message, auth_value_start(message, scheme_end));
         }
         let end = header_value_end(message, value_start, quoted_header);
         return (value_start < end).then_some((value_start, end));
@@ -115,10 +116,10 @@ fn header_value_end(message: &str, start: usize, quoted_header: bool) -> usize {
         if character == '\\' {
             // Escaped quotes belong to the header, not its enclosing JSON string.
             index += 1;
-            if let Some(escaped) = message[index..].chars().next() {
-                if !matches!(escaped, '\r' | '\n') {
-                    index += escaped.len_utf8();
-                }
+            if let Some(escaped) = message[index..].chars().next()
+                && !matches!(escaped, '\r' | '\n')
+            {
+                index += escaped.len_utf8();
             }
             continue;
         }
@@ -194,12 +195,10 @@ fn authorization_value_range(message: &str, start: usize) -> Option<(usize, usiz
     let separator = skip_horizontal_whitespace(message, parameter_end);
     if is_sensitive_key(&message[start..parameter_end])
         && message.as_bytes().get(separator) == Some(&b'=')
-    {
-        if let Some(range) =
+        && let Some(range) =
             nonempty_value_range(message, skip_horizontal_whitespace(message, separator + 1))
-        {
-            return Some(range);
-        }
+    {
+        return Some(range);
     }
     nonempty_value_range(message, start)
 }

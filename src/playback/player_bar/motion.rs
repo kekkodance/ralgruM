@@ -55,11 +55,9 @@ impl BufferedMotion {
         } else if reduced_motion {
             self.from = self.target;
             self.started_at = None;
-        } else if self.started_at.is_some() {
-            if self.animation_progress(now) >= 1. {
-                self.from = self.target;
-                self.started_at = None;
-            }
+        } else if self.started_at.is_some() && self.animation_progress(now) >= 1. {
+            self.from = self.target;
+            self.started_at = None;
         }
 
         BufferedVisual {

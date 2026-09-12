@@ -121,10 +121,11 @@ impl AlbumInfoPrefetch {
         if album_info_for_page(&page).is_none() {
             return;
         }
-        if self.pages.len() >= MAX_CACHED_ALBUM_INFO_PAGES && !self.pages.contains_key(&key) {
-            if let Some(oldest) = self.pages.keys().next().cloned() {
-                self.pages.remove(&oldest);
-            }
+        if self.pages.len() >= MAX_CACHED_ALBUM_INFO_PAGES
+            && !self.pages.contains_key(&key)
+            && let Some(oldest) = self.pages.keys().next().cloned()
+        {
+            self.pages.remove(&oldest);
         }
         self.pages.insert(key, page);
     }

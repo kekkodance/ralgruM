@@ -98,11 +98,11 @@ impl ResponsiveModeMotion {
         if reduced_motion {
             self.from = self.target;
             self.started_at = None;
-        } else if let Some(started_at) = self.started_at {
-            if now.saturating_duration_since(started_at) >= CONTENT_DURATION {
-                self.from = self.target;
-                self.started_at = None;
-            }
+        } else if let Some(started_at) = self.started_at
+            && now.saturating_duration_since(started_at) >= CONTENT_DURATION
+        {
+            self.from = self.target;
+            self.started_at = None;
         }
 
         ResponsiveModeVisual {

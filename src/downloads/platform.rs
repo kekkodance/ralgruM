@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn windows_reveal_args_keep_paths_with_spaces_as_one_argument() {
-        let path = Path::new(r"C:\Users\Kekko\Music\Track with spaces.mp3");
+        let path = Path::new(r"C:\Users\Test User\Music\Track with spaces.mp3");
 
         assert_eq!(windows_reveal_args(path).0, "explorer.exe");
         assert_eq!(windows_reveal_args(path).1, "/select,");

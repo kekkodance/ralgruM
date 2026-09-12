@@ -127,6 +127,7 @@ fn create_log_file(path: &Path) -> std::io::Result<File> {
     }
     OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(path)

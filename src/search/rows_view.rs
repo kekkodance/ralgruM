@@ -71,7 +71,7 @@ impl SearchTrackRows {
         let virtualized = !preview && !tracks.is_empty();
         let displayed_count = crate::library::virtualization::displayed_track_count(
             tracks.len(),
-            (!virtualized).then_some(preview.then_some(5).unwrap_or(tracks.len())),
+            (!virtualized).then_some(if preview { 5 } else { tracks.len() }),
         );
         let rendered_tracks = Arc::new(
             tracks

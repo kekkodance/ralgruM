@@ -456,16 +456,11 @@ impl SidebarBottomVisual {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 enum RectSelectorTransition {
+    #[default]
     Interaction,
     Responsive,
-}
-
-impl Default for RectSelectorTransition {
-    fn default() -> Self {
-        Self::Interaction
-    }
 }
 
 impl RectSelectorTransition {

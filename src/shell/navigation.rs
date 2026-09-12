@@ -93,8 +93,7 @@ impl RalgrumApp {
             .read(cx)
             .result_type()
             .label()
-            .to_ascii_lowercase()
-            .into();
+            .to_ascii_lowercase();
         let (service, category) = self.library.read(cx).selection();
         saved.library_service = match service {
             LibraryService::Local => StoredLibraryService::Local,

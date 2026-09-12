@@ -214,13 +214,12 @@ impl StreamResolver {
         })
         .await
         .ok();
-        if let Some(head) = head {
-            if validate_media_response_url(head.url(), is_soundcloud).is_ok()
-                && let Some(size) =
-                    remote_size_from_response(head.status(), head.headers(), head.content_length())
-            {
-                return Some(size);
-            }
+        if let Some(head) = head
+            && validate_media_response_url(head.url(), is_soundcloud).is_ok()
+            && let Some(size) =
+                remote_size_from_response(head.status(), head.headers(), head.content_length())
+        {
+            return Some(size);
         }
 
         if cancellation.is_cancelled() {

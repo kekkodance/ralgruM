@@ -202,7 +202,7 @@ pub(super) fn register_volume_pointer_handlers(
         }
         if event.button == MouseButton::Left {
             let released = finish_volume_pointer_interaction(&up_state);
-            if let Some(_) = released {
+            if released.is_some() {
                 let volume = pointer_seek_fraction(f32::from(event.position.x), up_bounds);
                 up_model.update(cx, |model, cx| model.set_volume(volume, cx));
             } else if !matches!(up_state.get().phase, VolumePointerPhase::DirectRelease) {

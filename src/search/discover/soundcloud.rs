@@ -174,9 +174,11 @@ fn parse_system_playlist(item: &Value) -> Option<DiscoverItem> {
     let track_ids = system_playlist_track_ids(item);
     Some(DiscoverItem {
         card,
-        action: (!track_ids.is_empty())
-            .then_some(DiscoverAction::OpenSoundCloudSelection(track_ids))
-            .unwrap_or(DiscoverAction::None),
+        action: if !track_ids.is_empty() {
+            DiscoverAction::OpenSoundCloudSelection(track_ids)
+        } else {
+            DiscoverAction::None
+        },
     })
 }
 

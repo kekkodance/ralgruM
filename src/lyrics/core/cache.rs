@@ -44,10 +44,10 @@ impl LyricsCacheStore for LyricsCache {
         }
         self.entries.insert(key.clone(), value);
         self.order.push_back(key);
-        if self.order.len() > self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
-            }
+        if self.order.len() > self.capacity
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.entries.remove(&oldest);
         }
     }
 }
