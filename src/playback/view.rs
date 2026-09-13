@@ -1596,6 +1596,9 @@ impl PlaybackModel {
         self.cancel_user_fade();
         self.cancel_seek_slider_interaction();
         self.standby = StandbyPhase::Idle;
+        self.loading_from_cache = false;
+        self.resolved_quality = None;
+        self.current_audio_info = None;
         self.reset_extension_state();
         self.reset_download_progress();
         if let Ok(engine) = self.engine.as_mut() {

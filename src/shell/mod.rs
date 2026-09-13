@@ -817,6 +817,7 @@ impl RalgrumApp {
                     .lyrics_display_track()
                     .map(|t| (t.provider, t.id.clone())),
                 state.status,
+                state.player_bar_open(),
             )
         };
         cx.observe(&playback, move |this, playback, cx| {
@@ -843,6 +844,7 @@ impl RalgrumApp {
                         .lyrics_display_track()
                         .map(|t| (t.provider, t.id.clone())),
                     state.status,
+                    state.player_bar_open(),
                 );
                 (sync_args, current)
             };
@@ -1723,13 +1725,9 @@ impl Render for RalgrumApp {
             now,
             cx.reduce_motion(),
         );
-        let (right_sidebar, current, position) = {
+        let (right_sidebar, position, player_bar_open) = {
             let state = &self.playback.read(cx).state;
-            (
-                state.right_sidebar,
-                state.current().cloned(),
-                state.position,
-            )
+            (state.right_sidebar, state.position, state.player_bar_open())
         };
         // The lyrics panel shows the playing track unless a context track was
         // requested from a menu; a context track has no playback position, so
@@ -2057,7 +2055,7 @@ impl Render for RalgrumApp {
             .child(
                 div()
                     .absolute()
-                    .bottom(px(if current.is_some() { 110. } else { 24. }))
+                    .bottom(px(if player_bar_open { 110. } else { 24. }))
                     .right(px(24.))
                     .child(self.toasts.clone()),
             )

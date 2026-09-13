@@ -21,6 +21,8 @@ impl Render for PlaybackView {
             repeat_mode,
             right_sidebar,
             loading_from_cache,
+            player_bar_open,
+            pending_queue_load,
         ) = {
             let model = self.model.read(cx);
             let state = &model.state;
@@ -38,7 +40,17 @@ impl Render for PlaybackView {
                 state.repeat_mode,
                 state.right_sidebar,
                 model.loading_from_cache(),
+                state.player_bar_open(),
+                state.pending_queue_load(),
             )
+        };
+        // Loading a SmartMix queue begins before an audio track exists. Keep
+        // rendering that request as a loading player even if a transport
+        // lifecycle update temporarily reports Empty.
+        let status = if pending_queue_load && current.is_none() {
+            PlaybackStatus::Loading
+        } else {
+            status
         };
         let seek_control_enabled =
             matches!(status, PlaybackStatus::Playing | PlaybackStatus::Paused);
@@ -54,14 +66,14 @@ impl Render for PlaybackView {
         }
         let narrow = metrics.narrow_content;
         let compact = metrics.compact_player;
-        let open = status != PlaybackStatus::Empty;
+        let open = player_bar_open;
         let quality = if open {
             self.model.read(cx).resolved_quality().map(str::to_owned)
         } else {
             None
         };
         let previous_quality_label = self.last_quality_label.clone();
-        if status == PlaybackStatus::Empty {
+        if !open {
             self.last_quality_label.clear();
             self.last_quality_generation = None;
         } else {

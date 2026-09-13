@@ -314,6 +314,10 @@ pub(crate) struct PlaybackState {
     pub(crate) right_sidebar_view: RightSidebar,
     pub(crate) context: PlaybackContext,
     queue_epoch: u64,
+    // A SmartMix page request exists before the transport has a track to
+    // load. Keep that UI state separate from the audio-loading status so a
+    // transport lifecycle update cannot hide the player bar mid-request.
+    pending_queue_load: bool,
     /// Track whose lyrics the right sidebar should show even when it is not
     /// the playing track. Mirrors lyricsController.openContextTrack in the
     /// original app: lyrics are fetched for the menu track without touching
@@ -351,6 +355,7 @@ impl Default for PlaybackState {
             right_sidebar_view: RightSidebar::Lyrics,
             context: PlaybackContext::None,
             queue_epoch: 0,
+            pending_queue_load: false,
             lyrics_context: None,
             right_sidebar_open: false,
             play_next: Vec::new(),
@@ -399,6 +404,7 @@ impl PlaybackState {
         } else {
             index
         };
+        self.pending_queue_load = false;
         self.queue = queue;
         self.current_index = Some(index);
         self.context = PlaybackContext::None;
@@ -642,18 +648,28 @@ impl PlaybackState {
         // Otherwise an older request can mistake a newer pending load for its
         // own and close the player bar when that older request completes.
         self.clear();
+        self.pending_queue_load = true;
         self.status = PlaybackStatus::Loading;
         true
+    }
+
+    pub(crate) fn player_bar_open(&self) -> bool {
+        self.pending_queue_load || self.status != PlaybackStatus::Empty
+    }
+
+    pub(crate) fn pending_queue_load(&self) -> bool {
+        self.pending_queue_load
     }
 
     /// Close the player bar again when a pending load never produced a
     /// track. Loads that already selected a track are left alone.
     pub(crate) fn abandon_pending_load(&mut self) -> bool {
-        if self.status != PlaybackStatus::Loading || self.current_index.is_some() {
+        if !self.pending_queue_load || self.current_index.is_some() {
             return false;
         }
         self.bump_queue_epoch();
         self.generation = self.generation.wrapping_add(1);
+        self.pending_queue_load = false;
         self.status = PlaybackStatus::Empty;
         self.error = None;
         true
@@ -924,6 +940,7 @@ impl PlaybackState {
         // replace() reopens the panel per that standing preference.
         self.right_sidebar = RightSidebar::Closed;
         self.context = PlaybackContext::None;
+        self.pending_queue_load = false;
         self.lyrics_context = None;
         self.play_next.clear();
         self.history.clear();
@@ -1498,11 +1515,18 @@ mod tests {
     fn pending_load_opens_the_bar_blank_and_closes_without_a_track() {
         let mut state = PlaybackState::default();
         assert_eq!(state.status, PlaybackStatus::Empty);
+        assert!(!state.player_bar_open());
 
         assert!(state.begin_pending_load());
         assert_eq!(state.status, PlaybackStatus::Loading);
         assert_eq!(state.current_index, None);
+        assert!(state.player_bar_open());
         let first_epoch = state.queue_epoch();
+
+        // Queue loading owns visibility independently of the transport. A
+        // transport lifecycle update cannot hide the pending player.
+        state.status = PlaybackStatus::Empty;
+        assert!(state.player_bar_open());
 
         // A newer pending source owns a distinct epoch, so an older request
         // cannot close or populate its player bar.
