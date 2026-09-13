@@ -793,8 +793,10 @@ fn collection_card_with_title_alignment_source(
     id: &str,
     title_alignment: CollectionCardTitleAlignment,
 ) -> AnyElement {
-    let show_subtitle = crate::search::collection_subtitle_is_visible(subtitle)
-        && !subtitle.eq_ignore_ascii_case(title);
+    // The subtitle renders whenever it carries real information. Eponymous
+    // releases (an album named after its artist) must still show the artist,
+    // so only the placeholder filter applies.
+    let show_subtitle = crate::search::collection_subtitle_is_visible(subtitle);
     div()
         .flex()
         .flex_col()

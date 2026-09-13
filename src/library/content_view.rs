@@ -880,11 +880,13 @@ fn page_header_secondary_copy<'a>(
     subtitle: &'a str,
     description: &'a str,
 ) -> &'a str {
-    if prefer_subtitle && !subtitle.is_empty() && !subtitle.eq_ignore_ascii_case(title) {
+    // Eponymous releases (an album named after its artist) must still show
+    // the artist, so only emptiness decides between the two copies.
+    if prefer_subtitle && !subtitle.is_empty() {
         subtitle
     } else if !description.is_empty() {
         description
-    } else if !subtitle.is_empty() && !subtitle.eq_ignore_ascii_case(title) {
+    } else if !subtitle.is_empty() {
         subtitle
     } else {
         ""
@@ -2749,6 +2751,29 @@ mod tests {
         assert_eq!(projected.total, 42);
         assert_eq!(projected.count_noun, "track");
         assert!(projected.tracks.is_empty());
+    }
+
+    #[test]
+    fn eponymous_release_headers_still_show_the_artist_subtitle() {
+        // An album named after its artist ("Justice" by Justice) must not
+        // lose its artist line just because the two strings match.
+        assert_eq!(
+            page_header_secondary_copy(false, "Justice", "Justice", ""),
+            "Justice"
+        );
+        assert_eq!(
+            page_header_secondary_copy(true, "Justice", "Justice", ""),
+            "Justice"
+        );
+        assert_eq!(
+            page_header_secondary_copy(false, "Justice", "Justice", "Description"),
+            "Description"
+        );
+        assert_eq!(
+            page_header_secondary_copy(false, "Justice", "", "Description"),
+            "Description"
+        );
+        assert_eq!(page_header_secondary_copy(false, "Justice", "", ""), "");
     }
 
     #[test]
