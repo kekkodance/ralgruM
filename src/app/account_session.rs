@@ -27,6 +27,8 @@ pub(crate) struct AuthSession {
     deezer: String,
     deezer_user_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    deezer_cookies: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     soundcloud_profile: Option<ServiceIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     deezer_profile: Option<ServiceIdentity>,
@@ -113,6 +115,13 @@ impl AuthSession {
         &self.deezer_user_id
     }
 
+    pub(crate) fn deezer_cookies(&self) -> Option<&str> {
+        self.deezer_cookies
+            .as_deref()
+            .map(str::trim)
+            .filter(|cookies| !cookies.is_empty())
+    }
+
     pub(crate) fn soundcloud(&self) -> &str {
         &self.soundcloud
     }
@@ -170,7 +179,7 @@ impl SessionStore {
         fs::create_dir_all(directory).map_err(|_| SessionError::Filesystem)?;
         let primary_path = directory.join(PRIMARY_FILE);
         let backup_path = directory.join(BACKUP_FILE);
-        let session = if path_exists(&primary_path)? || path_exists(&backup_path)? {
+        let mut session = if path_exists(&primary_path)? || path_exists(&backup_path)? {
             load_protected_pair(&primary_path, &backup_path)?
         } else {
             match load_legacy_directories(directory, legacy_directory)? {
@@ -187,6 +196,17 @@ impl SessionStore {
                 }
             }
         };
+
+        // The pre-refactor app kept the Deezer sid cookie in its own file.
+        // Consume it before deletion so a migrated Deezer session keeps its
+        // sid, but only when a Deezer ARL already exists: a stray sid file
+        // must never fabricate a signed-in Deezer account.
+        if session.deezer_cookies.is_none() && !session.deezer.trim().is_empty() {
+            if let Some(sid) = read_legacy_deezer_sid(directory, legacy_directory)? {
+                session.deezer_cookies = Some(sid);
+                write_session_pair(&primary_path, &backup_path, &session)?;
+            }
+        }
 
         remove_legacy_files(directory, legacy_directory)?;
 
@@ -264,6 +284,7 @@ impl SessionStore {
             self.session.deezer_user_id = user_id;
             if self.session.deezer.trim().is_empty() {
                 self.session.deezer_profile = None;
+                self.session.deezer_cookies = None;
             }
         }
         if let Some((desktop, mobile)) = soundcloud {
@@ -288,6 +309,7 @@ impl SessionStore {
         desktop: String,
         mobile: Option<String>,
         soundcloud_cookies: Option<String>,
+        deezer_cookies: Option<String>,
         deezer_user_id: Option<String>,
         profile: Option<ServiceIdentity>,
     ) -> Result<(), SessionError> {
@@ -296,6 +318,7 @@ impl SessionStore {
             crate::service_auth::Service::Deezer => {
                 self.session.deezer = desktop;
                 self.session.deezer_user_id = deezer_user_id.unwrap_or_default();
+                self.session.deezer_cookies = deezer_cookies;
                 self.session.deezer_profile = profile;
             }
             crate::service_auth::Service::SoundCloud => {
@@ -325,6 +348,20 @@ impl SessionStore {
         }
         if let Err(error) = self.persist() {
             self.session = previous;
+            let _ = self.persist();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn persist_deezer_cookies(
+        &mut self,
+        cookies: Option<String>,
+    ) -> Result<(), SessionError> {
+        let previous = self.session.deezer_cookies.clone();
+        self.session.deezer_cookies = cookies;
+        if let Err(error) = self.persist() {
+            self.session.deezer_cookies = previous;
             let _ = self.persist();
             return Err(error);
         }
@@ -548,6 +585,28 @@ fn write_session_pair(
     let protected = encode_protected(session)?;
     atomic_write(primary_path, &protected)?;
     atomic_write(backup_path, &protected)
+}
+
+fn read_legacy_deezer_sid(
+    directory: &Path,
+    legacy_directory: Option<&Path>,
+) -> Result<Option<String>, SessionError> {
+    for directory in std::iter::once(directory).chain(legacy_directory) {
+        let path = directory.join(LEGACY_DEEZER_SID_FILE);
+        let Some(bytes) = read_bounded(&path, MAX_LEGACY_FILE_LEN)? else {
+            continue;
+        };
+        let content = String::from_utf8_lossy(&bytes).trim().to_owned();
+        if content.is_empty() {
+            continue;
+        }
+        return Ok(Some(if content.contains('=') {
+            content
+        } else {
+            format!("sid={content}")
+        }));
+    }
+    Ok(None)
 }
 
 fn remove_legacy_files(

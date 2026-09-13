@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
+    client::DEEZER_SESSION_EXPIRED,
     model::{Card, Category, Page, Route, Service, Track},
     playlist_client::OwnedPlaylist,
 };
@@ -70,6 +71,7 @@ pub(crate) struct LibraryState {
     tracks_playback_generation_floor: u64,
     next_tracks_pipeline_token: u64,
     tracks_pipeline: Option<TracksPipeline>,
+    tracks_session_expired: bool,
     cache: HashMap<(Route, String), Page>,
     account_scope: String,
 }
@@ -87,6 +89,7 @@ impl Default for LibraryState {
             tracks_playback_generation_floor: 0,
             next_tracks_pipeline_token: 0,
             tracks_pipeline: None,
+            tracks_session_expired: false,
             cache: HashMap::new(),
             account_scope: String::new(),
         }
@@ -100,6 +103,7 @@ impl LibraryState {
         }
         self.account_scope = scope;
         self.tracks_pipeline = None;
+        self.tracks_session_expired = false;
         if self.service == Service::Local {
             return false;
         }
@@ -171,8 +175,15 @@ impl LibraryState {
         if generation != self.generation {
             return false;
         }
-        if result.is_err() && self.page.is_some() {
+        if let Err(error) = result.as_ref()
+            && self.page.is_some()
+        {
             self.tracks_enrichment_generation = None;
+            if error.as_str() == DEEZER_SESSION_EXPIRED {
+                // The session-expired card must win over the visible page.
+                self.status = Status::Failed(error.clone());
+                self.page = None;
+            }
             return true;
         }
         self.complete(generation, result)
@@ -218,6 +229,12 @@ impl LibraryState {
         {
             return TracksPipelineLoadOutcome::Ignored;
         }
+        if error == DEEZER_SESSION_EXPIRED {
+            if self.fail_tracks_session_expired(error) {
+                return TracksPipelineLoadOutcome::Failed;
+            }
+            return TracksPipelineLoadOutcome::Ignored;
+        }
         let has_visible_snapshot = generation == self.generation
             && self.deezer_root_active(Category::Tracks)
             && self.page.is_some();
@@ -252,6 +269,26 @@ impl LibraryState {
         } else {
             TracksPipelineLoadOutcome::Ignored
         }
+    }
+
+    /// An expired Deezer session invalidates every liked-tracks snapshot:
+    /// the pipeline, the in-memory route cache entry, and the visible page
+    /// all go away so neither a tab re-select nor a late disk-cache result
+    /// can resurrect stale tracks. Returns whether the Deezer Tracks root
+    /// is the active view and should surface the failure.
+    fn fail_tracks_session_expired(&mut self, error: String) -> bool {
+        self.tracks_pipeline = None;
+        self.tracks_session_expired = true;
+        self.cache.remove(&cache_key(
+            &Route::root(Service::Deezer, Category::Tracks),
+            &self.account_scope,
+        ));
+        if !self.deezer_root_active(Category::Tracks) {
+            return false;
+        }
+        self.status = Status::Failed(error);
+        self.page = None;
+        true
     }
 
     pub(crate) fn fail_tracks_pipeline_continuation(&mut self, token: u64) -> bool {
@@ -321,6 +358,11 @@ impl LibraryState {
     }
 
     pub(crate) fn accept_tracks_cached_pipeline(&mut self, token: u64, page: Page) -> bool {
+        if self.tracks_session_expired {
+            // A disk snapshot from the expired session must stay hidden even
+            // when a fresh pipeline races it against the live load.
+            return false;
+        }
         let Some(pipeline) = self
             .tracks_pipeline
             .as_mut()
@@ -421,6 +463,7 @@ impl LibraryState {
     }
 
     fn set_visible_tracks_page(&mut self, page: Page) {
+        self.tracks_session_expired = false;
         self.status = if page.is_empty() {
             Status::Empty
         } else {
@@ -473,6 +516,8 @@ impl LibraryState {
 
     /// A stale snapshot remains usable when its background refresh fails.
     /// Without a snapshot, retain the existing first-load failure behavior.
+    /// An expired Deezer session is the exception: the snapshot is dropped
+    /// so the session-expired card can take over the view.
     #[cfg(test)]
     pub(crate) fn complete_tracks_refresh_failure(
         &mut self,
@@ -483,6 +528,9 @@ impl LibraryState {
             return false;
         }
         self.tracks_enrichment_generation = None;
+        if error == DEEZER_SESSION_EXPIRED {
+            return self.fail_tracks_session_expired(error);
+        }
         if self.page.is_some() {
             return false;
         }
@@ -2016,6 +2064,95 @@ mod tests {
         assert!(!state.complete_tracks_refresh_failure(old_generation, "late".into()));
         assert_eq!(state.status, Status::Results);
         assert_eq!(state.page.as_ref().unwrap().title, "new snapshot");
+    }
+
+    #[test]
+    fn expired_session_replaces_visible_tracks_snapshot() {
+        let mut state = LibraryState::default();
+        let generation = state.select(Service::Deezer, Category::Tracks).0;
+        let token = state.begin_tracks_pipeline();
+        assert!(state.accept_tracks_cached_pipeline(token, tracks_page("disk snapshot")));
+
+        assert_eq!(
+            state.fail_tracks_pipeline_load(token, generation, DEEZER_SESSION_EXPIRED.into()),
+            TracksPipelineLoadOutcome::Failed
+        );
+        assert_eq!(state.status, Status::Failed(DEEZER_SESSION_EXPIRED.into()));
+        assert!(state.page.is_none());
+        assert_eq!(state.tracks_pipeline_token(), None);
+        assert!(!state.has_cached(Service::Deezer, Category::Tracks));
+
+        let (_, cached) = state.select(Service::Deezer, Category::Tracks);
+        assert!(cached.is_none());
+        assert!(state.page.is_none());
+    }
+
+    #[test]
+    fn non_expired_failure_keeps_a_visible_snapshot_retryable() {
+        let mut state = LibraryState::default();
+        let generation = state.select(Service::Deezer, Category::Tracks).0;
+        let token = state.begin_tracks_pipeline();
+        assert!(state.accept_tracks_cached_pipeline(token, tracks_page("disk snapshot")));
+
+        assert_eq!(
+            state.fail_tracks_pipeline_load(token, generation, "offline".into()),
+            TracksPipelineLoadOutcome::Ignored
+        );
+        assert_eq!(state.status, Status::Results);
+        assert_eq!(state.page.as_ref().unwrap().title, "disk snapshot");
+        assert!(state.tracks_pipeline_retryable());
+    }
+
+    #[test]
+    fn late_cached_page_cannot_publish_after_an_expired_failure() {
+        let mut state = LibraryState::default();
+        let generation = state.select(Service::Deezer, Category::Tracks).0;
+        let token = state.begin_tracks_pipeline();
+        assert!(state.accept_tracks_cached_pipeline(token, tracks_page("disk snapshot")));
+        assert_eq!(
+            state.fail_tracks_pipeline_load(token, generation, DEEZER_SESSION_EXPIRED.into()),
+            TracksPipelineLoadOutcome::Failed
+        );
+
+        assert!(!state.accept_tracks_cached_pipeline(token, tracks_page("late")));
+        assert!(state.page.is_none());
+
+        state.select(Service::Deezer, Category::Tracks);
+        let token = state.begin_tracks_pipeline();
+        assert!(!state.accept_tracks_cached_pipeline(token, tracks_page("late")));
+        assert!(state.page.is_none());
+        assert_eq!(state.status, Status::Loading);
+    }
+
+    #[test]
+    fn live_success_lifts_the_expired_snapshot_guard() {
+        let mut state = LibraryState::default();
+        let generation = state.select(Service::Deezer, Category::Tracks).0;
+        let token = state.begin_tracks_pipeline();
+        assert_eq!(
+            state.fail_tracks_pipeline_load(token, generation, DEEZER_SESSION_EXPIRED.into()),
+            TracksPipelineLoadOutcome::Failed
+        );
+
+        state.select(Service::Deezer, Category::Tracks);
+        let token = state.begin_tracks_pipeline();
+        assert!(state.accept_tracks_preview_pipeline(token, tracks_page("live")));
+
+        let token = state.begin_tracks_pipeline();
+        assert!(state.accept_tracks_cached_pipeline(token, tracks_page("disk snapshot")));
+    }
+
+    #[test]
+    fn refresh_failure_with_expired_session_replaces_the_snapshot() {
+        let mut state = LibraryState::default();
+        let generation = state.select(Service::Deezer, Category::Tracks).0;
+        assert!(state.complete_tracks_tail(generation, tracks_page("disk snapshot")));
+
+        assert!(state.complete_tracks_refresh_failure(generation, DEEZER_SESSION_EXPIRED.into()));
+        assert_eq!(state.status, Status::Failed(DEEZER_SESSION_EXPIRED.into()));
+        assert!(state.page.is_none());
+        assert!(!state.has_cached(Service::Deezer, Category::Tracks));
+        assert!(state.select(Service::Deezer, Category::Tracks).1.is_none());
     }
 
     #[test]

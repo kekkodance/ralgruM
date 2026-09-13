@@ -10,6 +10,7 @@ fn session() -> AuthSession {
         soundcloud_cookies: "oauth_token=soundcloud-token".into(),
         deezer: "deezer-token".into(),
         deezer_user_id: "42".into(),
+        deezer_cookies: None,
         soundcloud_profile: None,
         deezer_profile: None,
         murglar_profile_summary: None,
@@ -147,11 +148,16 @@ fn legacy_pair_and_deezer_sid_are_removed_after_protected_migration() {
     let loaded = SessionStore::load(temp.path()).unwrap();
     assert_eq!(loaded.session().murglar(), "legacy-murglar-token");
     assert_eq!(loaded.session().deezer(), "legacy-deezer-token");
+    assert_eq!(loaded.session().deezer_cookies(), Some("sid=legacy-sid"));
     assert!(temp.path().join(PRIMARY_FILE).exists());
     assert!(temp.path().join(BACKUP_FILE).exists());
     assert!(!temp.path().join(LEGACY_PRIMARY_FILE).exists());
     assert!(!temp.path().join(LEGACY_BACKUP_FILE).exists());
     assert!(!temp.path().join(LEGACY_DEEZER_SID_FILE).exists());
+    assert_eq!(
+        stored_value(&temp.path().join(BACKUP_FILE))["deezerCookies"],
+        "sid=legacy-sid"
+    );
 
     for path in [PRIMARY_FILE, BACKUP_FILE] {
         let bytes = fs::read(temp.path().join(path)).unwrap();
@@ -171,6 +177,7 @@ fn legacy_pair_and_deezer_sid_are_removed_after_protected_migration() {
     let reloaded = SessionStore::load(temp.path()).unwrap();
     assert_eq!(reloaded.session().murglar(), "legacy-murglar-token");
     assert!(!temp.path().join(LEGACY_PRIMARY_FILE).exists());
+    assert_eq!(reloaded.session().deezer_cookies(), Some("sid=legacy-sid"));
 }
 
 #[test]
@@ -183,6 +190,7 @@ fn provider_profiles_round_trip_without_secret_fields() {
             "desktop-secret".into(),
             Some("mobile-secret".into()),
             Some("oauth_token=desktop-secret; datadome=guard".into()),
+            None,
             None,
             ServiceIdentity::new(
                 "cloud-listener",
@@ -622,6 +630,8 @@ fn obsolete_sid_is_retained_until_an_encrypted_pair_exists() {
     fs::write(temp.path().join(LEGACY_DEEZER_SID_FILE), b"legacy-sid").unwrap();
 
     let store = SessionStore::load(temp.path()).unwrap();
+    assert_eq!(store.session().deezer(), "");
+    assert_eq!(store.session().deezer_cookies(), None);
 
     assert_eq!(
         fs::read(temp.path().join(LEGACY_DEEZER_SID_FILE)).unwrap(),
@@ -631,6 +641,32 @@ fn obsolete_sid_is_retained_until_an_encrypted_pair_exists() {
     store.persist().unwrap();
     assert_encrypted_pair(temp.path(), "");
     assert_legacy_removed(temp.path());
+}
+
+#[test]
+fn legacy_sid_with_cookie_parts_is_kept_verbatim() {
+    let temp = TempDir::new().unwrap();
+    let legacy = json!({
+        "murglar": "legacy-murglar-token",
+        "deezer": "legacy-deezer-token"
+    });
+    fs::write(
+        temp.path().join(LEGACY_PRIMARY_FILE),
+        serde_json::to_vec(&legacy).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join(LEGACY_DEEZER_SID_FILE),
+        b"sid=raw; datadome=guard",
+    )
+    .unwrap();
+
+    let loaded = SessionStore::load(temp.path()).unwrap();
+    assert_eq!(
+        loaded.session().deezer_cookies(),
+        Some("sid=raw; datadome=guard")
+    );
+    assert!(!temp.path().join(LEGACY_DEEZER_SID_FILE).exists());
 }
 
 #[test]
@@ -653,7 +689,11 @@ fn protected_pair_repair_retains_plaintext_on_failure_then_cleans_both_directori
     fs::remove_dir(active.join(PRIMARY_FILE)).unwrap();
     let recovered = SessionStore::load_in_directories(&active, Some(&legacy)).unwrap();
 
-    assert!(recovered.session() == &session());
+    // The repaired session keeps its Deezer ARL, so a lingering legacy sid
+    // file is consumed into the cookie jar instead of being discarded.
+    let mut expected = session();
+    expected.deezer_cookies = Some("sid=legacy-sid".into());
+    assert!(recovered.session() == &expected);
     assert_encrypted_pair(&active, "murglar-token");
     assert_legacy_removed(&active);
     assert_legacy_removed(&legacy);

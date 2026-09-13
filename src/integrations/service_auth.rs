@@ -5,7 +5,7 @@ use reqwest::header::{
 use serde_json::Value;
 
 use crate::account_session::ServiceIdentity;
-use crate::search::{DeezerArl, SoundCloudToken};
+use crate::search::{DEEZER_USER_AGENT, DeezerArl, SoundCloudToken};
 const DEEZER_USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
 const DEEZER_PROFILE_IMAGE_ORIGIN: &str = "https://cdn-images.dzcdn.net";
 const DEEZER_PROFILE_IMAGE_SIZE: &str = "100x100-000000-80-0-0.jpg";
@@ -14,7 +14,6 @@ const SOUNDCLOUD_API: &str = "https://api-v2.soundcloud.com/me";
 // Playback and catalog API requests use the shared search client ID instead.
 const SOUNDCLOUD_DESKTOP_CLIENT_ID: &str = "emAJdGEj1mm9yjoCD2jkixmgqrGIyfpi";
 const SOUNDCLOUD_MOBILE_CLIENT_ID: &str = "SSdQ80vM8nLPhbDBylHl2JFK6ElhBr9B";
-const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
 const MAX_DEEZER_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_SOUNDCLOUD_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_SOUNDCLOUD_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
@@ -30,6 +29,7 @@ pub(crate) struct ValidatedCredentials {
     pub(crate) desktop: String,
     pub(crate) mobile: Option<String>,
     pub(crate) soundcloud_cookies: Option<String>,
+    pub(crate) deezer_cookies: Option<String>,
     pub(crate) deezer_user_id: Option<String>,
     pub(crate) identity: Option<ServiceIdentity>,
 }
@@ -46,7 +46,13 @@ pub(crate) async fn web_login(
 ) -> Result<ValidatedCredentials, String> {
     let captured = crate::service_auth_webview::login(service).await?;
     match service {
-        Service::Deezer => validate(client, service, captured.desktop, None, None).await,
+        Service::Deezer => {
+            let mut validated = validate(client, service, captured.desktop, None, None).await?;
+            // The webview harvest carries the non-ARL cookie jar alongside
+            // the ARL; validation itself only checks the ARL.
+            validated.deezer_cookies = captured.deezer_cookies;
+            Ok(validated)
+        }
         Service::SoundCloud => {
             let desktop = SoundCloudToken::from_saved(&captured.desktop)
                 .ok_or_else(|| "SoundCloud returned an invalid desktop OAuth token.".to_string())?;
@@ -70,6 +76,7 @@ pub(crate) async fn web_login(
                 desktop: captured.desktop,
                 mobile: Some(mobile.expose().to_owned()),
                 soundcloud_cookies: captured.soundcloud_cookies,
+                deezer_cookies: None,
                 deezer_user_id: None,
                 identity: Some(identity),
             })
@@ -156,6 +163,7 @@ async fn validate_deezer(
         desktop: arl.expose().to_owned(),
         mobile: None,
         soundcloud_cookies: None,
+        deezer_cookies: None,
         deezer_user_id: Some(profile.user_id),
         identity: profile.identity,
     })
@@ -193,7 +201,7 @@ fn deezer_validation_request(
 ) -> reqwest::RequestBuilder {
     client
         .post(DEEZER_USER_DATA_URL)
-        .header(USER_AGENT, USER_AGENT_VALUE)
+        .header(USER_AGENT, DEEZER_USER_AGENT)
         .header(COOKIE, cookie)
         .header(CONTENT_LENGTH, "0")
         .body("")
@@ -366,6 +374,7 @@ async fn validate_soundcloud(
         desktop: desktop.expose().to_owned(),
         mobile: Some(mobile.expose().to_owned()),
         soundcloud_cookies: None,
+        deezer_cookies: None,
         deezer_user_id: None,
         identity: Some(identity),
     })
@@ -430,7 +439,7 @@ async fn validate_soundcloud_token(
                 .authorization_header()
                 .map_err(|_| "The SoundCloud session is invalid")?,
         )
-        .header(USER_AGENT, USER_AGENT_VALUE)
+        .header(USER_AGENT, DEEZER_USER_AGENT)
         .send()
         .await
         .map_err(|error| format!("Could not validate the SoundCloud session: {error}"))?;
@@ -486,7 +495,7 @@ async fn exchange_soundcloud_mobile_token(
         let response = client
             .post(endpoint)
             .query(&[("client_id", MOBILE_CLIENT_ID)])
-            .header(USER_AGENT, USER_AGENT_VALUE)
+            .header(USER_AGENT, DEEZER_USER_AGENT)
             .form(&form)
             .send()
             .await

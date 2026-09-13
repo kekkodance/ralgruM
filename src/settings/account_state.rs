@@ -10,7 +10,7 @@ use crate::{
         AccessToken, AccountError, AccountExtras, AccountProfile, DeviceIdentity,
         DeviceIdentityStatus, MediaCredentials, PaymentPlans, ReferralStats, media_credentials,
     },
-    search::{DeezerArl, SoundCloudToken},
+    search::{DeezerArl, DeezerCookieJar, SoundCloudToken},
 };
 
 pub(crate) struct AccountState {
@@ -31,6 +31,7 @@ pub(crate) struct AccountState {
     pub(super) plans_status: Option<SharedString>,
     pub(super) session_store: Option<SessionStore>,
     pub(super) session_error: Option<SessionError>,
+    deezer_cookie_jar: DeezerCookieJar,
     pub(super) service_generation: u64,
     pub(super) service_loading: bool,
     service_loading_service: Option<Service>,
@@ -121,6 +122,11 @@ impl AccountState {
         let deezer_profile = session_store
             .as_ref()
             .and_then(|store| store.session().deezer_profile().cloned());
+        let deezer_cookie_jar = DeezerCookieJar::new(
+            session_store
+                .as_ref()
+                .and_then(|store| store.session().deezer_cookies().map(str::to_owned)),
+        );
         let murglar_summary_trusted = session_store
             .as_ref()
             .is_some_and(|store| store.session().murglar_profile_summary().is_some());
@@ -145,6 +151,7 @@ impl AccountState {
             plans_status: None,
             session_store,
             session_error,
+            deezer_cookie_jar,
             service_generation: 0,
             service_loading: false,
             service_loading_service: None,
@@ -558,9 +565,9 @@ impl AccountState {
     }
 
     pub(crate) fn deezer_arl(&self) -> Option<DeezerArl> {
-        self.session_store
-            .as_ref()
-            .and_then(|store| DeezerArl::from_saved(store.session().deezer()))
+        self.session_store.as_ref().and_then(|store| {
+            DeezerArl::from_saved_with_jar(store.session().deezer(), &self.deezer_cookie_jar)
+        })
     }
 
     pub(crate) fn deezer_user_id(&self) -> Option<String> {
@@ -745,6 +752,13 @@ impl AccountState {
             Ok(credentials) => {
                 let profile = credentials.identity.clone();
                 let profile_loaded = profile.is_some();
+                let deezer_cookies = match service {
+                    Service::Deezer => credentials
+                        .deezer_cookies
+                        .clone()
+                        .or_else(|| self.deezer_cookie_jar.snapshot()),
+                    Service::SoundCloud => None,
+                };
                 let result = self
                     .session_store
                     .as_mut()
@@ -755,6 +769,7 @@ impl AccountState {
                             credentials.desktop,
                             credentials.mobile,
                             credentials.soundcloud_cookies,
+                            deezer_cookies,
                             credentials.deezer_user_id,
                             profile.clone(),
                         )
@@ -779,6 +794,10 @@ impl AccountState {
                         Service::Deezer => {
                             self.deezer_profile = profile;
                             self.deezer_identity_loading = false;
+                            if let Some(harvest) = &credentials.deezer_cookies {
+                                self.deezer_cookie_jar =
+                                    DeezerCookieJar::new(Some(harvest.clone()));
+                            }
                         }
                         Service::SoundCloud => {
                             self.soundcloud_username =
@@ -839,7 +858,10 @@ impl AccountState {
         }
         if cleared {
             match service {
-                Service::Deezer => self.deezer_profile = None,
+                Service::Deezer => {
+                    self.deezer_profile = None;
+                    self.deezer_cookie_jar = DeezerCookieJar::default();
+                }
                 Service::SoundCloud => {
                     self.soundcloud_profile = None;
                     self.soundcloud_username = None;
@@ -875,6 +897,7 @@ impl AccountState {
             Ok(()) => {
                 self.token = None;
                 self.deezer_profile = None;
+                self.deezer_cookie_jar = DeezerCookieJar::default();
                 self.soundcloud_username = None;
                 self.soundcloud_profile = None;
                 self.session_error = None;
@@ -1019,12 +1042,17 @@ impl AccountState {
         self.deezer_identity_loading = false;
         match result {
             Ok(profile) => {
+                let jar_snapshot = self.deezer_cookie_jar.snapshot();
                 let persisted = self
                     .session_store
                     .as_mut()
                     .ok_or(SessionError::Filesystem)
                     .and_then(|store| {
-                        store.persist_service_profile(Service::Deezer, Some(profile.clone()))
+                        store.persist_service_profile(Service::Deezer, Some(profile.clone()))?;
+                        match jar_snapshot {
+                            Some(cookies) => store.persist_deezer_cookies(Some(cookies)),
+                            None => Ok(()),
+                        }
                     });
                 if let Err(error) = persisted {
                     if self.session_store.is_none() {

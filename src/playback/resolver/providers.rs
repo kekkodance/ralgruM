@@ -435,6 +435,9 @@ impl StreamResolver {
             ));
         }
         let cookies = response_cookies(&session_response);
+        if let Some(jar) = arl.attached_jar() {
+            jar.refresh(&cookies);
+        }
         let session = response_json(session_response, "deezer.listen.session").await?;
         let check_form = session
             .pointer("/results/checkForm")
@@ -544,6 +547,9 @@ impl StreamResolver {
         )
         .await?;
         let cookies = response_cookies(&session_response);
+        if let Some(jar) = arl.and_then(DeezerArl::attached_jar) {
+            jar.refresh(&cookies);
+        }
         let session = response_json(session_response, "deezer.session").await?;
         let check_form = session
             .pointer("/results/checkForm")

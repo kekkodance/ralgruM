@@ -8,7 +8,8 @@ use super::{
 };
 use crate::search::DeezerArl;
 use crate::search::{
-    Card as SearchCard, DetailPage, DetailRoute, ResultType, SearchClient, Track as SearchTrack,
+    Card as SearchCard, DEEZER_USER_AGENT, DetailPage, DetailRoute, ResultType, SearchClient,
+    Track as SearchTrack, merge_cookie_parts,
 };
 use crate::smart_mix_title::{CANONICAL_SMART_MIX_TITLE, specific_smart_mix_title};
 use reqwest::{Client, Response, Url, header};
@@ -21,12 +22,17 @@ use std::{
 
 const GATEWAY: &str = "https://www.deezer.com/ajax/gw-light.php";
 const DEEZER_USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
 const FLOW_CARD_SUBTITLE: &str = "Personalized mix";
 const FLOW_EMPTY_DESCRIPTION: &str = "No Flow mixes were returned for this account.";
 const TRACKS_PREFIX_SIZE: usize = 256;
 const TRACKS_PAGE_SIZE: usize = 10_000;
 const TRACKS_OVERLAP: usize = 8;
+// song.getListData is batched so a large library does not push every track
+// id through a single request.
+const HYDRATION_BATCH_SIZE: usize = 500;
+// Successive favorites pages and hydration batches are paced so a large
+// library does not hit the gateway as one scripted burst.
+const GATEWAY_REQUEST_PAUSE: Duration = Duration::from_millis(300);
 const BOOTSTRAP_CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// Returned when `deezer.getUserData` answers an anonymous session, which
@@ -164,6 +170,7 @@ impl DeezerTracksContinuation {
                     "Deezer Tracks pagination was incomplete".into(),
                 ));
             }
+            tokio::time::sleep(GATEWAY_REQUEST_PAUSE).await;
             let chunk = self
                 .client
                 .fetch_tracks_chunk(&self.session, &self.user_id, next_start, request_size)
@@ -230,6 +237,7 @@ impl LibraryClient {
         let mut start = first.items.len();
         while start < total {
             let page_size = (total - start).min(TRACKS_PAGE_SIZE);
+            tokio::time::sleep(GATEWAY_REQUEST_PAUSE).await;
             let chunk = self
                 .fetch_tracks_chunk(session, user, start, page_size)
                 .await?;
@@ -274,7 +282,7 @@ impl LibraryClient {
             .https_only(true)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
-            .user_agent(USER_AGENT)
+            .user_agent(DEEZER_USER_AGENT)
             .build()
             .map(|client| {
                 let search_client = Ok(SearchClient::with_http_client(client.clone()));
@@ -505,19 +513,28 @@ impl LibraryClient {
         session: &DeezerSession,
         ids: Vec<String>,
     ) -> Result<Vec<Value>, String> {
-        let hydrated = self
-            .gateway_call(
-                "song.getListData",
-                json!({ "sng_ids": ids }),
-                &session.token,
-                session.cookie.clone(),
-            )
-            .await?;
-        Ok(hydrated
-            .get("data")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
+        let mut hydrated = Vec::new();
+        for (index, chunk) in ids.chunks(HYDRATION_BATCH_SIZE).enumerate() {
+            if index > 0 {
+                tokio::time::sleep(GATEWAY_REQUEST_PAUSE).await;
+            }
+            let batch = self
+                .gateway_call(
+                    "song.getListData",
+                    json!({ "sng_ids": chunk }),
+                    &session.token,
+                    session.cookie.clone(),
+                )
+                .await?;
+            hydrated.extend(
+                batch
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(hydrated)
     }
 
     async fn load_flow(&self, session: DeezerSession) -> Result<Page, String> {
@@ -797,6 +814,9 @@ impl LibraryClient {
             .await
             .map_err(|_| "Deezer login session could not be verified".to_string())?;
         let cookies = response_cookies(&bootstrap);
+        if let Some(jar) = arl.attached_jar() {
+            jar.refresh(&cookies);
+        }
         let value = decode(bootstrap).await?;
         let results = envelope_results(value, "session bootstrap")?;
         let token = results
@@ -1236,13 +1256,27 @@ fn search_card(card: SearchCard) -> Card {
 }
 
 fn session_cookie(arl: &DeezerArl, cookies: &str) -> Result<header::HeaderValue, String> {
-    let arl = arl.cookie_header().map_err(|error| error.message)?;
-    let mut cookie = header::HeaderValue::from_str(&format!(
-        "{}; {cookies}",
-        arl.to_str()
-            .map_err(|_| "The saved Deezer session is invalid")?
-    ))
-    .map_err(|_| "Deezer returned an invalid session".to_string())?;
+    let value = arl.cookie_header().map_err(|error| error.message)?;
+    let value = value
+        .to_str()
+        .map_err(|_| "The saved Deezer session is invalid")?;
+    // The saved arl value cannot contain ';', so the first segment is always
+    // the arl cookie and any remainder is the attached jar snapshot.
+    let (arl_part, rest) = value.split_once("; ").unwrap_or((value, ""));
+    // Repeated cookie names replace instead of duplicating, and any arl set
+    // by the server is dropped, so the saved arl always wins.
+    let parts = if cookies.is_empty() {
+        rest.to_owned()
+    } else {
+        merge_cookie_parts(rest, cookies)
+    };
+    let merged = if parts.is_empty() {
+        arl_part.to_owned()
+    } else {
+        format!("{arl_part}; {parts}")
+    };
+    let mut cookie = header::HeaderValue::from_str(&merged)
+        .map_err(|_| "Deezer returned an invalid session".to_string())?;
     cookie.set_sensitive(true);
     Ok(cookie)
 }

@@ -27,7 +27,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     murglar_backend::{MediaBackend, MediaCredentials},
-    search::{DeezerArl, SOUNDCLOUD_CLIENT_ID, SoundCloudToken},
+    search::{
+        DEEZER_USER_AGENT, DeezerArl, SOUNDCLOUD_CLIENT_ID, SoundCloudToken, merge_cookie_parts,
+    },
 };
 
 use super::cache::{AudioCache, BLOCK_SIZE, CacheTrackToken};
@@ -45,7 +47,9 @@ use super::{
     deezer_collection_download_choices, selection_order,
 };
 
-const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
+// Single deezer.com browser profile shared by every direct client; kept as a
+// local alias because the media submodules reach it through `super::*`.
+const BROWSER_USER_AGENT: &str = DEEZER_USER_AGENT;
 const SOUNDCLOUD_MOBILE_USER_AGENT: &str = "ktor-client";
 const SOUNDCLOUD_MOBILE_ACCEPT_ENCODING: &str = "gzip,deflate,identity";
 const DEEZER_SECRET: &[u8; 16] = b"g4el58wc0zvf9na1";
@@ -497,14 +501,31 @@ fn deezer_headers(
         header::HeaderValue::from_static(BROWSER_USER_AGENT),
     );
     let mut cookie = match arl {
-        Some(arl) => format!("arl={}", arl.expose()),
+        Some(arl) => arl
+            .cookie_header()
+            .map_err(|error| error.message)?
+            .to_str()
+            .map_err(|_| "The saved Deezer session is invalid".to_string())?
+            .to_owned(),
         None => String::new(),
     };
     if let Some(extra) = cookies.filter(|cookies| !cookies.is_empty()) {
-        if !cookie.is_empty() {
-            cookie.push_str("; ");
-        }
-        cookie.push_str(extra);
+        // The saved arl value cannot contain ';', so the first segment is
+        // always the arl cookie and any remainder is the attached jar
+        // snapshot. Repeated cookie names replace instead of duplicating,
+        // and any arl set by the server is dropped, so the saved arl wins.
+        let (arl_part, rest) = match cookie.split_once("; ") {
+            Some((arl_part, rest)) => (arl_part, rest),
+            None => (cookie.as_str(), ""),
+        };
+        let parts = merge_cookie_parts(rest, extra);
+        cookie = if arl_part.is_empty() {
+            parts
+        } else if parts.is_empty() {
+            arl_part.to_owned()
+        } else {
+            format!("{arl_part}; {parts}")
+        };
     }
     if !cookie.is_empty() {
         let mut value = header::HeaderValue::from_str(&cookie)

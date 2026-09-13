@@ -8,12 +8,11 @@ use std::{
 use reqwest::{Client, Response, header};
 use serde_json::{Value, json};
 
-use crate::search::DeezerArl;
+use crate::search::{DEEZER_USER_AGENT, DeezerArl, merge_cookie_parts};
 
 use super::client::DEEZER_SESSION_EXPIRED;
 use super::playlist_limits::{DEEZER_DESCRIPTION_MAX_CHARS, DEEZER_TITLE_MAX_CHARS};
 
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
 const USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
 const JWT_URL: &str = "https://auth.deezer.com/login/arl?jo=p&rto=c&i=p";
 const GRAPHQL_URL: &str = "https://pipe.deezer.com/api";
@@ -140,7 +139,7 @@ impl PlaylistClient {
             .https_only(true)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
-            .user_agent(USER_AGENT)
+            .user_agent(DEEZER_USER_AGENT)
             .build()
             .map(|client| Self { client })
             .map_err(|_| "Deezer playlist client could not be created".into())
@@ -454,6 +453,9 @@ impl PlaylistClient {
             .await
             .map_err(|_| "Deezer login session could not be verified".to_string())?;
         let cookies = response_cookies(&response);
+        if let Some(jar) = arl.attached_jar() {
+            jar.refresh(&cookies);
+        }
         let value = decode(response).await?;
         let results = envelope_results(&value)?;
         // getUserData answering an anonymous session (USER_ID "0") means the
@@ -883,16 +885,26 @@ fn response_cookies(response: &Response) -> String {
 }
 
 fn session_cookie(arl: header::HeaderValue, cookies: &str) -> Result<header::HeaderValue, String> {
-    let mut value = arl
+    let value = arl
         .to_str()
-        .map_err(|_| "The saved Deezer session is invalid")?
-        .to_owned();
-    if !cookies.is_empty() {
-        value.push_str("; ");
-        value.push_str(cookies);
-    }
+        .map_err(|_| "The saved Deezer session is invalid")?;
+    // The saved arl value cannot contain ';', so the first segment is always
+    // the arl cookie and any remainder is the attached jar snapshot.
+    let (arl_part, rest) = value.split_once("; ").unwrap_or((value, ""));
+    // Repeated cookie names replace instead of duplicating, and any arl set
+    // by the server is dropped, so the saved arl always wins.
+    let parts = if cookies.is_empty() {
+        rest.to_owned()
+    } else {
+        merge_cookie_parts(rest, cookies)
+    };
+    let merged = if parts.is_empty() {
+        arl_part.to_owned()
+    } else {
+        format!("{arl_part}; {parts}")
+    };
     let mut value =
-        header::HeaderValue::from_str(&value).map_err(|_| "Deezer returned an invalid session")?;
+        header::HeaderValue::from_str(&merged).map_err(|_| "Deezer returned an invalid session")?;
     value.set_sensitive(true);
     Ok(value)
 }

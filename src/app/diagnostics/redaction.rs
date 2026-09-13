@@ -13,6 +13,7 @@ const SENSITIVE_KEYS: &[&str] = &[
     "sig",
     "oauthtoken",
     "arl",
+    "datadome",
     "session",
     "sessionid",
     "sid",

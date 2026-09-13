@@ -28,7 +28,9 @@ pub(crate) use album_info::{
 pub(crate) use album_info_cache::{AlbumInfoCacheHost, AlbumInfoCacheKey, AlbumInfoPrefetch};
 pub(crate) use client::{SOUNDCLOUD_CLIENT_ID, SearchClient};
 pub(crate) use collection_actions::collection_routable;
-pub(crate) use credential::{DeezerArl, SoundCloudToken};
+pub(crate) use credential::{
+    DEEZER_USER_AGENT, DeezerArl, DeezerCookieJar, SoundCloudToken, merge_cookie_parts,
+};
 pub(crate) use detail::{
     DetailPage, DetailRoute, artist_section_shows_action_for_counts,
     collection_subtitle_is_visible, detail_metadata, format_release_date,

@@ -5,6 +5,7 @@ pub(crate) struct BrowserCredentials {
     pub(crate) desktop: String,
     pub(crate) mobile_authorization: Option<MobileAuthorization>,
     pub(crate) soundcloud_cookies: Option<String>,
+    pub(crate) deezer_cookies: Option<String>,
 }
 
 #[derive(Debug)]
@@ -46,6 +47,8 @@ mod platform {
     };
     use wry::{WebContext, WebViewBuilder};
 
+    use crate::search::DEEZER_USER_AGENT;
+
     use super::{BrowserCredentials, MobileAuthorization, Service};
 
     const DEEZER_LOGIN_URL: &str =
@@ -59,7 +62,6 @@ mod platform {
     const SOUNDCLOUD_MOBILE_REDIRECT_URI: &str = "sc://auth";
     const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
     const POLL_INTERVAL: Duration = Duration::from_millis(500);
-    const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
 
     const COOKIE_CONSENT_REJECTION_SCRIPT: &str = include_str!("service_auth_cookie_consent.js");
 
@@ -238,7 +240,7 @@ mod platform {
         let result = (|| -> Result<BrowserCredentials, String> {
             let webview_builder = WebViewBuilder::new_with_web_context(&mut context)
                 .with_url(login_url(service))
-                .with_user_agent(USER_AGENT)
+                .with_user_agent(DEEZER_USER_AGENT)
                 .with_focused(true)
                 .with_initialization_script_for_main_only(COOKIE_CONSENT_REJECTION_SCRIPT, false)
                 .with_navigation_handler(move |raw_url| {
@@ -322,6 +324,33 @@ mod platform {
             } else {
                 None
             };
+
+            let deezer_cookies = if service == Service::Deezer {
+                // The ARL is captured separately in the loop above, so every
+                // other deezer.com cookie joins the persistent jar here.
+                let cookies = webview
+                    .as_ref()
+                    .expect("WebView was just initialized")
+                    .cookies_for_url(DEEZER_COOKIE_URL)
+                    .map_err(|error| {
+                        format!("Could not preserve the Deezer sign-in session: {error}")
+                    })?;
+                let value = cookies
+                    .into_iter()
+                    .filter_map(|cookie| {
+                        let name = cookie.name().trim();
+                        let value = cookie.value().trim();
+                        let keep = !name.is_empty()
+                            && !value.is_empty()
+                            && !name.eq_ignore_ascii_case("arl");
+                        keep.then(|| format!("{name}={value}"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                (!value.is_empty()).then_some(value)
+            } else {
+                None
+            };
             let soundcloud_cookies = if service == Service::SoundCloud {
                 let cookies = webview
                     .as_ref()
@@ -347,6 +376,7 @@ mod platform {
                 desktop,
                 mobile_authorization,
                 soundcloud_cookies,
+                deezer_cookies,
             })
         })();
 
