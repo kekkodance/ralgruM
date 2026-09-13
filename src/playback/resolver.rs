@@ -101,7 +101,6 @@ pub(crate) struct ResolvedProgressiveAudio {
     pub(crate) initial_downloaded: u64,
     pub(crate) initial_buffered_fraction: Option<f32>,
     pub(crate) fully_cached: bool,
-    pub(crate) seekable_after_completion: bool,
     pub(crate) timeline_seek_session: Option<Arc<dyn TimelineSeekSession>>,
     pub(crate) worker: Option<ProgressiveDownload>,
 }

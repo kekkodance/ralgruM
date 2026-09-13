@@ -704,7 +704,6 @@ impl StreamResolver {
             initial_downloaded,
             initial_buffered_fraction,
             fully_cached,
-            seekable_after_completion: timeline_startup,
             timeline_seek_session,
             worker: Some(worker),
         })

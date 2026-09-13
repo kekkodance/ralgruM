@@ -249,28 +249,28 @@ impl RodioEngine {
         let decoded = builder
             .build()
             .map_err(|error| format!("Could not decode {} audio: {error}", audio.format.label()))?;
-        let decoded_duration = decoded.total_duration();
-        let duration = decoded_duration.or(audio.duration);
-        // A fragmented MP4 keeps its sample count in movie fragments instead
-        // of the movie header, so the decoder reports a zero total duration.
-        // Rodio clamps every sink seek to that duration, which silently
-        // restarts such tracks from byte zero. Route fragmented MP4 sources
-        // through the discard-based reload, which positions a fresh decoder
-        // by decoding up to the requested position.
-        let fragmented_mp4 = audio.format == AudioFormat::M4a
-            && decoded_duration.is_none_or(|decoded| decoded.is_zero());
-        if audio.seekable_after_completion || fragmented_mp4 {
-            let progressive_seek = ProgressiveSeek {
-                path,
-                format: audio.format,
-                completion,
-                timeline_seek_session: audio.timeline_seek_session,
-            };
-            Ok(PreparedSource::new(decoded, duration, audio.file)
-                .with_progressive_seek(progressive_seek))
-        } else {
-            Ok(PreparedSource::new(decoded, duration, audio.file))
-        }
+        let duration = decoded.total_duration().or(audio.duration);
+        // Every source reaching this point decodes through the shared
+        // progressive reader, which blocks at the downloaded frontier. A
+        // sink seek parses the stream through that reader, so any target
+        // past the frontier would stall the audio thread and freeze the
+        // interface until the download catches up. Route every live source
+        // through the deferred reload instead: seeks issued while the
+        // buffer is still downloading are queued, and once the file is
+        // complete a fresh decoder is positioned at the requested spot.
+        // Fragmented MP4 keeps its sample count in movie fragments instead
+        // of the movie header, so the decoder reports a zero total
+        // duration; the reload positions such files by discarding samples
+        // because rodio clamps byte seeks to that zero duration, which
+        // silently restarts the track.
+        let progressive_seek = ProgressiveSeek {
+            path,
+            format: audio.format,
+            completion,
+            timeline_seek_session: audio.timeline_seek_session,
+        };
+        Ok(PreparedSource::new(decoded, duration, audio.file)
+            .with_progressive_seek(progressive_seek))
     }
 
     fn install_progressive_source(
@@ -1113,7 +1113,6 @@ mod tests {
             initial_downloaded: total,
             initial_buffered_fraction: None,
             fully_cached: false,
-            seekable_after_completion: false,
             timeline_seek_session: None,
             worker: None,
         };
@@ -1128,6 +1127,80 @@ mod tests {
             &progressive_seek.path,
             AudioFormat::M4a,
             Duration::from_millis(800),
+        )
+        .unwrap();
+        let seeked_samples = seeked.by_ref().take(4_096).collect::<Vec<_>>();
+        let seeked_rms = sample_rms(&seeked_samples);
+        assert!(
+            seeked_rms > 0.2,
+            "the reload must land in the tone region, RMS was {seeked_rms}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mp3_progressive_source_seeks_through_the_deferred_reload() {
+        let Some(file) = make_mp3_tone_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping MP3 reload test");
+            return;
+        };
+        let bytes = std::fs::read(file.path()).unwrap();
+        let total = bytes.len() as u64;
+        let frontier =
+            super::super::progressive::startup_bytes(AudioFormat::Mp3, Some(total)).min(total);
+        let buffer =
+            super::super::progressive::ProgressiveFile::new(AudioFormat::Mp3, Some(total)).unwrap();
+        let mut writer = buffer.writer().unwrap();
+        use tokio::io::AsyncWriteExt as _;
+        writer.write_all(&bytes[..frontier as usize]).await.unwrap();
+        writer.flush().await.unwrap();
+        let audio = ResolvedProgressiveAudio {
+            reader: buffer.reader().unwrap(),
+            file: buffer.into_file(),
+            duration: Some(Duration::from_secs(4)),
+            format: AudioFormat::Mp3,
+            total: Some(total),
+            timeline_size_unknown: false,
+            declared_bitrate: Some(128),
+            initial_downloaded: frontier,
+            initial_buffered_fraction: None,
+            fully_cached: false,
+            timeline_seek_session: None,
+            worker: None,
+        };
+        let prepared = RodioEngine::decode_progressive(audio).unwrap();
+        let (_sink_source, _file, progressive_seek) = prepared.into_parts();
+        // A progressive MP3 must never fall back to the sink seek: the
+        // decoder reads through the shared reader, so a sink seek past the
+        // downloaded frontier would stall the audio thread until the
+        // download catches up. The reload path queues the target instead.
+        let progressive_seek =
+            progressive_seek.expect("progressive MP3 must seek through the deferred reload");
+        assert_eq!(progressive_seek.format, AudioFormat::Mp3);
+        assert!(
+            !progressive_seek.completion.is_complete(),
+            "a partial download must not count as complete"
+        );
+        assert!(progressive_seek.timeline_seek_session.is_none());
+        progressive_seek
+            .completion
+            .request_seek(Duration::from_millis(3_500));
+        assert_eq!(
+            progressive_seek.completion.pending_seek(),
+            Some(Duration::from_millis(3_500))
+        );
+
+        writer.write_all(&bytes[frontier as usize..]).await.unwrap();
+        writer.flush().await.unwrap();
+        writer.finish().await.unwrap();
+        assert!(progressive_seek.completion.is_complete());
+        assert_eq!(
+            progressive_seek.completion.take_pending_seek(),
+            Some(Duration::from_millis(3_500))
+        );
+        let mut seeked = RodioEngine::decoder_at(
+            &progressive_seek.path,
+            AudioFormat::Mp3,
+            Duration::from_millis(3_500),
         )
         .unwrap();
         let seeked_samples = seeked.by_ref().take(4_096).collect::<Vec<_>>();
@@ -1183,6 +1256,31 @@ mod tests {
                 "frag_keyframe+empty_moov+default_base_moof",
                 "-f",
                 "mp4",
+                "-y",
+            ])
+            .arg(file.path())
+            .status()
+            .ok()?;
+        status.success().then_some(file)
+    }
+
+    fn make_mp3_tone_fixture() -> Option<tempfile::NamedTempFile> {
+        let file = tempfile::Builder::new().suffix(".mp3").tempfile().ok()?;
+        let status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=if(lt(t\\,3)\\,0\\,0.7*sin(2*PI*880*t)):s=44100:d=4",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "128k",
+                "-f",
+                "mp3",
                 "-y",
             ])
             .arg(file.path())

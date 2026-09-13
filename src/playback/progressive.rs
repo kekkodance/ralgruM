@@ -160,8 +160,8 @@ impl Shared {
     }
 }
 
-/// Cloneable completion state used by the decoder to upgrade a fragmented
-/// MP4 stream to a fully seekable file once the downloader has finished.
+/// Cloneable completion state used by the engine to swap a live progressive
+/// stream for a fully seekable reload once the downloader has finished.
 #[derive(Clone)]
 pub(crate) struct ProgressiveCompletion {
     shared: Arc<Shared>,
