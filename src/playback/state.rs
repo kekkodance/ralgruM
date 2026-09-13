@@ -638,9 +638,9 @@ impl PlaybackState {
     /// bar goes blank immediately and stale loads cannot complete into the
     /// pending state.
     pub(crate) fn begin_pending_load(&mut self) -> bool {
-        if self.status == PlaybackStatus::Loading && self.current_index.is_none() {
-            return false;
-        }
+        // Re-entering the pending state must still advance the queue epoch.
+        // Otherwise an older request can mistake a newer pending load for its
+        // own and close the player bar when that older request completes.
         self.clear();
         self.status = PlaybackStatus::Loading;
         true
@@ -652,6 +652,7 @@ impl PlaybackState {
         if self.status != PlaybackStatus::Loading || self.current_index.is_some() {
             return false;
         }
+        self.bump_queue_epoch();
         self.generation = self.generation.wrapping_add(1);
         self.status = PlaybackStatus::Empty;
         self.error = None;
@@ -1501,11 +1502,17 @@ mod tests {
         assert!(state.begin_pending_load());
         assert_eq!(state.status, PlaybackStatus::Loading);
         assert_eq!(state.current_index, None);
-        // A second pending begin cannot stack.
-        assert!(!state.begin_pending_load());
+        let first_epoch = state.queue_epoch();
 
+        // A newer pending source owns a distinct epoch, so an older request
+        // cannot close or populate its player bar.
+        assert!(state.begin_pending_load());
+        assert_ne!(state.queue_epoch(), first_epoch);
+
+        let pending_epoch = state.queue_epoch();
         assert!(state.abandon_pending_load());
         assert_eq!(state.status, PlaybackStatus::Empty);
+        assert_ne!(state.queue_epoch(), pending_epoch);
 
         // Once a real load selected a track, abandon no longer applies.
         state.begin_pending_load();
@@ -1557,6 +1564,31 @@ mod tests {
         state.replace(tracks(), 0);
         assert_eq!(state.current_index, Some(0));
     }
+
+    #[test]
+    fn pending_load_keeps_the_sidebar_closed_until_tracks_exist() {
+        let mut state = PlaybackState::default();
+        state.replace(tracks(), 0);
+        state.toggle_sidebar(RightSidebar::Queue);
+        assert_eq!(state.right_sidebar, RightSidebar::Queue);
+
+        state.begin_pending_load();
+        assert_eq!(state.status, PlaybackStatus::Loading);
+        assert_eq!(state.right_sidebar, RightSidebar::Closed);
+        assert_eq!(state.current(), None);
+        assert_eq!(
+            state.toggle_sidebar(RightSidebar::Lyrics),
+            RightSidebar::Closed
+        );
+        assert_eq!(
+            state.toggle_sidebar(RightSidebar::Queue),
+            RightSidebar::Closed
+        );
+
+        state.replace(tracks(), 0);
+        assert_eq!(state.right_sidebar, RightSidebar::Queue);
+    }
+
     #[test]
     fn previous_restarts_after_three_seconds_then_moves_back() {
         let mut state = PlaybackState::default();

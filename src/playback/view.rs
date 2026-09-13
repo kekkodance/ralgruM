@@ -1614,6 +1614,19 @@ impl PlaybackModel {
             cx.notify();
         }
     }
+
+    /// Close a pending player only when it still belongs to the request that
+    /// is completing. A newer SmartMix click owns a different queue epoch.
+    pub(crate) fn abandon_pending_load_if_epoch(
+        &mut self,
+        expected_queue_epoch: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.queue_epoch() == expected_queue_epoch {
+            self.abandon_pending_load(cx);
+        }
+    }
+
     pub(crate) fn previous(&mut self, cx: &mut Context<Self>) {
         self.consecutive_failures = 0;
         self.cancel_user_fade_and_sync_transport();

@@ -1479,11 +1479,15 @@ impl LibraryView {
                 {
                     // The click was superseded; close the blank bar again
                     // unless something else took over playback.
-                    playback.update(cx, |playback, cx| playback.abandon_pending_load(cx));
+                    playback.update(cx, |playback, cx| {
+                        playback.abandon_pending_load_if_epoch(queue_epoch, cx)
+                    });
                     return;
                 }
                 let Ok(page) = result else {
-                    playback.update(cx, |playback, cx| playback.abandon_pending_load(cx));
+                    playback.update(cx, |playback, cx| {
+                        playback.abandon_pending_load_if_epoch(queue_epoch, cx)
+                    });
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
@@ -1493,7 +1497,9 @@ impl LibraryView {
                     return;
                 };
                 if page.tracks.is_empty() {
-                    playback.update(cx, |playback, cx| playback.abandon_pending_load(cx));
+                    playback.update(cx, |playback, cx| {
+                        playback.abandon_pending_load_if_epoch(queue_epoch, cx)
+                    });
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
