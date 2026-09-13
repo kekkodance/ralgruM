@@ -1389,6 +1389,23 @@ impl LibraryView {
         smart_mix: bool,
         cx: &mut Context<Self>,
     ) {
+        // Deezer behavior: the play command on the mix that is already the
+        // active playback context toggles pause and resume instead of
+        // reloading it.
+        {
+            let playback = self.playback.read(cx);
+            let same_mix_live = matches!(
+                playback.context(),
+                PlaybackContext::DeezerFlow { config_id, .. } if config_id == card.id.trim()
+            ) && matches!(
+                playback.state.status,
+                crate::playback::PlaybackStatus::Playing | crate::playback::PlaybackStatus::Paused
+            );
+            if same_mix_live {
+                self.playback.update(cx, |playback, cx| playback.toggle(cx));
+                return;
+            }
+        }
         self.start_deezer_flow_with_mode(card, smart_mix, FlowMode::Default, cx);
     }
 
@@ -1403,7 +1420,6 @@ impl LibraryView {
             return;
         }
         let action_generation = self.invalidate_playback_actions();
-        let queue_epoch = self.playback.read(cx).state.queue_epoch();
         let account_scope = self.account.read(cx).library_scope();
         let Some(arl) = self.account.read(cx).deezer_arl() else {
             crate::toast::push_global(
@@ -1440,9 +1456,12 @@ impl LibraryView {
         } else {
             DeezerFlowKind::Flow
         };
-        // Feedback first: open a blank player bar while the mix page loads.
+        // Feedback first: stop the current audio and open a blank player
+        // bar while the mix page loads. The queue epoch is captured after
+        // this because entering the pending state advances it.
         self.playback
             .update(cx, |playback, cx| playback.begin_pending_load(cx));
+        let queue_epoch = self.playback.read(cx).state.queue_epoch();
         let playback = self.playback.clone();
         let task = self.runtime.spawn(async move {
             client

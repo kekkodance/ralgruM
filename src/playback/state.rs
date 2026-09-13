@@ -634,16 +634,15 @@ impl PlaybackState {
 
     /// Open the player bar in a blank loading state before any track exists,
     /// e.g. while the smart mix page is still being fetched after a click.
-    /// The queue and generation are untouched so the real load that follows
-    /// supersedes this state cleanly.
+    /// Any current playback is cleared and the queue epoch advances, so the
+    /// bar goes blank immediately and stale loads cannot complete into the
+    /// pending state.
     pub(crate) fn begin_pending_load(&mut self) -> bool {
-        if self.status != PlaybackStatus::Empty {
+        if self.status == PlaybackStatus::Loading && self.current_index.is_none() {
             return false;
         }
+        self.clear();
         self.status = PlaybackStatus::Loading;
-        self.position = Duration::ZERO;
-        self.buffered = Duration::ZERO;
-        self.error = None;
         true
     }
 
@@ -1540,6 +1539,24 @@ mod tests {
         assert_eq!(state.current_index, Some(0));
     }
 
+    #[test]
+    fn pending_load_clears_a_playing_queue_so_the_bar_goes_blank() {
+        let mut state = PlaybackState::default();
+        state.replace(tracks(), 1);
+        state.loaded(state.generation, None);
+        assert_eq!(state.status, PlaybackStatus::Playing);
+        assert_eq!(state.current_index, Some(1));
+
+        assert!(state.begin_pending_load());
+        assert_eq!(state.status, PlaybackStatus::Loading);
+        assert_eq!(state.current_index, None);
+        assert!(state.queue.is_empty());
+        assert!(matches!(state.context, PlaybackContext::None));
+
+        // The real load that follows supersedes the pending state cleanly.
+        state.replace(tracks(), 0);
+        assert_eq!(state.current_index, Some(0));
+    }
     #[test]
     fn previous_restarts_after_three_seconds_then_moves_back() {
         let mut state = PlaybackState::default();

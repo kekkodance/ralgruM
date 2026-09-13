@@ -159,6 +159,35 @@ fn smart_mix_page_title_handoff_covers_loaded_and_cached_paths() {
 }
 
 #[test]
+fn play_command_toggles_the_active_mix_and_blanks_the_bar_before_loading() {
+    let source = include_str!("view.rs");
+
+    // The play command toggles pause/resume when the same mix is live.
+    let play = source
+        .split_once("pub(crate) fn start_deezer_flow(")
+        .and_then(|(_, body)| body.split_once("fn start_deezer_flow_with_mode"))
+        .map(|(body, _)| body)
+        .expect("start_deezer_flow should precede start_deezer_flow_with_mode");
+    assert!(play.contains("playback.toggle(cx)"));
+    assert!(play.contains("PlaybackStatus::Playing | crate::playback::PlaybackStatus::Paused"));
+
+    // The blank bar opens before the queue epoch is captured, because
+    // entering the pending state advances the epoch.
+    let with_mode = source
+        .split_once("fn start_deezer_flow_with_mode")
+        .and_then(|(_, body)| body.split_once("cx.spawn(async move |this, cx|"))
+        .map(|(body, _)| body)
+        .expect("start_deezer_flow_with_mode body should exist");
+    let begin = with_mode
+        .find("playback.begin_pending_load(cx)")
+        .expect("pending bar should open before the load spawns");
+    let epoch = with_mode
+        .find("let queue_epoch = self.playback.read(cx).state.queue_epoch();")
+        .expect("queue epoch should be captured in the play path");
+    assert!(begin < epoch);
+}
+
+#[test]
 fn playlist_roots_do_not_eagerly_preload_the_owned_catalog() {
     let source = include_str!("view.rs");
     let loader = source

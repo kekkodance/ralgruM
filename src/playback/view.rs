@@ -1588,9 +1588,21 @@ impl PlaybackModel {
     }
 
     /// Open the player bar blank while a queued playback source is still
-    /// being fetched, e.g. a smart mix page load.
+    /// being fetched, e.g. a smart mix page load. Current audio stops so
+    /// the blank bar is honest about the state.
     pub(crate) fn begin_pending_load(&mut self, cx: &mut Context<Self>) {
+        self.cancellation.cancel();
+        self.cache.cancel();
+        self.cancel_user_fade();
+        self.cancel_seek_slider_interaction();
+        self.standby = StandbyPhase::Idle;
+        self.reset_extension_state();
+        self.reset_download_progress();
+        if let Ok(engine) = self.engine.as_mut() {
+            engine.stop();
+        }
         if self.state.begin_pending_load() {
+            self.sync_discord();
             cx.notify();
         }
     }
