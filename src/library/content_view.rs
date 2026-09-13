@@ -8,7 +8,7 @@ use gpui_component::{
 use std::{borrow::Cow, rc::Rc, sync::Arc};
 
 use crate::{
-    app_button::primary_button,
+    app_button::{primary_button, secondary_page_action_button_with_disabled},
     app_tooltip::AppTooltipExt,
     assets::{LocalIcon, local_icon},
     browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
@@ -28,6 +28,7 @@ use crate::{
 };
 
 use super::{
+    client::DEEZER_SESSION_EXPIRED,
     flow_controls,
     model::{
         Card, Category, FLOW_TRACK_DESCRIPTION, Page, Route, Section, SectionLayout, Service,
@@ -108,29 +109,37 @@ pub(super) fn render_content(
                 LocalIcon::UserLock,
                 title,
                 description,
-                Some(action_button(
-                    "Open account settings",
-                    LocalIcon::Settings,
-                    true,
-                    cx.listener(|this, _, window, cx| {
-                        this.open_settings(window, cx);
-                    }),
-                )),
+                Some(open_account_settings_action(cx)),
             )
         }
-        Status::Failed(error) => message(
-            LocalIcon::TriangleExclamation,
-            "Could not load this library",
-            error,
-            Some(action_button(
-                "Try again",
-                LocalIcon::ArrowRight,
-                false,
-                cx.listener(|this, _, _, cx| {
-                    this.reload_root(cx);
-                }),
-            )),
-        ),
+        Status::Failed(error) => {
+            if error.as_str() == DEEZER_SESSION_EXPIRED {
+                crate::empty_state::render(
+                    LocalIcon::UserLock,
+                    "Your Deezer session has expired",
+                    "Log in to Deezer again to refresh your library.",
+                    Some(open_account_settings_action(cx)),
+                )
+            } else {
+                crate::empty_state::render(
+                    LocalIcon::TriangleExclamation,
+                    "Could not load this library",
+                    error,
+                    Some(
+                        secondary_page_action_button_with_disabled(
+                            "library-retry",
+                            Some(LocalIcon::RotateRight),
+                            "Try again",
+                            false,
+                            cx.listener(|this, _, _, cx| {
+                                this.reload_root(cx);
+                            }),
+                        )
+                        .into_any_element(),
+                    ),
+                )
+            }
+        }
         Status::Empty => view
             .state
             .page
@@ -2285,22 +2294,16 @@ fn render_section(
     }
 }
 
-fn action_button(
-    label: &'static str,
-    icon: LocalIcon,
-    primary: bool,
-    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
-) -> AnyElement {
-    if primary {
-        primary_button(label, Some(icon), label, on_click).into_any_element()
-    } else {
-        Button::new(label)
-            .small()
-            .icon(Icon::default().path(icon.path()))
-            .label(label)
-            .on_click(on_click)
-            .into_any_element()
-    }
+fn open_account_settings_action(cx: &mut Context<LibraryView>) -> AnyElement {
+    primary_button(
+        "library-open-account-settings",
+        Some(LocalIcon::Settings),
+        "Open account settings",
+        cx.listener(|this, _, window, cx| {
+            this.open_settings(window, cx);
+        }),
+    )
+    .into_any_element()
 }
 
 fn message(
@@ -2315,17 +2318,23 @@ fn message(
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(8.))
         .text_color(rgb(MUTED))
         .child(local_icon(icon, MUTED).size(px(40.)))
         .child(
             div()
-                .text_size(px(17.))
+                .mt(px(12.))
+                .mb(px(4.))
+                .text_size(px(16.))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(FOREGROUND))
                 .child(title.to_owned()),
         )
-        .child(div().child(description.to_owned()))
-        .when_some(action, |this, action| this.child(action))
+        .when(!description.is_empty(), |this| {
+            this.child(div().text_size(px(13.)).child(description.to_owned()))
+        })
+        .when_some(action, |this, action| {
+            this.child(div().mt(px(14.)).child(action))
+        })
         .into_any_element()
 }
 

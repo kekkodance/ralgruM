@@ -31,6 +31,7 @@ pub(super) const MAX_PLAYLIST_TRACKS: usize = 500;
 const MAX_ARTWORK_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ARTWORK_BASE64_BYTES: usize = MAX_ARTWORK_BYTES.div_ceil(3) * 4;
 const TRACK_HYDRATION_CONCURRENCY: usize = 4;
+const MAX_COLLECTION_PAGES: usize = 50;
 
 #[derive(Clone)]
 pub(crate) struct SoundCloudLibraryClient {
@@ -709,9 +710,13 @@ impl SoundCloudLibraryClient {
         let mut offset = "0".to_owned();
         let mut seen = HashSet::new();
         let mut items = Vec::new();
-        loop {
+        for _ in 0..MAX_COLLECTION_PAGES {
             if !seen.insert(offset.clone()) {
-                return Err(format!("SoundCloud repeated the {context} continuation"));
+                // SoundCloud re-serves a continuation cursor when a page boundary
+                // lands on equal-timestamp play-history entries or at its history
+                // depth cap. There is no further page, so end the walk with the
+                // items collected so far instead of failing the whole load.
+                return Ok(items);
             }
             let response = self
                 .get(
@@ -721,12 +726,17 @@ impl SoundCloudLibraryClient {
                 )
                 .await?;
             let next = next_offset(&response, &path)?;
-            items.extend(collection_value(response, context)?);
+            let page = collection_value(response, context)?;
+            if page.is_empty() {
+                return Ok(items);
+            }
+            items.extend(page);
             let Some(next) = next else {
                 return Ok(items);
             };
             offset = next;
         }
+        Ok(items)
     }
 
     async fn get(
@@ -787,9 +797,13 @@ impl SoundCloudLibraryClient {
         let mut offset = "0".to_owned();
         let mut seen = HashSet::new();
         let mut items = Vec::new();
-        loop {
+        for _ in 0..MAX_COLLECTION_PAGES {
             if !seen.insert(offset.clone()) {
-                return Err(format!("SoundCloud repeated the {context} continuation"));
+                // SoundCloud re-serves a continuation cursor when a page boundary
+                // lands on equal-timestamp play-history entries or at its history
+                // depth cap. There is no further page, so end the walk with the
+                // items collected so far instead of failing the whole load.
+                return Ok(items);
             }
             let response = self
                 .mobile_get(
@@ -799,12 +813,17 @@ impl SoundCloudLibraryClient {
                 )
                 .await?;
             let next = next_offset(&response, &path)?;
-            items.extend(collection_value(response, context)?);
+            let page = collection_value(response, context)?;
+            if page.is_empty() {
+                return Ok(items);
+            }
+            items.extend(page);
             let Some(next) = next else {
                 return Ok(items);
             };
             offset = next;
         }
+        Ok(items)
     }
 
     async fn mobile_get(

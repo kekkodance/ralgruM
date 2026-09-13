@@ -29,6 +29,11 @@ const TRACKS_PAGE_SIZE: usize = 10_000;
 const TRACKS_OVERLAP: usize = 8;
 const BOOTSTRAP_CACHE_TTL: Duration = Duration::from_secs(30);
 
+/// Returned when `deezer.getUserData` answers an anonymous session, which
+/// means the saved ARL is no longer authenticated.
+pub(crate) const DEEZER_SESSION_EXPIRED: &str =
+    "Your Deezer session has expired. Log in to Deezer again.";
+
 #[derive(Clone)]
 pub(crate) struct LibraryClient {
     pub(super) client: Client,
@@ -803,14 +808,7 @@ impl LibraryClient {
         let returned_user = value_string(results.pointer("/USER/USER_ID"));
         let returned_user = valid_user_id(&returned_user);
         let saved_user = saved_user_id.as_deref().and_then(valid_user_id);
-        if let (Some(returned), Some(saved)) = (returned_user.as_deref(), saved_user.as_deref())
-            && returned != saved
-        {
-            return Err("Deezer account changed while the library was loading".into());
-        }
-        let user = returned_user
-            .or(saved_user)
-            .ok_or_else(|| "Deezer login required".to_string())?;
+        let user = bootstrap_user_id(returned_user, saved_user.as_deref())?;
         let cookie = session_cookie(&arl, &cookies)?;
         Ok((DeezerSession { token, cookie }, user))
     }
@@ -1343,6 +1341,22 @@ fn envelope_results(envelope: Value, operation: &str) -> Result<Value, String> {
         .get("results")
         .cloned()
         .ok_or_else(|| format!("Deezer {operation} response is missing results"))
+}
+
+/// Resolves the user id for a session bootstrap. An anonymous answer from
+/// `deezer.getUserData` (USER_ID "0", filtered out by `valid_user_id`)
+/// means the saved ARL is no longer authenticated, so the saved user id
+/// must never stand in for a missing bootstrap id.
+fn bootstrap_user_id(
+    returned_user: Option<String>,
+    saved_user: Option<&str>,
+) -> Result<String, String> {
+    if let (Some(returned), Some(saved)) = (returned_user.as_deref(), saved_user)
+        && returned != saved
+    {
+        return Err("Deezer account changed while the library was loading".into());
+    }
+    returned_user.ok_or_else(|| DEEZER_SESSION_EXPIRED.into())
 }
 
 fn valid_user_id(value: &str) -> Option<String> {
@@ -1931,11 +1945,30 @@ mod tests {
     }
 
     #[test]
-    fn saved_user_id_is_used_only_when_bootstrap_id_is_missing_or_zero() {
+    fn anonymous_bootstrap_is_rejected_even_with_a_saved_user_id() {
         assert_eq!(valid_user_id("42"), Some("42".into()));
         assert_eq!(valid_user_id("0"), None);
         assert_eq!(valid_user_id(""), None);
         assert_eq!(valid_user_id("abc"), None);
+        assert_eq!(
+            bootstrap_user_id(Some("42".into()), Some("42")),
+            Ok("42".into())
+        );
+        assert_eq!(
+            bootstrap_user_id(Some("42".into()), Some("7")),
+            Err("Deezer account changed while the library was loading".into())
+        );
+        assert_eq!(bootstrap_user_id(Some("42".into()), None), Ok("42".into()));
+        // An anonymous bootstrap reaches here with USER_ID "0" filtered to
+        // None, and the saved id must not stand in for it.
+        assert_eq!(
+            bootstrap_user_id(None, Some("42")),
+            Err(DEEZER_SESSION_EXPIRED.into())
+        );
+        assert_eq!(
+            bootstrap_user_id(None, None),
+            Err(DEEZER_SESSION_EXPIRED.into())
+        );
     }
 
     #[test]

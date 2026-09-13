@@ -689,7 +689,9 @@ mod tests {
         let url = format!("http://{address}/cover.png");
 
         let downloaded =
-            futures::executor::block_on(async move { download_artwork(runtime, client, url).await });
+            futures::executor::block_on(
+                async move { download_artwork(runtime, client, url).await },
+            );
 
         server.join().unwrap();
         assert_eq!(downloaded.unwrap(), png);

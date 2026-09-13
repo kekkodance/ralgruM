@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::search::DeezerArl;
 
+use super::client::DEEZER_SESSION_EXPIRED;
 use super::playlist_limits::{DEEZER_DESCRIPTION_MAX_CHARS, DEEZER_TITLE_MAX_CHARS};
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
@@ -455,10 +456,17 @@ impl PlaylistClient {
         let cookies = response_cookies(&response);
         let value = decode(response).await?;
         let results = envelope_results(&value)?;
+        // getUserData answering an anonymous session (USER_ID "0") means the
+        // saved ARL is no longer authenticated, so the saved user id must
+        // not be substituted for the missing bootstrap id.
         let user_id = value_string(results.pointer("/USER/USER_ID"))
             .filter(|id| id != "0")
-            .or_else(|| saved_user_id.and_then(|id| valid_id(&id).ok()))
-            .ok_or_else(|| "Deezer login required".to_string())?;
+            .ok_or_else(|| DEEZER_SESSION_EXPIRED.to_string())?;
+        if let Some(saved) = saved_user_id.as_deref().and_then(|id| valid_id(id).ok())
+            && saved != user_id
+        {
+            return Err("Deezer account changed while the library was loading".into());
+        }
         let cookie = session_cookie(arl_cookie, &cookies)?;
         let request = jwt_request(&self.client, &arl, &user_id);
         let response = request
