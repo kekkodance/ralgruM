@@ -509,13 +509,17 @@ impl PlaybackModel {
         kind: DeezerFlowKind,
         tracks: Vec<PlaybackTrack>,
         clear_remaining: bool,
+        keep_playing_track: bool,
         cx: &mut Context<Self>,
     ) {
-        let preserve_current = clear_remaining
-            && matches!(
-                &self.state.context,
-                PlaybackContext::DeezerFlow { config_id: active, .. } if active == &config_id
-            );
+        // Navigating to a mix page that is already playing must not cut the
+        // audio; an explicit play command restarts the mix from its first
+        // track even when that mix is already the active context.
+        let preserve_current = self.state.should_preserve_flow_current(
+            &config_id,
+            clear_remaining,
+            keep_playing_track,
+        );
         let context = PlaybackContext::DeezerFlow {
             config_id,
             mode,
@@ -1573,12 +1577,31 @@ impl PlaybackModel {
         if let Ok(engine) = self.engine.as_mut() {
             engine.stop();
         }
+        if self.state.abandon_pending_load() {
+            cx.notify();
+            return;
+        }
         if self.state.stop_loading() {
             self.sync_discord();
             cx.notify();
         }
     }
 
+    /// Open the player bar blank while a queued playback source is still
+    /// being fetched, e.g. a smart mix page load.
+    pub(crate) fn begin_pending_load(&mut self, cx: &mut Context<Self>) {
+        if self.state.begin_pending_load() {
+            cx.notify();
+        }
+    }
+
+    /// Close the player bar when a pending source load never produced a
+    /// track.
+    pub(crate) fn abandon_pending_load(&mut self, cx: &mut Context<Self>) {
+        if self.state.abandon_pending_load() {
+            cx.notify();
+        }
+    }
     pub(crate) fn previous(&mut self, cx: &mut Context<Self>) {
         self.consecutive_failures = 0;
         self.cancel_user_fade_and_sync_transport();

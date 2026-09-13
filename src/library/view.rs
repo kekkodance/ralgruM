@@ -1440,6 +1440,9 @@ impl LibraryView {
         } else {
             DeezerFlowKind::Flow
         };
+        // Feedback first: open a blank player bar while the mix page loads.
+        self.playback
+            .update(cx, |playback, cx| playback.begin_pending_load(cx));
         let playback = self.playback.clone();
         let task = self.runtime.spawn(async move {
             client
@@ -1455,9 +1458,13 @@ impl LibraryView {
                     || this.playback.read(cx).state.queue_epoch() != queue_epoch
                     || this.account.read(cx).library_scope() != account_scope
                 {
+                    // The click was superseded; close the blank bar again
+                    // unless something else took over playback.
+                    playback.update(cx, |playback, cx| playback.abandon_pending_load(cx));
                     return;
                 }
                 let Ok(page) = result else {
+                    playback.update(cx, |playback, cx| playback.abandon_pending_load(cx));
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
@@ -1467,6 +1474,7 @@ impl LibraryView {
                     return;
                 };
                 if page.tracks.is_empty() {
+                    playback.update(cx, |playback, cx| playback.abandon_pending_load(cx));
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
@@ -1494,6 +1502,7 @@ impl LibraryView {
                         flow_kind,
                         queue,
                         page.clear_remaining_tracks,
+                        false,
                         cx,
                     );
                 });
@@ -2602,6 +2611,7 @@ impl LibraryView {
                                     active_kind,
                                     tracks,
                                     clear_remaining,
+                                    true,
                                     cx,
                                 );
                             });

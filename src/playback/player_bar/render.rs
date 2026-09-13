@@ -285,9 +285,7 @@ impl Render for PlaybackView {
                 self.external_track_navigation.as_ref(),
             )
         });
-        let title_for_motion = current
-            .as_ref()
-            .map_or("Nothing playing", |track| track.title.as_str());
+        let title_for_motion = current_track_title(current.as_ref(), status);
         let subtitle_for_motion = current_subtitle(
             current.as_ref(),
             status,

@@ -632,6 +632,51 @@ impl PlaybackState {
         true
     }
 
+    /// Open the player bar in a blank loading state before any track exists,
+    /// e.g. while the smart mix page is still being fetched after a click.
+    /// The queue and generation are untouched so the real load that follows
+    /// supersedes this state cleanly.
+    pub(crate) fn begin_pending_load(&mut self) -> bool {
+        if self.status != PlaybackStatus::Empty {
+            return false;
+        }
+        self.status = PlaybackStatus::Loading;
+        self.position = Duration::ZERO;
+        self.buffered = Duration::ZERO;
+        self.error = None;
+        true
+    }
+
+    /// Close the player bar again when a pending load never produced a
+    /// track. Loads that already selected a track are left alone.
+    pub(crate) fn abandon_pending_load(&mut self) -> bool {
+        if self.status != PlaybackStatus::Loading || self.current_index.is_some() {
+            return false;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.status = PlaybackStatus::Empty;
+        self.error = None;
+        true
+    }
+
+    /// Whether applying a flow page should keep the currently playing track.
+    /// Only pure navigation into an already-playing smart mix preserves the
+    /// audio; an explicit play restarts the mix from its first track, and
+    /// flows that append rather than replace never preserve.
+    pub(crate) fn should_preserve_flow_current(
+        &self,
+        config_id: &str,
+        clear_remaining: bool,
+        keep_playing_track: bool,
+    ) -> bool {
+        keep_playing_track
+            && clear_remaining
+            && matches!(
+                &self.context,
+                PlaybackContext::DeezerFlow { config_id: active, .. } if active == config_id
+            )
+    }
+
     pub(crate) fn toggle(&mut self) -> Option<bool> {
         match self.status {
             PlaybackStatus::Playing => {
@@ -1447,6 +1492,52 @@ mod tests {
         assert!(state.loaded(second, Some(Duration::from_secs(12))));
         assert_eq!(state.status, PlaybackStatus::Playing);
         assert_eq!(state.duration, Duration::from_secs(12));
+    }
+
+    #[test]
+    fn pending_load_opens_the_bar_blank_and_closes_without_a_track() {
+        let mut state = PlaybackState::default();
+        assert_eq!(state.status, PlaybackStatus::Empty);
+
+        assert!(state.begin_pending_load());
+        assert_eq!(state.status, PlaybackStatus::Loading);
+        assert_eq!(state.current_index, None);
+        // A second pending begin cannot stack.
+        assert!(!state.begin_pending_load());
+
+        assert!(state.abandon_pending_load());
+        assert_eq!(state.status, PlaybackStatus::Empty);
+
+        // Once a real load selected a track, abandon no longer applies.
+        state.begin_pending_load();
+        state.replace(tracks(), 0);
+        assert_eq!(state.current_index, Some(0));
+        assert!(!state.abandon_pending_load());
+        assert_eq!(state.status, PlaybackStatus::Loading);
+    }
+
+    #[test]
+    fn explicit_play_restarts_a_mix_that_is_already_the_active_context() {
+        let mut state = PlaybackState::default();
+        state.replace(tracks(), 1);
+        state.replace_context(PlaybackContext::DeezerFlow {
+            config_id: "mix-1".into(),
+            mode: library::FlowMode::Default,
+            tuner: None,
+            kind: DeezerFlowKind::SmartMix,
+        });
+
+        // Navigating into the already-playing mix keeps the current track.
+        assert!(state.should_preserve_flow_current("mix-1", true, true));
+        // An explicit play command restarts from the first track.
+        assert!(!state.should_preserve_flow_current("mix-1", true, false));
+        // A different mix, or a flow that appends, never preserves.
+        assert!(!state.should_preserve_flow_current("mix-2", true, true));
+        assert!(!state.should_preserve_flow_current("mix-1", false, true));
+
+        // The restart path replaces the queue and selects the first track.
+        state.replace(tracks(), 0);
+        assert_eq!(state.current_index, Some(0));
     }
 
     #[test]

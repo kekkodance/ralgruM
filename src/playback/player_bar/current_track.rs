@@ -87,7 +87,7 @@ pub(super) fn render_current(
 ) -> AnyElement {
     let block_width = desktop_layout.map_or(380., |layout| layout.side_width);
     let artwork = if narrow { 44. } else { 60. };
-    let title = track.map_or("Nothing playing", |track| track.title.as_str());
+    let title = current_track_title(track, status);
     let subtitle = current_subtitle(track, status, error, loading_from_cache);
     let rendered_artist =
         rendered_current_artist_text(track, status, error, subtitle, artist_navigation.as_ref());
@@ -302,6 +302,19 @@ pub(super) fn current_subtitle<'a>(
             PlaybackStatus::Failed => "Playback failed",
             _ => track.map_or("", |track| track.artist.as_str()),
         }
+    }
+}
+
+pub(super) fn current_track_title<'a>(
+    track: Option<&'a PlaybackTrack>,
+    status: PlaybackStatus,
+) -> &'a str {
+    match (track, status) {
+        (Some(track), _) => track.title.as_str(),
+        // A pending source load has no track yet; say what is happening
+        // instead of claiming nothing is playing.
+        (None, PlaybackStatus::Loading) => "Loading...",
+        (None, _) => "Nothing playing",
     }
 }
 

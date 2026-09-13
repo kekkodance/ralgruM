@@ -12,8 +12,8 @@ use super::{
     VolumePointerRelease, VolumePointerState, WIDE_VOLUME_INSET_PX, accessibility_seek_fraction,
     artist_routes_for_track, bare_action_visual, close_player_tooltip_gap, current_block_width,
     current_favorite_key, current_subtitle, current_text_available_width,
-    current_text_width_for_layout, desktop_player_geometry, download_available,
-    fade_motion_geometry, fade_motion_opacity, favorite_feedback_opacity,
+    current_text_width_for_layout, current_track_title, desktop_player_geometry,
+    download_available, fade_motion_geometry, fade_motion_opacity, favorite_feedback_opacity,
     favorite_left_for_text_width, favorite_top, finish_volume_pointer_interaction,
     pointer_seek_fraction, quality_badge_animation_key, quality_badge_opacity_endpoints,
     quality_text_animation_key, quality_text_opacity_endpoints, rendered_artist_text,
@@ -1358,5 +1358,38 @@ fn cached_loading_keeps_the_artist_visible() {
     assert_eq!(
         current_subtitle(Some(&track), PlaybackStatus::Loading, None, false),
         "Loading audio..."
+    );
+}
+
+#[test]
+fn pending_load_titles_the_bar_instead_of_claiming_nothing_plays() {
+    let track = PlaybackTrack {
+        downloadable: false,
+        progressive: false,
+        provider: PlaybackProvider::Deezer,
+        id: "7".into(),
+        title: "Pending Song".into(),
+        artist: "Pending Artist".into(),
+        album: String::new(),
+        album_id: String::new(),
+        release_date: String::new(),
+        artists: Vec::new(),
+        artwork: String::new(),
+        duration: Duration::from_secs(10),
+        explicit: false,
+        service_url: String::new(),
+    };
+
+    assert_eq!(
+        current_track_title(Some(&track), PlaybackStatus::Loading),
+        "Pending Song"
+    );
+    assert_eq!(
+        current_track_title(None, PlaybackStatus::Loading),
+        "Loading..."
+    );
+    assert_eq!(
+        current_track_title(None, PlaybackStatus::Empty),
+        "Nothing playing"
     );
 }
