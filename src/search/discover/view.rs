@@ -525,15 +525,18 @@ fn render_section(
 
 fn section_heading(section: &DiscoverSection) -> AnyElement {
     // The subtitle line is always reserved, empty when absent, so every
-    // section heading measures the same height inside its pinned row.
+    // section heading measures the same height inside its pinned row. The
+    // heading row is top aligned and the icon box matches the title line
+    // box, so the icon rides the title line in single and double line
+    // headings alike.
     let has_subtitle = !section.subtitle.trim().is_empty();
     gpui::div()
         .flex()
-        .items_center()
+        .items_start()
         .gap(px(8.))
         .child(
             gpui::div()
-                .h(px(18.))
+                .h(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -744,17 +747,20 @@ fn render_channel_loading(
 
 fn skeleton_heading(provider: Provider) -> AnyElement {
     // Both text slots are reserved for every provider so skeleton headings
-    // measure exactly the section heading height.
+    // measure exactly the section heading height. The icon box matches the
+    // title line box and the row is top aligned, mirroring section_heading.
     gpui::div()
         .flex()
-        .items_center()
+        .items_start()
         .gap(px(8.))
         .child(
             gpui::div()
-                .h(px(18.))
+                .h(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))
                 .flex_none()
                 .flex()
                 .items_center()
+                .relative()
+                .top(px(DISCOVER_PROVIDER_ICON_OPTICAL_OFFSET_PX))
                 .child(provider_icon(provider)),
         )
         .child(
@@ -1079,6 +1085,9 @@ mod tests {
             .expect("skeleton heading source");
         assert!(heading.contains(".h(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))"));
         assert!(heading.contains(".h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))"));
+        assert!(heading.contains(".items_start()"));
+        assert!(heading.contains("top(px(DISCOVER_PROVIDER_ICON_OPTICAL_OFFSET_PX))"));
+        assert!(!heading.contains(".h(px(18.))"));
     }
 
     #[test]
@@ -1095,6 +1104,9 @@ mod tests {
         assert!(heading.contains(".h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))"));
         assert!(heading.contains(".line_height(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))"));
         assert!(!heading.contains(".when(!section.subtitle.trim().is_empty()"));
+        assert!(heading.contains(".items_start()"));
+        assert!(heading.contains(".h(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))"));
+        assert!(!heading.contains(".h(px(18.))"));
     }
 
     #[test]

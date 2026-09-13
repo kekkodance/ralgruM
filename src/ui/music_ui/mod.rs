@@ -702,9 +702,10 @@ pub(crate) fn playlist_privacy_icon(is_private: bool) -> LocalIcon {
 /// at a deterministic height so pinned carousel and grid rows never diverge
 /// from their uniform height hints.
 pub(crate) const COLLECTION_CARD_TITLE_LINE_HEIGHT_PX: f32 = 16.;
-/// Reserved subtitle row for collection cards. The row always renders, empty
-/// when the subtitle is hidden, so cards measure the same height with and
-/// without subtitle text.
+/// Height of the collection card subtitle row. The row renders only when it
+/// carries subtitle text or a privacy icon, so textless cards drop the empty
+/// chin; grid row pitch formulas still reserve this line for the uniform
+/// card height.
 pub(crate) const COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX: f32 = 16.;
 
 #[allow(clippy::too_many_arguments)]
@@ -805,9 +806,12 @@ fn collection_card_with_title_alignment_source(
 ) -> AnyElement {
     // The subtitle renders whenever it carries real information. Eponymous
     // releases (an album named after its artist) must still show the artist,
-    // so only the placeholder filter applies. The subtitle row is reserved
-    // even when hidden so every card measures the same height.
+    // so only the placeholder filter applies. The subtitle row renders only
+    // when it carries text or a privacy icon so single line cards lose the
+    // empty chin; carousels and grids stretch cards to the tallest sibling
+    // and pinned grid rows keep measuring the reserved pitch.
     let show_subtitle = crate::search::collection_subtitle_is_visible(subtitle);
+    let has_subtitle_row = show_subtitle || is_private.is_some();
     div()
         .flex()
         .flex_col()
@@ -839,48 +843,50 @@ fn collection_card_with_title_alignment_source(
                         .truncate()
                         .child(title.to_owned()),
                 )
-                .child(
-                    div()
-                        .mt(px(2.))
-                        .h(px(COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))
-                        .flex()
-                        .items_center()
-                        .gap(px(COLLECTION_PRIVACY_ICON_GAP))
-                        .min_w_0()
-                        .when(show_subtitle, |this| {
-                            this.child(
-                                div()
-                                    .min_w_0()
-                                    .flex_shrink_1()
-                                    .text_size(px(11.))
-                                    .line_height(px(COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))
-                                    .text_color(rgb(MUTED))
-                                    .truncate()
-                                    .child(subtitle.to_owned()),
-                            )
-                        })
-                        .when_some(is_private, |this, is_private| {
-                            this.child(
-                                div()
-                                    .id(format!(
-                                        "collection-card-privacy-{}-{}",
-                                        if id.is_empty() { title } else { id },
-                                        if is_private { "private" } else { "public" }
-                                    ))
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .relative()
-                                    .top(px(COLLECTION_PRIVACY_OPTICAL_OFFSET_PX))
-                                    .app_tooltip(if is_private { "Private" } else { "Public" })
-                                    .child(
-                                        local_icon(playlist_privacy_icon(is_private), MUTED)
-                                            .size(px(COLLECTION_PRIVACY_ICON_SIZE)),
-                                    ),
-                            )
-                        }),
-                ),
+                .when(has_subtitle_row, |this| {
+                    this.child(
+                        div()
+                            .mt(px(2.))
+                            .h(px(COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))
+                            .flex()
+                            .items_center()
+                            .gap(px(COLLECTION_PRIVACY_ICON_GAP))
+                            .min_w_0()
+                            .when(show_subtitle, |this| {
+                                this.child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_shrink_1()
+                                        .text_size(px(11.))
+                                        .line_height(px(COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))
+                                        .text_color(rgb(MUTED))
+                                        .truncate()
+                                        .child(subtitle.to_owned()),
+                                )
+                            })
+                            .when_some(is_private, |this, is_private| {
+                                this.child(
+                                    div()
+                                        .id(format!(
+                                            "collection-card-privacy-{}-{}",
+                                            if id.is_empty() { title } else { id },
+                                            if is_private { "private" } else { "public" }
+                                        ))
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .relative()
+                                        .top(px(COLLECTION_PRIVACY_OPTICAL_OFFSET_PX))
+                                        .app_tooltip(if is_private { "Private" } else { "Public" })
+                                        .child(
+                                            local_icon(playlist_privacy_icon(is_private), MUTED)
+                                                .size(px(COLLECTION_PRIVACY_ICON_SIZE)),
+                                        ),
+                                )
+                            }),
+                    )
+                }),
         )
         .into_any_element()
 }
@@ -1971,7 +1977,7 @@ mod tests {
     }
 
     #[test]
-    fn collection_cards_reserve_the_subtitle_row_for_a_uniform_height() {
+    fn collection_cards_render_the_subtitle_row_only_when_it_carries_content() {
         assert_eq!(COLLECTION_CARD_TITLE_LINE_HEIGHT_PX, 16.);
         assert_eq!(COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX, 16.);
 
@@ -1985,10 +1991,8 @@ mod tests {
             .unwrap();
         assert!(card.contains(".line_height(px(COLLECTION_CARD_TITLE_LINE_HEIGHT_PX))"));
         assert!(card.contains(".h(px(COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))"));
-        assert!(
-            !card.contains(".when(show_subtitle || is_private.is_some()"),
-            "the subtitle row must render unconditionally so cards measure the same height"
-        );
+        assert!(card.contains("let has_subtitle_row = show_subtitle || is_private.is_some();"));
+        assert!(card.contains(".when(has_subtitle_row, |this|"));
     }
 
     #[test]
