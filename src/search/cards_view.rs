@@ -432,6 +432,11 @@ fn discover_card_presentation(item: &DiscoverItem) -> CollectionCardPresentation
         DiscoverAction::PlayDeezerFlow { smart_mix: false }
     ) {
         presentation.title_alignment = CollectionCardTitleAlignment::KindDefault;
+    } else if matches!(
+        item.action,
+        DiscoverAction::OpenDeezerChannel(_) | DiscoverAction::OpenSoundCloudSelection(_)
+    ) {
+        presentation.title_alignment = CollectionCardTitleAlignment::Center;
     }
     presentation
 }
@@ -810,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn discover_flows_use_the_centered_library_flow_card_kind() {
+    fn discover_flows_and_genre_cards_use_centered_titles() {
         let item = DiscoverItem {
             card: card(ResultType::All, "flow-id"),
             action: DiscoverAction::PlayDeezerFlow { smart_mix: false },
@@ -828,6 +833,28 @@ mod tests {
         assert_eq!(
             discover_card_presentation(&smart_mix).title_alignment,
             CollectionCardTitleAlignment::Left
+        );
+
+        // Genre cards center through the explicit alignment, not by borrowing
+        // the Flow card kind.
+        let channel = DiscoverItem {
+            card: card(ResultType::All, "channel-id"),
+            action: DiscoverAction::OpenDeezerChannel("dance".into()),
+        };
+        assert!(matches!(discover_card_kind(&channel), CardKind::Other));
+        assert_eq!(
+            discover_card_presentation(&channel).title_alignment,
+            CollectionCardTitleAlignment::Center
+        );
+
+        let selection = DiscoverItem {
+            card: card(ResultType::Playlists, "selection-id"),
+            action: DiscoverAction::OpenSoundCloudSelection(vec!["1".into()]),
+        };
+        assert!(matches!(discover_card_kind(&selection), CardKind::Playlist));
+        assert_eq!(
+            discover_card_presentation(&selection).title_alignment,
+            CollectionCardTitleAlignment::Center
         );
 
         let ordinary = DiscoverItem {

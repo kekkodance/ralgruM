@@ -249,8 +249,17 @@ impl RodioEngine {
         let decoded = builder
             .build()
             .map_err(|error| format!("Could not decode {} audio: {error}", audio.format.label()))?;
-        let duration = decoded.total_duration().or(audio.duration);
-        if audio.seekable_after_completion {
+        let decoded_duration = decoded.total_duration();
+        let duration = decoded_duration.or(audio.duration);
+        // A fragmented MP4 keeps its sample count in movie fragments instead
+        // of the movie header, so the decoder reports a zero total duration.
+        // Rodio clamps every sink seek to that duration, which silently
+        // restarts such tracks from byte zero. Route fragmented MP4 sources
+        // through the discard-based reload, which positions a fresh decoder
+        // by decoding up to the requested position.
+        let fragmented_mp4 = audio.format == AudioFormat::M4a
+            && decoded_duration.is_none_or(|decoded| decoded.is_zero());
+        if audio.seekable_after_completion || fragmented_mp4 {
             let progressive_seek = ProgressiveSeek {
                 path,
                 format: audio.format,
@@ -1076,6 +1085,57 @@ mod tests {
         let seeked_rms = sample_rms(&seeked_samples);
         assert!(start_rms < 0.05, "start RMS was {start_rms}");
         assert!(seeked_rms > 0.2, "seeked RMS was {seeked_rms}");
+    }
+
+    #[tokio::test]
+    async fn fragmented_m4a_progressive_source_keeps_the_reload_seek_path() {
+        let Some(file) = make_fragmented_aac_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping fragmented M4A reload test");
+            return;
+        };
+        let bytes = std::fs::read(file.path()).unwrap();
+        let total = bytes.len() as u64;
+        let buffer =
+            super::super::progressive::ProgressiveFile::new(AudioFormat::M4a, Some(total)).unwrap();
+        let mut writer = buffer.writer().unwrap();
+        use tokio::io::AsyncWriteExt as _;
+        writer.write_all(&bytes).await.unwrap();
+        writer.flush().await.unwrap();
+        writer.finish().await.unwrap();
+        let audio = ResolvedProgressiveAudio {
+            reader: buffer.reader().unwrap(),
+            file: buffer.into_file(),
+            duration: None,
+            format: AudioFormat::M4a,
+            total: Some(total),
+            timeline_size_unknown: false,
+            declared_bitrate: Some(160),
+            initial_downloaded: total,
+            initial_buffered_fraction: None,
+            fully_cached: false,
+            seekable_after_completion: false,
+            timeline_seek_session: None,
+            worker: None,
+        };
+        let prepared = RodioEngine::decode_progressive(audio).unwrap();
+        let (_sink_source, file, progressive_seek) = prepared.into_parts();
+        let progressive_seek =
+            progressive_seek.expect("fragmented M4A must seek through the discard-based reload");
+        assert_eq!(progressive_seek.format, AudioFormat::M4a);
+        assert!(progressive_seek.completion.is_complete());
+        assert!(progressive_seek.timeline_seek_session.is_none());
+        let mut seeked = RodioEngine::decoder_at(
+            &progressive_seek.path,
+            AudioFormat::M4a,
+            Duration::from_millis(800),
+        )
+        .unwrap();
+        let seeked_samples = seeked.by_ref().take(4_096).collect::<Vec<_>>();
+        let seeked_rms = sample_rms(&seeked_samples);
+        assert!(
+            seeked_rms > 0.2,
+            "the reload must land in the tone region, RMS was {seeked_rms}"
+        );
     }
 
     #[test]

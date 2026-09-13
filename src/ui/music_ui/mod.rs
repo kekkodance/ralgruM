@@ -754,6 +754,7 @@ enum CardArtworkSource {
 pub(crate) enum CollectionCardTitleAlignment {
     KindDefault,
     Left,
+    Center,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -813,12 +814,16 @@ fn collection_card_with_title_alignment_source(
                     div()
                         .text_size(px(12.5))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_align(if title_alignment == CollectionCardTitleAlignment::Left {
-                            TextAlign::Left
-                        } else if matches!(kind, CardKind::Flow) {
-                            TextAlign::Center
-                        } else {
-                            TextAlign::Left
+                        .text_align(match title_alignment {
+                            CollectionCardTitleAlignment::Left => TextAlign::Left,
+                            CollectionCardTitleAlignment::Center => TextAlign::Center,
+                            CollectionCardTitleAlignment::KindDefault => {
+                                if matches!(kind, CardKind::Flow) {
+                                    TextAlign::Center
+                                } else {
+                                    TextAlign::Left
+                                }
+                            }
                         })
                         .truncate()
                         .child(title.to_owned()),

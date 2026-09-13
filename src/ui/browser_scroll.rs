@@ -852,7 +852,10 @@ mod tests {
         autoscroll_cursor, autoscroll_direction, autoscroll_speed, clamp_and_settle_wheel_step,
         is_vertical_scroll, queue_wheel_state, smooth_scroll_step, wheel_pixel_delta,
     };
-    use gpui::{CursorStyle, ListAlignment, ListState, MouseButton, ScrollDelta, point, px};
+    use gpui::{
+        CursorStyle, ListAlignment, ListState, MouseButton, ScrollDelta, TestAppContext, div,
+        point, prelude::*, px,
+    };
     use std::time::{Duration, Instant};
 
     #[test]
@@ -869,6 +872,75 @@ mod tests {
         assert_eq!(state.logical_scroll_top().item_ix, 99);
         assert_eq!(f32::from(state.logical_scroll_top().offset_in_item), 8.);
         assert_eq!(fixed.position(), 5750.);
+    }
+
+    #[gpui::test]
+    fn measure_all_list_scrolls_after_first_layout(cx: &mut TestAppContext) {
+        struct MeasureList(ListState);
+        impl gpui::Render for MeasureList {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                div().size_full().child(
+                    gpui::list(self.0.clone(), |_, _, _| {
+                        div().h(px(20.)).w_full().into_any_element()
+                    })
+                    .w_full()
+                    .h_full(),
+                )
+            }
+        }
+
+        let state = ListState::new(100, ListAlignment::Top, px(0.)).measure_all();
+        let window = cx.add_window({
+            let state = state.clone();
+            move |_, _| MeasureList(state)
+        });
+        let mut visual =
+            gpui::VisualTestContext::from_window(gpui::AnyWindowHandle::from(window), cx);
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+
+        let viewport_height = f32::from(state.viewport_bounds().size.height);
+        assert_eq!(
+            f32::from(state.max_offset_for_scrollbar().y),
+            2000. - viewport_height
+        );
+
+        state.scroll_by(px(100.));
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(
+            f32::from(state.scroll_px_offset_for_scrollbar().y),
+            -100.,
+            "scroll position should advance after scroll_by"
+        );
+
+        // A content change resets the state the same way the discover feed
+        // does; scrolling must keep working afterwards.
+        state.reset(100);
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(
+            f32::from(state.max_offset_for_scrollbar().y),
+            2000. - viewport_height,
+            "max offset should return after a reset re-measures all items"
+        );
+        state.scroll_by(px(100.));
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(
+            f32::from(state.scroll_px_offset_for_scrollbar().y),
+            -100.,
+            "scroll position should advance after reset and re-measure"
+        );
     }
 
     #[test]

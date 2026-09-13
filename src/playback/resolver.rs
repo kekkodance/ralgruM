@@ -103,7 +103,7 @@ pub(crate) struct ResolvedProgressiveAudio {
     pub(crate) fully_cached: bool,
     pub(crate) seekable_after_completion: bool,
     pub(crate) timeline_seek_session: Option<Arc<dyn TimelineSeekSession>>,
-    worker: Option<ProgressiveDownload>,
+    pub(crate) worker: Option<ProgressiveDownload>,
 }
 
 pub(crate) struct ProgressiveDownload {

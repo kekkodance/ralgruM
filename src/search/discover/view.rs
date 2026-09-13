@@ -164,7 +164,6 @@ pub(crate) fn render(
             entries,
             content_identity,
             format!("discover-feed:{source:?}:channel:{}", channel.slug),
-            true,
         );
         return gpui::div()
             .size_full()
@@ -212,7 +211,6 @@ pub(crate) fn render(
         entries,
         content_identity,
         format!("discover-feed:{source:?}:home"),
-        source_uses_full_loading_geometry(source),
     )
 }
 
@@ -225,9 +223,13 @@ fn render_feed(
     entries: Vec<DiscoverFeedEntry>,
     content_identity: String,
     cache_identity: String,
-    has_subtitle: bool,
 ) -> AnyElement {
-    let row_height = section_geometry(narrow, has_subtitle).row_height;
+    // Rows are pinned to the with-subtitle geometry so the uniform height
+    // hint matches what every row actually measures. Sections without a
+    // subtitle keep the extra room as bottom spacing, and the scrollbar
+    // never corrects mid-scroll because rendered heights cannot diverge
+    // from the estimate.
+    let row_height = section_geometry(narrow, true).row_height;
     let (state, browser_scroll) = view.discover_feed_state(
         &cache_identity,
         &content_identity,
@@ -238,7 +240,14 @@ fn render_feed(
     let host = host.clone();
     let account = view.account.clone();
     let list = gpui::list(state.clone(), move |index, _window, _app| {
-        render_entry(&entries[index], &host, &account, available_width, narrow)
+        render_entry(
+            &entries[index],
+            &host,
+            &account,
+            available_width,
+            narrow,
+            row_height,
+        )
     });
     let content = gpui::div()
         .size_full()
@@ -404,6 +413,7 @@ fn render_entry(
     account: &Entity<crate::settings::AccountState>,
     available_width: f32,
     narrow: bool,
+    row_height: f32,
 ) -> AnyElement {
     let content = match entry {
         DiscoverFeedEntry::Section { section, carousel } => render_section(
@@ -437,9 +447,14 @@ fn render_entry(
             retry,
         } => render_status(Provider::Deezer, title, description, *retry, host, true),
     };
+    let pins_height = matches!(
+        entry,
+        DiscoverFeedEntry::Section { .. } | DiscoverFeedEntry::Loading { .. }
+    );
     gpui::div()
         .w_full()
         .flex_none()
+        .when(pins_height, |this| this.h(px(row_height)))
         .child(content)
         .into_any_element()
 }
@@ -954,9 +969,8 @@ mod tests {
             .split_once("#[cfg(test)]")
             .map_or(include_str!("view.rs"), |(production, _)| production);
         assert!(implementation.contains("gpui::list(state.clone()"));
-        assert!(implementation.contains("library_vertical_scrollbar("));
+        assert!(implementation.contains(".when(pins_height, |this| this.h(px(row_height)))"));
         assert!(implementation.contains("BrowserScrollTarget::List(state)"));
-        assert!(!implementation.contains(".h(px(row_height))"));
         assert!(implementation.contains("render_discover_card"));
     }
 
