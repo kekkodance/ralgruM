@@ -176,9 +176,7 @@ impl ArtworkCache {
                 }
             }
 
-            let bytes = download_artwork(client, url.clone())
-                .await
-                .map_err(image_error)?;
+            let bytes = download_artwork(runtime.clone(), client, url).await?;
             let image = decode_artwork(runtime.clone(), svg_renderer, bytes.clone()).await?;
 
             // Persistence is deliberately detached from the render path. The
@@ -303,31 +301,47 @@ fn remove_if_unchanged(path: &Path, expected: Option<CacheFingerprint>) {
     }
 }
 
-async fn download_artwork(client: Client, url: String) -> Result<Vec<u8>, String> {
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("artwork request returned {}", response.status()));
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > ARTWORK_MAX_BYTES)
-    {
-        return Err("artwork response is too large".to_owned());
-    }
+/// Download the artwork bytes for `url`, running the request on `runtime`.
+///
+/// The request must run on the Tokio runtime: the artwork loading task is
+/// polled by GPUI's background executor, which provides no Tokio reactor,
+/// and reqwest's timeout timers panic when polled outside one. Every other
+/// network path in the app routes through the runtime the same way.
+async fn download_artwork(
+    runtime: Arc<Runtime>,
+    client: Client,
+    url: String,
+) -> Result<Vec<u8>, ImageCacheError> {
+    runtime
+        .spawn(async move {
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|error| error.to_string())?;
+            if !response.status().is_success() {
+                return Err(format!("artwork request returned {}", response.status()));
+            }
+            if response
+                .content_length()
+                .is_some_and(|length| length > ARTWORK_MAX_BYTES)
+            {
+                return Err("artwork response is too large".to_owned());
+            }
 
-    let mut response = response;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
-        if bytes.len() as u64 + chunk.len() as u64 > ARTWORK_MAX_BYTES {
-            return Err("artwork response is too large".to_owned());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
+            let mut response = response;
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+                if bytes.len() as u64 + chunk.len() as u64 > ARTWORK_MAX_BYTES {
+                    return Err("artwork response is too large".to_owned());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(bytes)
+        })
+        .await
+        .map_err(|_| image_error("artwork download stopped unexpectedly"))?
+        .map_err(image_error)
 }
 
 async fn decode_artwork(
@@ -623,5 +637,61 @@ mod tests {
             supported_image_format(b"<svg xmlns=\"http://www.w3.org/2000/svg\">"),
             None
         );
+    }
+
+    #[test]
+    fn artwork_download_serves_a_reactorless_poller() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        // The artwork loading task is polled by GPUI's background executor,
+        // which has no Tokio reactor; a download that polls reqwest directly
+        // panics with "there is no reactor running". The download must
+        // satisfy its reactor requirement by hopping onto the runtime.
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(1, 1)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected = png.clone();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 1024];
+            loop {
+                let read = socket.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                expected.len()
+            );
+            socket.write_all(headers.as_bytes()).unwrap();
+            socket.write_all(&expected).unwrap();
+        });
+
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let client = Client::builder()
+            .user_agent("ralgrum-gpui-artwork")
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap();
+        let url = format!("http://{address}/cover.png");
+
+        let downloaded =
+            futures::executor::block_on(async move { download_artwork(runtime, client, url).await });
+
+        server.join().unwrap();
+        assert_eq!(downloaded.unwrap(), png);
     }
 }
