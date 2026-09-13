@@ -1041,11 +1041,47 @@ impl LibraryView {
     }
 
     pub(crate) fn start_deezer_track_mix(&mut self, track_id: String, cx: &mut Context<Self>) {
+        if self.toggle_live_deezer_mix(
+            &PlaybackContext::DeezerTrackMix {
+                seed_track_id: track_id.clone(),
+            },
+            cx,
+        ) {
+            return;
+        }
         self.start_deezer_mix(DeezerMixKind::Track(track_id), cx);
     }
 
     pub(crate) fn start_deezer_artist_mix(&mut self, artist_id: String, cx: &mut Context<Self>) {
+        if self.toggle_live_deezer_mix(
+            &PlaybackContext::DeezerArtistMix {
+                seed_artist_id: artist_id.clone(),
+            },
+            cx,
+        ) {
+            return;
+        }
         self.start_deezer_mix(DeezerMixKind::Artist(artist_id), cx);
+    }
+
+    /// Deezer behavior: the play command on the mix that is already the
+    /// active playback context toggles pause and resume instead of
+    /// reloading it.
+    fn toggle_live_deezer_mix(
+        &mut self,
+        context: &PlaybackContext,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let playback = self.playback.read(cx);
+        let same_mix_live = playback.context() == context
+            && matches!(
+                playback.state.status,
+                crate::playback::PlaybackStatus::Playing | crate::playback::PlaybackStatus::Paused
+            );
+        if same_mix_live {
+            self.playback.update(cx, |playback, cx| playback.toggle(cx));
+        }
+        same_mix_live
     }
 
     pub(crate) fn start_soundcloud_artist_station(
@@ -1292,7 +1328,6 @@ impl LibraryView {
 
     fn start_deezer_mix(&mut self, kind: DeezerMixKind, cx: &mut Context<Self>) {
         let action_generation = self.invalidate_playback_actions();
-        let queue_epoch = self.playback.read(cx).state.queue_epoch();
         let Some(arl) = self.account.read(cx).deezer_arl() else {
             crate::toast::push_global(
                 cx,
@@ -1312,6 +1347,12 @@ impl LibraryView {
             );
             return;
         };
+        // Feedback first: stop the current audio and open a blank player
+        // bar while the mix loads. The queue epoch is captured after this
+        // because entering the pending state advances it.
+        self.playback
+            .update(cx, |playback, cx| playback.begin_pending_load(cx));
+        let queue_epoch = self.playback.read(cx).state.queue_epoch();
         let playback = self.playback.clone();
         let context = kind.context();
         let task = match &kind {
@@ -1336,9 +1377,15 @@ impl LibraryView {
                 let still_current = this.playback_action_generation == action_generation
                     && this.playback.read(cx).state.queue_epoch() == queue_epoch;
                 if !still_current {
+                    playback.update(cx, |playback, cx| {
+                        playback.abandon_pending_load_if_epoch(queue_epoch, cx)
+                    });
                     return;
                 }
                 let Ok(batch) = result else {
+                    playback.update(cx, |playback, cx| {
+                        playback.abandon_pending_load_if_epoch(queue_epoch, cx)
+                    });
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
@@ -1348,6 +1395,9 @@ impl LibraryView {
                     return;
                 };
                 if batch.tracks.is_empty() {
+                    playback.update(cx, |playback, cx| {
+                        playback.abandon_pending_load_if_epoch(queue_epoch, cx)
+                    });
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
@@ -1361,7 +1411,6 @@ impl LibraryView {
                     .iter()
                     .map(|track| PlaybackTrack::from_library(track, Provider::Deezer))
                     .collect::<Vec<_>>();
-                let queue_len = queue.len();
                 playback.update(cx, |playback, cx| {
                     if playback.state.queue_epoch() != queue_epoch {
                         return;
@@ -1369,14 +1418,6 @@ impl LibraryView {
                     playback.replace_queue(queue, 0, cx);
                     playback.set_context(context.clone(), cx);
                 });
-                if queue_len == 0 {
-                    crate::toast::push_global(
-                        cx,
-                        crate::toast::ToastKind::Info,
-                        "Deezer mix is empty",
-                        Some("No playable tracks were returned.".into()),
-                    );
-                }
             })
             .ok();
         })
