@@ -626,21 +626,18 @@ impl SearchView {
                 cache.content_identity != content_identity || cache.item_count != item_count;
             let layout_changed = (cache.row_height - row_height).abs() > f32::EPSILON;
             if content_changed {
-                cache
-                    .state
-                    .reset_with_uniform_height(item_count, px(row_height));
+                // Discover rows vary in height per section, so hint-based
+                // heights keep correcting as rows render while scrolling,
+                // which shows up as scrollbar jitter. The list measures
+                // every row exactly in the first layout phase instead; the
+                // feed is small enough that this is cheap.
+                cache.state.reset(item_count);
                 cache.browser_scroll.reset();
             } else if layout_changed {
                 // Discover rows are measured by GPUI. A responsive change only
                 // invalidates measured heights and preserves the user's scroll.
                 cache.state.remeasure();
             }
-            if content_changed || layout_changed {
-                cache.content_identity = content_identity.to_owned();
-                cache.item_count = item_count;
-                cache.row_height = row_height;
-            }
-            return (cache.state.clone(), cache.browser_scroll.clone());
         }
         if states.len() >= MAX_DISCOVER_FEED_STATES
             && let Some(oldest) = states.keys().next().cloned()
@@ -652,7 +649,7 @@ impl SearchView {
             ListAlignment::Top,
             px(row_height * CARD_GRID_OVERDRAW_ROWS),
         )
-        .with_uniform_item_height(px(row_height));
+        .measure_all();
         let browser_scroll = BrowserScrollState::new();
         states.insert(
             identity.to_owned(),
