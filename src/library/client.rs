@@ -575,27 +575,7 @@ impl LibraryClient {
             .into_iter()
             .flatten()
             .filter(|item| item.get("type").and_then(Value::as_str) == Some("flow"))
-            .filter_map(|item| {
-                let id = item.pointer("/data/id").and_then(Value::as_str)?.trim();
-                (!id.is_empty()).then(|| Card {
-                    kind: Category::Flow,
-                    id: id.into(),
-                    title: first_string(
-                        &[
-                            value_string(item.get("title")),
-                            value_string(item.pointer("/data/title")),
-                        ],
-                        "Flow",
-                    ),
-                    subtitle: first_string(
-                        &[value_string(item.get("subtitle"))],
-                        FLOW_CARD_SUBTITLE,
-                    ),
-                    artwork: flow_artwork(item),
-                    source: crate::search::Provider::Deezer,
-                    ..Card::default()
-                })
-            })
+            .filter_map(flow_card)
             .collect::<Vec<_>>();
         let flow_catalog = super::deezer_radio::parse_flow_catalog(section);
         Ok(Page {
@@ -1112,6 +1092,38 @@ fn detail_route(route: Route, kind: ResultType) -> DetailRoute {
     }
 }
 
+/// Build a Flow card from one `filterable-grid` flow item.
+///
+/// Deezer's flow feed mirrors the flow title in its subtitle field. A
+/// mirrored subtitle is not information, so it is dropped instead of being
+/// rendered as a duplicate line; the generic fallback only applies when the
+/// feed provides no subtitle at all.
+fn flow_card(item: &Value) -> Option<Card> {
+    let id = item.pointer("/data/id").and_then(Value::as_str)?.trim();
+    let title = first_string(
+        &[
+            value_string(item.get("title")),
+            value_string(item.pointer("/data/title")),
+        ],
+        "Flow",
+    );
+    let raw_subtitle = value_string(item.get("subtitle"));
+    let subtitle = if raw_subtitle.trim().eq_ignore_ascii_case(title.trim()) {
+        String::new()
+    } else {
+        first_string(&[raw_subtitle], FLOW_CARD_SUBTITLE)
+    };
+    (!id.is_empty()).then(|| Card {
+        kind: Category::Flow,
+        id: id.into(),
+        title,
+        subtitle,
+        artwork: flow_artwork(item),
+        source: crate::search::Provider::Deezer,
+        ..Card::default()
+    })
+}
+
 fn library_session_request(client: &Client, arl: header::HeaderValue) -> reqwest::RequestBuilder {
     client.get(DEEZER_USER_DATA_URL).header(header::COOKIE, arl)
 }
@@ -1558,31 +1570,41 @@ mod tests {
             "data": { "id": "genre-danceedm" },
             "pictures": [{ "md5": "flow-art", "type": "cover" }]
         });
-        let section = json!({
-            "layout": "filterable-grid",
-            "items": [item]
-        });
-        let cards = section
-            .get("items")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .map(|item| Card {
-                kind: Category::Flow,
-                id: value_string(item.pointer("/data/id")),
-                title: first_string(&[value_string(item.get("title"))], "Flow"),
-                subtitle: value_string(item.get("subtitle")),
-                artwork: flow_artwork(item),
-                source: crate::search::Provider::Deezer,
-                ..Card::default()
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(cards[0].id, "genre-danceedm");
+        let card = flow_card(&item).unwrap();
+        assert_eq!(card.id, "genre-danceedm");
+        assert_eq!(card.title, "Dance");
+        assert_eq!(card.subtitle, "Energetic");
         assert_eq!(
-            cards[0].artwork,
+            card.artwork,
             "https://e-cdns-images.dzcdn.net/images/cover/flow-art/500x500.jpg"
         );
-        assert_eq!(cards[0].source, crate::search::Provider::Deezer);
+        assert_eq!(card.source, crate::search::Provider::Deezer);
+    }
+
+    #[test]
+    fn flow_cards_drop_a_subtitle_that_mirrors_the_title() {
+        let mirrored = json!({
+            "type": "flow",
+            "title": "Dance",
+            "subtitle": "Dance",
+            "data": { "id": "genre-danceedm" }
+        });
+        assert_eq!(flow_card(&mirrored).unwrap().subtitle, "");
+
+        let mirrored_case_insensitive = json!({
+            "type": "flow",
+            "title": "Dance",
+            "subtitle": "dance ",
+            "data": { "id": "genre-danceedm" }
+        });
+        assert_eq!(flow_card(&mirrored_case_insensitive).unwrap().subtitle, "");
+
+        let absent = json!({
+            "type": "flow",
+            "title": "Dance",
+            "data": { "id": "genre-danceedm" }
+        });
+        assert_eq!(flow_card(&absent).unwrap().subtitle, FLOW_CARD_SUBTITLE);
     }
 
     #[test]

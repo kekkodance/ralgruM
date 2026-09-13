@@ -342,6 +342,18 @@ fn parse_presentation_card(item: &Value, data: &Value, item_type: &str) -> Optio
         string(data.get("ART_NAME")),
     ])
     .unwrap_or_default();
+    // Flow and smart-mix items mirror their title in the subtitle field; a
+    // mirrored subtitle is not information, so drop it for those cards. The
+    // smart-mix display title can differ from the raw feed title, so both
+    // forms are checked.
+    let raw_title = string(item.get("title"));
+    let mirrored_subtitle = subtitle.trim().eq_ignore_ascii_case(title.trim())
+        || (!raw_title.trim().is_empty() && subtitle.trim().eq_ignore_ascii_case(raw_title.trim()));
+    let subtitle = if matches!(item_type, "flow" | "smarttracklist") && mirrored_subtitle {
+        String::new()
+    } else {
+        subtitle
+    };
     let action = match item_type {
         "track" if valid_deezer_id(&id) => DiscoverAction::PlayDeezerTrack(id.clone()),
         "flow" => DiscoverAction::PlayDeezerFlow { smart_mix: false },
@@ -604,6 +616,45 @@ fn nonempty(value: String) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn flow_items_drop_a_subtitle_that_mirrors_the_title() {
+        let mirrored = json!({
+            "type": "flow",
+            "title": "Dance",
+            "subtitle": "Dance",
+            "data": { "id": "genre-danceedm" }
+        });
+        let item = parse_presentation_card(&mirrored, &mirrored["data"], "flow").unwrap();
+        assert_eq!(item.card.title, "Dance");
+        assert_eq!(item.card.subtitle, "");
+        assert!(matches!(
+            item.action,
+            DiscoverAction::PlayDeezerFlow { smart_mix: false }
+        ));
+
+        let smart_mix = json!({
+            "type": "smarttracklist",
+            "title": "Daily Mix",
+            "subtitle": "Daily Mix",
+            "data": { "SMARTTRACKLIST_ID": "mix-1" }
+        });
+        let item =
+            parse_presentation_card(&smart_mix, &smart_mix["data"], "smarttracklist").unwrap();
+        assert_eq!(item.card.subtitle, "");
+
+        // A genuinely different subtitle, such as the artist behind a smart
+        // mix, is still information and stays visible.
+        let artist_subtitle = json!({
+            "type": "smarttracklist",
+            "title": "Daily Mix 1",
+            "subtitle": "Justice",
+            "data": { "SMARTTRACKLIST_ID": "mix-2" }
+        });
+        let item =
+            parse_presentation_card(&artist_subtitle, &artist_subtitle["data"], "smarttracklist")
+                .unwrap();
+        assert_eq!(item.card.subtitle, "Justice");
+    }
     #[test]
     fn request_matches_captured_get_contract_without_exposing_token() {
         let url = home_request_url("check-form-sentinel").unwrap();
