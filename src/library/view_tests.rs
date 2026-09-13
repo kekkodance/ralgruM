@@ -159,16 +159,15 @@ fn smart_mix_page_title_handoff_covers_loaded_and_cached_paths() {
 }
 
 #[test]
-fn soundcloud_playlist_root_preloads_the_owned_catalog() {
+fn playlist_roots_do_not_eagerly_preload_the_owned_catalog() {
     let source = include_str!("view.rs");
     let loader = source
         .split_once("fn load_service_inner(")
         .and_then(|(_, rest)| rest.split_once("let (generation, cached)"))
         .map(|(loader, _)| loader)
-        .expect("service loader should retain its catalog preload section");
-    assert!(loader.contains("service == Service::SoundCloud"));
-    assert!(loader.contains("category == Category::Playlists"));
-    assert!(loader.contains("self.ensure_soundcloud_playlist_catalog(cx)"));
+        .expect("service loader should retain its route setup section");
+    assert!(!loader.contains("self.ensure_playlist_catalog(cx)"));
+    assert!(!loader.contains("self.ensure_soundcloud_playlist_catalog(cx)"));
 }
 
 #[test]

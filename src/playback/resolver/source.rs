@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::playback::resolve_limiter::ResolvePriority;
+
 impl StreamResolver {
     pub(crate) async fn resolve_source(
         &self,
@@ -304,7 +306,9 @@ impl StreamResolver {
         // Mirror the original app's download reservation once per user action.
         // Capability probes call the private helper directly and remain
         // ungated, since they have no equivalent in the original app.
-        self.limiter.reserve(&cancellation).await?;
+        self.limiter
+            .reserve(ResolvePriority::Background, &cancellation)
+            .await?;
         self.resolve_download_source_with_size(
             track,
             deezer_arl,

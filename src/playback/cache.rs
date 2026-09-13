@@ -953,6 +953,13 @@ impl AudioCache {
             return false;
         }
         let _guard = self.maintenance.lock().await;
+        self.is_fully_cached_locked(key, total).await
+    }
+
+    async fn is_fully_cached_locked(&self, key: &str, total: u64) -> bool {
+        if total == 0 || total > self.max_bytes() {
+            return false;
+        }
         let mut start = 0;
         while start < total {
             let end = start.saturating_add(BLOCK_SIZE - 1).min(total - 1);
@@ -1065,10 +1072,61 @@ impl AudioCache {
                 self.bump_revision();
             }
         }
-        if removed_any && let Ok(mut complete) = self.complete_tracks.write() {
-            complete.clear();
+        if removed_any {
+            self.compact_catalog_after_prune_locked().await;
         }
         Ok(())
+    }
+
+    /// The catalog is an index, not an authority. Once pruning removes a
+    /// block, compact it while the same maintenance lock still protects the
+    /// directory so callers never keep rediscovering variants whose files are
+    /// already gone.
+    async fn compact_catalog_after_prune_locked(&self) {
+        let path = self.catalog_path();
+        let Ok(bytes) = tokio::fs::read(&path).await else {
+            if let Ok(mut complete) = self.complete_tracks.write() {
+                complete.clear();
+            }
+            return;
+        };
+        let Ok(records) = serde_json::from_slice::<Vec<CachedTrack>>(&bytes) else {
+            if let Ok(mut complete) = self.complete_tracks.write() {
+                complete.clear();
+            }
+            return;
+        };
+        let original_len = records.len();
+        let mut retained = Vec::with_capacity(original_len);
+        let mut complete = HashSet::new();
+        for record in records {
+            let total = match record.total {
+                Some(total) => Some(total),
+                None => tokio::fs::read_to_string(self.total_path(&record.cache_key))
+                    .await
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u64>().ok()),
+            };
+            let Some(total) = total else {
+                continue;
+            };
+            if self.is_fully_cached_locked(&record.cache_key, total).await {
+                complete.insert(CacheTarget {
+                    provider: record.provider,
+                    id: record.id.clone(),
+                });
+                retained.push(record);
+            }
+        }
+        if retained.len() != original_len
+            && let Ok(bytes) = serde_json::to_vec_pretty(&retained)
+            && tokio::fs::write(&path, bytes).await.is_ok()
+        {
+            self.bump_revision();
+        }
+        if let Ok(mut known_complete) = self.complete_tracks.write() {
+            *known_complete = complete;
+        }
     }
 
     pub(crate) async fn clear(&self) -> Result<Overview, String> {
@@ -1390,6 +1448,43 @@ mod tests {
 
         tokio::fs::write(&path, [1, 2, 3]).await.unwrap();
         assert!(cache.cached_tracks().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prune_compacts_catalog_records_for_removed_blocks() {
+        let temp = TempDir::new().unwrap();
+        let cache = AudioCache::new(temp.path().into(), 256);
+        // Keep the test payload small while exercising the same prune path as
+        // a real size-limit reduction.
+        cache.max_bytes.store(4, Ordering::SeqCst);
+        let first = test_track("first", "First");
+        let second = test_track("second", "Second");
+        let first_key = "soundcloud:first:standard:mp3:MP3_128";
+        let second_key = "soundcloud:second:standard:mp3:MP3_128";
+        cache.remember_track(&first, first_key, Some(4)).await;
+        cache.remember_track(&second, second_key, Some(4)).await;
+        cache
+            .write(
+                &cache.block_path(first_key, 4, 0, 3),
+                &[1, 2, 3, 4],
+                cache.generation(),
+            )
+            .await;
+        cache
+            .write(
+                &cache.block_path(second_key, 4, 0, 3),
+                &[5, 6, 7, 8],
+                cache.generation(),
+            )
+            .await;
+
+        cache.prune().await.unwrap();
+
+        let catalog: Vec<CachedTrack> =
+            serde_json::from_slice(&tokio::fs::read(cache.catalog_path()).await.unwrap()).unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(cache.cached_tracks().await.len(), 1);
+        assert_eq!(cache.overview().await.unwrap().used_bytes, 4);
     }
 
     #[tokio::test]

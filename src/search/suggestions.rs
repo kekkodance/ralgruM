@@ -64,6 +64,10 @@ impl SuggestionState {
         self.focused
     }
 
+    pub(super) fn request_matches(&self, query: &str) -> bool {
+        self.request_query.eq_ignore_ascii_case(query.trim())
+    }
+
     pub(super) fn begin_request(&mut self, query: &str) -> u64 {
         self.generation = self.generation.wrapping_add(1);
         self.request_query = query.trim().to_owned();
@@ -357,6 +361,20 @@ mod tests {
 
         assert!(!state.complete_request(stale, "sk", vec!["stale".into()]));
         assert!(state.complete_request(current, "skr", vec!["current".into()]));
+    }
+
+    #[test]
+    fn request_matching_is_trimmed_case_insensitive_and_invalidated() {
+        let mut state = SuggestionState::new(true, Vec::new());
+        state.set_focused(true);
+        state.begin_request("  Skr  ");
+
+        assert!(state.request_matches("skr"));
+        assert!(state.request_matches(" SKR "));
+        assert!(!state.request_matches("skri"));
+
+        state.invalidate_request();
+        assert!(!state.request_matches("skr"));
     }
 
     #[test]

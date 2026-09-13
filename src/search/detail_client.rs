@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use futures::{StreamExt, TryStreamExt, stream};
 use reqwest::{Url, header};
 use serde_json::{Value, json};
 
@@ -12,6 +13,9 @@ use super::{
 };
 
 const SOUNDCLOUD_TRACK_HYDRATION_LIMIT: usize = 500;
+const SOUNDCLOUD_TRACK_HYDRATION_CONCURRENCY: usize = 4;
+const DEEZER_COLLECTION_PAGE_SIZE: usize = 500;
+const DEEZER_TRACK_HYDRATION_CONCURRENCY: usize = 4;
 
 impl SearchClient {
     pub(crate) async fn detail(
@@ -32,15 +36,20 @@ impl SearchClient {
                     let arl =
                         deezer_arl.ok_or_else(|| ProviderError::new("Deezer account required"))?;
                     let session = self.deezer_session(arl).await?;
-                    let (items, total) = self.deezer_detail(&route, &id, &session).await?;
+                    let (detail, album_info) =
+                        tokio::join!(self.deezer_detail(&route, &id, &session), async {
+                            match route.kind {
+                                ResultType::Albums => {
+                                    self.deezer_album_info(&id, &session).await.ok()
+                                }
+                                ResultType::Playlists => {
+                                    self.deezer_playlist_info(&id, &session).await.ok()
+                                }
+                                _ => None,
+                            }
+                        },);
+                    let (items, total) = detail?;
                     let raw_loaded_count = items.len();
-                    let album_info = if route.kind == ResultType::Albums {
-                        self.deezer_album_info(&id, &session).await.ok()
-                    } else if route.kind == ResultType::Playlists {
-                        self.deezer_playlist_info(&id, &session).await.ok()
-                    } else {
-                        None
-                    };
                     if let Some(info) = album_info.as_ref() {
                         apply_deezer_metadata(&mut route, info);
                     }
@@ -108,21 +117,9 @@ impl SearchClient {
         id: &str,
         session: &super::client::DeezerSession,
     ) -> Result<(Vec<Value>, Option<usize>), ProviderError> {
-        let (operation, body) = match route.kind {
-            ResultType::Albums => ("song.getListByAlbum", json!({"alb_id": id, "nb": 2000})),
-            ResultType::Playlists => ("playlist.getSongs", json!({"playlist_id": id, "nb": 2000})),
-            _ => return Err(ProviderError::new("Unsupported Deezer collection")),
-        };
-        let response = self.deezer_gateway(session, operation, body).await?;
-        let tracks = response
-            .pointer("/results/data")
-            .and_then(Value::as_array)
-            .cloned()
-            .ok_or_else(|| ProviderError::new("Deezer returned an invalid collection response"))?;
-        let total = response
-            .pointer("/results/total")
-            .and_then(Value::as_u64)
-            .and_then(|value| usize::try_from(value).ok());
+        let (mut tracks, total) = self
+            .deezer_collection_pages(route.kind, id, session)
+            .await?;
         if route.kind != ResultType::Albums || tracks.is_empty() {
             return Ok((tracks, total));
         }
@@ -131,15 +128,78 @@ impl SearchClient {
             .filter_map(|track| track.get("SNG_ID"))
             .filter_map(value_string)
             .collect::<Vec<_>>();
-        let hydrated = self
-            .deezer_gateway(session, "song.getListData", json!({"sng_ids": ids}))
-            .await?;
-        let hydrated = hydrated
-            .pointer("/results/data")
-            .and_then(Value::as_array)
-            .cloned()
-            .ok_or_else(|| ProviderError::new("Deezer returned an invalid track response"))?;
-        Ok((merge_deezer_tracks(tracks, hydrated), total))
+        let hydrated = self.deezer_hydrate_tracks(session, ids).await?;
+        tracks = merge_deezer_tracks(tracks, hydrated);
+        Ok((tracks, total))
+    }
+
+    async fn deezer_collection_pages(
+        &self,
+        kind: ResultType,
+        id: &str,
+        session: &super::client::DeezerSession,
+    ) -> Result<(Vec<Value>, Option<usize>), ProviderError> {
+        let mut start = 0usize;
+        let mut tracks = Vec::new();
+        let mut total = None;
+        loop {
+            let (operation, body) = deezer_collection_request(kind, id, start)?;
+            let response = self.deezer_gateway(session, operation, body).await?;
+            let page = response
+                .pointer("/results/data")
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or_else(|| {
+                    ProviderError::new("Deezer returned an invalid collection response")
+                })?;
+            let page_total = response
+                .pointer("/results/total")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok());
+            total = total.or(page_total);
+            let page_len = page.len();
+            tracks.extend(page);
+
+            let expected_total = total.unwrap_or(tracks.len());
+            if tracks.len() >= expected_total || page_len < DEEZER_COLLECTION_PAGE_SIZE {
+                return Ok((tracks, total));
+            }
+            if page_len == 0 {
+                return Err(ProviderError::new(
+                    "Deezer returned an incomplete collection response",
+                ));
+            }
+            start = tracks.len();
+        }
+    }
+
+    async fn deezer_hydrate_tracks(
+        &self,
+        session: &super::client::DeezerSession,
+        ids: Vec<String>,
+    ) -> Result<Vec<Value>, ProviderError> {
+        let chunks = ids
+            .chunks(DEEZER_COLLECTION_PAGE_SIZE)
+            .map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>();
+        stream::iter(chunks.into_iter().map(|ids| {
+            let client = self.clone();
+            let session = session.clone();
+            async move {
+                let response = client
+                    .deezer_gateway(&session, "song.getListData", json!({"sng_ids": ids}))
+                    .await?;
+                response
+                    .pointer("/results/data")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .ok_or_else(|| ProviderError::new("Deezer returned an invalid track response"))
+            }
+        }))
+        .buffered(DEEZER_TRACK_HYDRATION_CONCURRENCY)
+        .try_collect::<Vec<Vec<Value>>>()
+        .await
+        .map(|pages| pages.into_iter().flatten().collect())
     }
 
     /// Fetches album metadata for the "About this album" popover. Failures are
@@ -296,32 +356,42 @@ impl SearchClient {
             return Ok(Vec::new());
         }
         let authorization = token.authorization_header()?;
-        let mut hydrated = Vec::with_capacity(ids.len());
-        for chunk in ids.chunks(50) {
-            let mut url = Url::parse("https://api-v2.soundcloud.com/tracks")
-                .map_err(|_| ProviderError::new("Invalid SoundCloud track endpoint"))?;
-            url.query_pairs_mut()
-                .append_pair("client_id", SOUNDCLOUD_CLIENT_ID)
-                .append_pair("ids", &chunk.join(","));
-            let response = self
-                .http()
-                .get(url)
-                .header(header::AUTHORIZATION, authorization.clone())
-                .send()
-                .await
-                .map_err(|error| request_error(error, "SoundCloud"))?;
-            if !response.status().is_success() {
-                return Err(ProviderError::new(format!(
-                    "SoundCloud returned {}",
-                    response.status()
-                )));
+        let chunks = ids
+            .chunks(50)
+            .map(|chunk| chunk.to_owned())
+            .collect::<Vec<_>>();
+        let hydrated = stream::iter(chunks.into_iter().map(|chunk| {
+            let authorization = authorization.clone();
+            async move {
+                let mut url = Url::parse("https://api-v2.soundcloud.com/tracks")
+                    .map_err(|_| ProviderError::new("Invalid SoundCloud track endpoint"))?;
+                url.query_pairs_mut()
+                    .append_pair("client_id", SOUNDCLOUD_CLIENT_ID)
+                    .append_pair("ids", &chunk.join(","));
+                let response = self
+                    .http()
+                    .get(url)
+                    .header(header::AUTHORIZATION, authorization.clone())
+                    .send()
+                    .await
+                    .map_err(|error| request_error(error, "SoundCloud"))?;
+                if !response.status().is_success() {
+                    return Err(ProviderError::new(format!(
+                        "SoundCloud returned {}",
+                        response.status()
+                    )));
+                }
+                response.json::<Vec<Value>>().await.map_err(|_| {
+                    ProviderError::new("SoundCloud returned an invalid track response")
+                })
             }
-            let items: Vec<Value> = response
-                .json()
-                .await
-                .map_err(|_| ProviderError::new("SoundCloud returned an invalid track response"))?;
-            hydrated.extend(items);
-        }
+        }))
+        .buffered(SOUNDCLOUD_TRACK_HYDRATION_CONCURRENCY)
+        .try_collect::<Vec<Vec<Value>>>()
+        .await?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
         Ok(ordered_soundcloud_tracks(&ids, hydrated))
     }
 
@@ -375,6 +445,24 @@ impl SearchClient {
             offset = next;
         }
         Ok(tracks)
+    }
+}
+
+fn deezer_collection_request(
+    kind: ResultType,
+    id: &str,
+    start: usize,
+) -> Result<(&'static str, Value), ProviderError> {
+    match kind {
+        ResultType::Albums => Ok((
+            "song.getListByAlbum",
+            json!({"alb_id": id, "start": start, "nb": DEEZER_COLLECTION_PAGE_SIZE}),
+        )),
+        ResultType::Playlists => Ok((
+            "playlist.getSongs",
+            json!({"playlist_id": id, "start": start, "nb": DEEZER_COLLECTION_PAGE_SIZE}),
+        )),
+        _ => Err(ProviderError::new("Unsupported Deezer collection")),
     }
 }
 
@@ -706,6 +794,23 @@ mod tests {
         assert_eq!(ordered[1]["id"], 1);
         assert_eq!(ordered[2]["id"], 3);
         assert_eq!(ordered.len(), 3);
+    }
+
+    #[test]
+    fn deezer_collection_pages_are_bounded_and_offset_based() {
+        let (operation, first) = deezer_collection_request(ResultType::Albums, "42", 0).unwrap();
+        assert_eq!(operation, "song.getListByAlbum");
+        assert_eq!(first["alb_id"], "42");
+        assert_eq!(first["start"], 0);
+        assert_eq!(first["nb"], DEEZER_COLLECTION_PAGE_SIZE);
+
+        let (operation, next) =
+            deezer_collection_request(ResultType::Playlists, "7", DEEZER_COLLECTION_PAGE_SIZE)
+                .unwrap();
+        assert_eq!(operation, "playlist.getSongs");
+        assert_eq!(next["playlist_id"], "7");
+        assert_eq!(next["start"], DEEZER_COLLECTION_PAGE_SIZE);
+        assert!(deezer_collection_request(ResultType::Tracks, "7", 0).is_err());
     }
 
     #[test]

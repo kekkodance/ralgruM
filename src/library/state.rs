@@ -218,7 +218,12 @@ impl LibraryState {
         {
             return TracksPipelineLoadOutcome::Ignored;
         }
-        self.tracks_pipeline = None;
+        let has_visible_snapshot = generation == self.generation
+            && self.deezer_root_active(Category::Tracks)
+            && self.page.is_some();
+        if !has_visible_snapshot {
+            self.tracks_pipeline = None;
+        }
         if generation != self.generation
             && self.deezer_root_active(Category::Tracks)
             && self.page.is_none()
@@ -230,6 +235,17 @@ impl LibraryState {
             };
         }
         if generation == self.generation && self.deezer_root_active(Category::Tracks) {
+            if has_visible_snapshot {
+                if let Some(pipeline) = self
+                    .tracks_pipeline
+                    .as_mut()
+                    .filter(|pipeline| pipeline.token == token)
+                {
+                    pipeline.stage = TracksPipelineStage::Preview;
+                    pipeline.in_flight = false;
+                }
+                return TracksPipelineLoadOutcome::Ignored;
+            }
             self.status = Status::Failed(error);
             self.page = None;
             TracksPipelineLoadOutcome::Failed
@@ -287,6 +303,24 @@ impl LibraryState {
     }
 
     pub(crate) fn accept_tracks_preview_pipeline(&mut self, token: u64, page: Page) -> bool {
+        let Some(pipeline) = self
+            .tracks_pipeline
+            .as_mut()
+            .filter(|pipeline| pipeline.token == token)
+        else {
+            return false;
+        };
+        pipeline.stage = TracksPipelineStage::Preview;
+        pipeline.page = Some(page.clone());
+        pipeline.in_flight = true;
+        if !self.deezer_root_active(Category::Tracks) {
+            return false;
+        }
+        self.set_visible_tracks_page(page);
+        true
+    }
+
+    pub(crate) fn accept_tracks_cached_pipeline(&mut self, token: u64, page: Page) -> bool {
         let Some(pipeline) = self
             .tracks_pipeline
             .as_mut()

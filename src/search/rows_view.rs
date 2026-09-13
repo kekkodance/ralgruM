@@ -1,5 +1,5 @@
 use gpui::{AnyElement, App, Context, Entity, KeyDownEvent, SharedString, Window, div, prelude::*};
-use std::sync::Arc;
+use std::{fmt::Write as _, sync::Arc};
 
 use crate::{
     assets::LocalIcon,
@@ -271,18 +271,16 @@ fn track_row_slot_height(include_gap_after: bool) -> gpui::Pixels {
 }
 
 pub(super) fn search_track_identity(track: &Track) -> String {
-    let artists = track
-        .artists
-        .iter()
-        .map(|artist| format!("{}={}", artist.id, artist.name))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
-        track.id,
-        track.title,
-        track.artist,
-        artists,
+    let mut identity = format!("{}:{}:{}:", track.id, track.title, track.artist);
+    for (index, artist) in track.artists.iter().enumerate() {
+        if index > 0 {
+            identity.push(',');
+        }
+        write!(identity, "{}={}", artist.id, artist.name).expect("writing to a string");
+    }
+    write!(
+        identity,
+        ":{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         track.album_id,
         track.album,
         track.artwork,
@@ -292,11 +290,14 @@ pub(super) fn search_track_identity(track: &Track) -> String {
         track.service_url,
         track.downloadable,
         track.progressive,
-        track
-            .favorite
-            .map(|favorite| favorite.to_string())
-            .unwrap_or_default()
+        match track.favorite {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "",
+        },
     )
+    .expect("writing to a string");
+    identity
 }
 
 #[allow(clippy::too_many_arguments)]

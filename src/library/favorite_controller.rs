@@ -151,95 +151,64 @@ fn page_contains_favorite(page: &Page, kind: FavoriteKind, id: &str) -> bool {
 }
 
 impl LibraryView {
-    pub(crate) fn preload_deezer_favorites(&mut self, cx: &mut Context<Self>) {
-        let kinds = [
-            FavoriteKind::Track,
-            FavoriteKind::Album,
-            FavoriteKind::Artist,
-            FavoriteKind::Playlist,
-        ];
-        let generations = self.favorites.update(cx, |favorites, _| {
-            kinds
-                .into_iter()
-                .filter_map(|kind| {
-                    favorites
-                        .begin_catalog_load(crate::search::Provider::Deezer, kind)
-                        .map(|generation| (kind, generation))
+    pub(crate) fn resolve_favorite_state(&mut self, key: FavoriteKey, cx: &mut Context<Self>) {
+        if key.provider == crate::search::Provider::Deezer {
+            let generation = self.favorites.update(cx, |favorites, _| {
+                if !favorites.begin_resolve(key.clone()) {
+                    return None;
+                }
+                favorites.begin_catalog_load(key.provider, key.kind)
+            });
+            let Some(generation) = generation else {
+                cx.notify();
+                return;
+            };
+            let Some(arl) = self.account.read(cx).deezer_arl() else {
+                self.favorites.update(cx, |favorites, _| {
+                    favorites.finish_catalog_load(key.provider, key.kind, generation, None);
+                });
+                cx.notify();
+                return;
+            };
+            let saved_user_id = self.account.read(cx).deezer_user_id();
+            let Ok(client) = self.client.clone() else {
+                self.favorites.update(cx, |favorites, _| {
+                    favorites.finish_catalog_load(key.provider, key.kind, generation, None);
+                });
+                cx.notify();
+                return;
+            };
+            let kind = key.kind;
+            let task = self
+                .runtime
+                .spawn(async move { client.load_favorite_catalog(arl, saved_user_id, kind).await });
+            self.set_favorite_catalog_cancel(kind, generation, task.abort_handle());
+            let favorites = self.favorites.clone();
+            cx.spawn(async move |this, cx| {
+                let ids = task.await.ok().and_then(Result::ok);
+                this.update(cx, |this, cx| {
+                    this.clear_favorite_catalog_cancel(kind, generation);
+                    favorites.update(cx, |favorites, _| {
+                        favorites.finish_catalog_load(
+                            crate::search::Provider::Deezer,
+                            kind,
+                            generation,
+                            ids,
+                        );
+                    });
+                    cx.notify();
                 })
-                .collect::<Vec<_>>()
-        });
-        if generations.is_empty() {
+                .ok();
+            })
+            .detach();
+            cx.notify();
             return;
         }
-        let Some(arl) = self.account.read(cx).deezer_arl() else {
-            self.favorites.update(cx, |favorites, _| {
-                for (kind, generation) in &generations {
-                    favorites.finish_catalog_load(
-                        crate::search::Provider::Deezer,
-                        *kind,
-                        *generation,
-                        None,
-                    );
-                }
-            });
-            return;
-        };
-        let saved_user_id = self.account.read(cx).deezer_user_id();
-        let Ok(client) = self.client.clone() else {
-            self.favorites.update(cx, |favorites, _| {
-                for (kind, generation) in &generations {
-                    favorites.finish_catalog_load(
-                        crate::search::Provider::Deezer,
-                        *kind,
-                        *generation,
-                        None,
-                    );
-                }
-            });
-            return;
-        };
-        let task = self
-            .runtime
-            .spawn(async move { client.load_favorite_catalogs(arl, saved_user_id).await });
-        let favorites = self.favorites.clone();
-        cx.spawn(async move |this, cx| {
-            let catalogs = task.await.ok().and_then(Result::ok);
-            favorites.update(cx, |favorites, _| {
-                for (kind, generation) in generations {
-                    let ids = catalogs.as_ref().and_then(|catalogs| {
-                        catalogs
-                            .iter()
-                            .find(|(catalog_kind, _)| *catalog_kind == kind)
-                            .and_then(|(_, ids)| ids.as_ref().ok().cloned())
-                    });
-                    favorites.finish_catalog_load(
-                        crate::search::Provider::Deezer,
-                        kind,
-                        generation,
-                        ids,
-                    );
-                }
-            });
-            this.update(cx, |_, cx| cx.notify()).ok();
-        })
-        .detach();
-    }
 
-    pub(crate) fn resolve_favorite_state(&mut self, key: FavoriteKey, cx: &mut Context<Self>) {
         let started = self
             .favorites
             .update(cx, |favorites, _| favorites.begin_resolve(key.clone()));
         if !started {
-            return;
-        }
-
-        if key.provider == crate::search::Provider::Deezer
-            && self
-                .favorites
-                .read(cx)
-                .catalog_loading(key.provider, key.kind)
-        {
-            cx.notify();
             return;
         }
 

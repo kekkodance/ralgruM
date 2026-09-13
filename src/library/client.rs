@@ -13,7 +13,11 @@ use crate::search::{
 use crate::smart_mix_title::{CANONICAL_SMART_MIX_TITLE, specific_smart_mix_title};
 use reqwest::{Client, Response, Url, header};
 use serde_json::{Value, json};
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 const GATEWAY: &str = "https://www.deezer.com/ajax/gw-light.php";
 const DEEZER_USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
@@ -23,10 +27,31 @@ const FLOW_EMPTY_DESCRIPTION: &str = "No Flow mixes were returned for this accou
 const TRACKS_PREFIX_SIZE: usize = 256;
 const TRACKS_PAGE_SIZE: usize = 10_000;
 const TRACKS_OVERLAP: usize = 8;
+const BOOTSTRAP_CACHE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub(crate) struct LibraryClient {
     pub(super) client: Client,
+    search_client: Result<SearchClient, String>,
+    bootstrap_cache: Arc<BootstrapCache>,
+}
+
+#[derive(Default)]
+struct BootstrapCache {
+    slots: Mutex<HashMap<BootstrapCacheKey, Arc<tokio::sync::Mutex<Option<CachedBootstrap>>>>>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct BootstrapCacheKey {
+    arl: String,
+    saved_user_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct CachedBootstrap {
+    session: DeezerSession,
+    user: String,
+    refreshed_at: Instant,
 }
 
 #[derive(Clone)]
@@ -171,23 +196,20 @@ impl TracksAssemblyError {
 }
 
 impl LibraryClient {
-    pub(crate) async fn load_favorite_catalogs(
+    pub(crate) async fn load_favorite_catalog(
         &self,
         arl: DeezerArl,
         saved_user_id: Option<String>,
-    ) -> Result<Vec<(FavoriteKind, Result<Vec<String>, String>)>, String> {
+        kind: FavoriteKind,
+    ) -> Result<Vec<String>, String> {
         let (session, user) = self.bootstrap(arl, saved_user_id).await?;
-        let tracks = self.load_favorite_track_ids(&session, &user);
-        let albums = self.load_root_favorite_ids(Category::Albums, &session, &user);
-        let artists = self.load_root_favorite_ids(Category::Artists, &session, &user);
-        let playlists = self.load_root_favorite_ids(Category::Playlists, &session, &user);
-        let (tracks, albums, artists, playlists) = tokio::join!(tracks, albums, artists, playlists);
-        Ok(vec![
-            (FavoriteKind::Track, tracks),
-            (FavoriteKind::Album, albums),
-            (FavoriteKind::Artist, artists),
-            (FavoriteKind::Playlist, playlists),
-        ])
+        match kind {
+            FavoriteKind::Track => self.load_favorite_track_ids(&session, &user).await,
+            FavoriteKind::Album | FavoriteKind::Artist | FavoriteKind::Playlist => {
+                self.load_root_favorite_ids(category_for_favorite_kind(kind), &session, &user)
+                    .await
+            }
+        }
     }
 
     async fn load_favorite_track_ids(
@@ -249,7 +271,11 @@ impl LibraryClient {
             .timeout(Duration::from_secs(20))
             .user_agent(USER_AGENT)
             .build()
-            .map(|client| Self { client })
+            .map(|client| Self {
+                client,
+                search_client: SearchClient::new().map_err(|error| error.message),
+                bootstrap_cache: Arc::new(BootstrapCache::default()),
+            })
             .map_err(|_| "Library client could not be created".into())
     }
     pub(crate) async fn load(
@@ -671,7 +697,10 @@ impl LibraryClient {
             "artist" => ResultType::Artists,
             _ => return Err("Unsupported Deezer library route".into()),
         };
-        let client = SearchClient::new().map_err(|error| error.message)?;
+        let client = self
+            .search_client
+            .clone()
+            .map_err(|error| error.to_owned())?;
         let detail = client
             .detail(detail_route(route, kind), arl, None)
             .await
@@ -710,6 +739,50 @@ impl LibraryClient {
         arl: DeezerArl,
         saved_user_id: Option<String>,
     ) -> Result<(DeezerSession, String), String> {
+        let key = BootstrapCacheKey {
+            arl: arl.expose().to_owned(),
+            saved_user_id: saved_user_id.clone(),
+        };
+        let slot = self
+            .bootstrap_cache
+            .slots
+            .lock()
+            .expect("Deezer bootstrap cache lock poisoned")
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
+            .clone();
+        let mut cached = slot.lock().await;
+        if let Some(entry) = cached
+            .as_ref()
+            .filter(|entry| entry.refreshed_at.elapsed() < BOOTSTRAP_CACHE_TTL)
+        {
+            return Ok((entry.session.clone(), entry.user.clone()));
+        }
+        let loaded = self.bootstrap_uncached(arl, saved_user_id).await?;
+        *cached = Some(CachedBootstrap {
+            session: loaded.0.clone(),
+            user: loaded.1.clone(),
+            refreshed_at: Instant::now(),
+        });
+        Ok(loaded)
+    }
+
+    pub(super) fn clear_bootstrap_cache(&self) {
+        self.bootstrap_cache
+            .slots
+            .lock()
+            .expect("Deezer bootstrap cache lock poisoned")
+            .clear();
+        if let Ok(client) = &self.search_client {
+            client.clear_deezer_sessions();
+        }
+    }
+
+    async fn bootstrap_uncached(
+        &self,
+        arl: DeezerArl,
+        saved_user_id: Option<String>,
+    ) -> Result<(DeezerSession, String), String> {
         let cookie = arl.cookie_header().map_err(|error| error.message)?;
         let bootstrap = library_session_request(&self.client, cookie)
             .send()
@@ -724,12 +797,28 @@ impl LibraryClient {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "Deezer login required".to_string())?
             .to_owned();
-        let user = value_string(results.pointer("/USER/USER_ID"));
-        let user = valid_user_id(&user)
-            .or_else(|| saved_user_id.as_deref().and_then(valid_user_id))
+        let returned_user = value_string(results.pointer("/USER/USER_ID"));
+        let returned_user = valid_user_id(&returned_user);
+        let saved_user = saved_user_id.as_deref().and_then(valid_user_id);
+        if let (Some(returned), Some(saved)) = (returned_user.as_deref(), saved_user.as_deref())
+            && returned != saved
+        {
+            return Err("Deezer account changed while the library was loading".into());
+        }
+        let user = returned_user
+            .or(saved_user)
             .ok_or_else(|| "Deezer login required".to_string())?;
         let cookie = session_cookie(&arl, &cookies)?;
         Ok((DeezerSession { token, cookie }, user))
+    }
+}
+
+fn category_for_favorite_kind(kind: FavoriteKind) -> Category {
+    match kind {
+        FavoriteKind::Track => Category::Tracks,
+        FavoriteKind::Album => Category::Albums,
+        FavoriteKind::Artist => Category::Artists,
+        FavoriteKind::Playlist => Category::Playlists,
     }
 }
 
@@ -1857,6 +1946,29 @@ mod tests {
         assert_eq!(request.headers()[header::COOKIE], "arl=sentinel");
         assert!(!request.headers().contains_key(header::CONTENT_LENGTH));
         assert!(request.body().is_none());
+    }
+
+    #[test]
+    fn bootstrap_cache_keys_are_isolated_by_credential_and_saved_user() {
+        let first = BootstrapCacheKey {
+            arl: "first".into(),
+            saved_user_id: Some("1".into()),
+        };
+        let same = BootstrapCacheKey {
+            arl: "first".into(),
+            saved_user_id: Some("1".into()),
+        };
+        let other_user = BootstrapCacheKey {
+            arl: "first".into(),
+            saved_user_id: Some("2".into()),
+        };
+        let other_credential = BootstrapCacheKey {
+            arl: "second".into(),
+            saved_user_id: Some("1".into()),
+        };
+        assert!(first == same);
+        assert!(first != other_user);
+        assert!(first != other_credential);
     }
 
     #[test]

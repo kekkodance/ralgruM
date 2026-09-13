@@ -296,18 +296,6 @@ pub(super) fn render_card_with_presentation(
     let element = collection_card_frame(carousel, narrow, card_content.into_any_element()).id(
         card_element_id_for_occurrence("search-card", card, discover_occurrence),
     );
-    // Start the about info fetch on hover so a following right-click menu
-    // can open the Info dialog already populated. Non collection cards and
-    // cached entries are ignored inside the prefetch itself.
-    let prefetch_host = host.clone();
-    let prefetch_card = (*card_arc).clone();
-    let element = element.on_hover(move |hovered, _, cx| {
-        if *hovered {
-            prefetch_host.update(cx, |view, cx| {
-                view.prefetch_card_info(prefetch_card.clone(), cx);
-            });
-        }
-    });
     match card_entity(card, false) {
         Some(entity) => card_menu(
             element,
@@ -604,7 +592,17 @@ pub(super) fn card_content_signature(cards: &[Card]) -> u64 {
     let mut hasher = DefaultHasher::new();
     "search-card-content-v1".hash(&mut hasher);
     for card in cards {
-        stable_card_identity(card).hash(&mut hasher);
+        // Keep the virtual-grid state tied to every visible field without
+        // allocating a temporary identity string for each card on render.
+        card.kind.hash(&mut hasher);
+        card.id.hash(&mut hasher);
+        card.title.hash(&mut hasher);
+        card.subtitle.hash(&mut hasher);
+        card.artwork.hash(&mut hasher);
+        card.source.hash(&mut hasher);
+        card.badge.hash(&mut hasher);
+        card.release_date.hash(&mut hasher);
+        card.service_url.hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -787,6 +785,13 @@ mod tests {
         assert_eq!(
             card_content_signature(&first),
             card_content_signature(&first)
+        );
+
+        let mut artwork_changed = first.clone();
+        artwork_changed[0].artwork = "replacement-artwork".into();
+        assert_ne!(
+            card_content_signature(&first),
+            card_content_signature(&artwork_changed)
         );
     }
 

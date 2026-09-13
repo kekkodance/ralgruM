@@ -128,6 +128,11 @@ impl DiscoverState {
         }
     }
 
+    pub(crate) fn ready_generation(&self, provider: Provider) -> Option<u64> {
+        matches!(self.provider(provider).status, DiscoverStatus::Ready)
+            .then_some(self.provider(provider).generation)
+    }
+
     pub(crate) fn reset_account_scope(&mut self, account_scope: String) {
         if self.account_scope == account_scope {
             return;
@@ -290,6 +295,19 @@ impl DiscoverState {
         } else {
             false
         }
+    }
+
+    pub(crate) fn cancel_loading(&mut self, provider: Provider) -> bool {
+        if !matches!(self.provider(provider).status, DiscoverStatus::Loading) {
+            return false;
+        }
+        self.next_generation = self.next_generation.wrapping_add(1);
+        let generation = self.next_generation;
+        let state = self.provider_mut(provider);
+        state.generation = generation;
+        state.status = DiscoverStatus::Idle;
+        state.sections.clear();
+        true
     }
 
     pub(crate) fn start(&mut self, provider: Provider) -> Option<(u64, String)> {
@@ -601,6 +619,25 @@ mod tests {
             soundcloud_generation,
             state.provider(Provider::SoundCloud).generation
         );
+    }
+
+    #[test]
+    fn cancelling_a_loading_provider_returns_it_to_idle_and_rejects_completion() {
+        let mut state = DiscoverState::new("scope".into());
+        let (generation, scope) = state.start(Provider::Deezer).unwrap();
+
+        assert!(state.cancel_loading(Provider::Deezer));
+        assert!(matches!(
+            state.provider(Provider::Deezer).status,
+            DiscoverStatus::Idle
+        ));
+        assert!(!state.complete(
+            Provider::Deezer,
+            generation,
+            &scope,
+            Ok(vec![section(Provider::Deezer, "stale")]),
+        ));
+        assert!(!state.cancel_loading(Provider::Deezer));
     }
 
     #[test]

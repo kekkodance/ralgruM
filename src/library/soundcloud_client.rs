@@ -6,6 +6,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use futures::{StreamExt, TryStreamExt, stream};
 use image::{ImageFormat, ImageReader};
 use reqwest::{Client, Method, Response, Url, cookie::Jar, header};
 use serde_json::Value;
@@ -29,10 +30,12 @@ const PLAYLIST_ACCEPT_ENCODING: &str = "gzip, deflate, identity, br";
 pub(super) const MAX_PLAYLIST_TRACKS: usize = 500;
 const MAX_ARTWORK_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ARTWORK_BASE64_BYTES: usize = MAX_ARTWORK_BYTES.div_ceil(3) * 4;
+const TRACK_HYDRATION_CONCURRENCY: usize = 4;
 
 #[derive(Clone)]
 pub(crate) struct SoundCloudLibraryClient {
     client: Client,
+    search_client: Result<SearchClient, String>,
     playlist_client: Client,
     station_client: Client,
     mobile_client: Client,
@@ -79,6 +82,7 @@ impl SoundCloudLibraryClient {
             .map_err(|_| "Favorite client could not be created".to_string())?;
         Ok(Self {
             client,
+            search_client: SearchClient::new().map_err(|error| error.message),
             playlist_client,
             station_client,
             mobile_client,
@@ -174,15 +178,13 @@ impl SoundCloudLibraryClient {
                 )?,
             ),
             Category::History => {
-                let history = collection_value(
-                    self.get(
-                        format!("{API}/me/play-history/tracks"),
+                let history = self
+                    .collection(
+                        &format!("{API}/me/play-history/tracks"),
+                        "track history",
                         &authorization,
-                        &[("limit", "2000")],
                     )
-                    .await?,
-                    "track history",
-                )?;
+                    .await?;
                 (
                     root_copy(Service::SoundCloud, category).0,
                     root_copy(Service::SoundCloud, category).1,
@@ -630,8 +632,11 @@ impl SoundCloudLibraryClient {
         track_ids: &[String],
         authorization: &header::HeaderValue,
     ) -> Result<Vec<Value>, String> {
-        let mut hydrated = Vec::with_capacity(track_ids.len());
-        for chunk in track_ids.chunks(50) {
+        let chunks = track_ids
+            .chunks(50)
+            .map(|chunk| chunk.to_owned())
+            .collect::<Vec<_>>();
+        let hydrated = stream::iter(chunks.into_iter().map(|chunk| async move {
             let ids = chunk.join(",");
             let response = self
                 .get(
@@ -640,16 +645,19 @@ impl SoundCloudLibraryClient {
                     &[("ids", ids.as_str())],
                 )
                 .await?;
-            hydrated.extend(
-                response
-                    .as_array()
-                    .ok_or_else(|| {
-                        "SoundCloud returned an invalid track hydration response".to_string()
-                    })?
-                    .iter()
-                    .cloned(),
-            );
-        }
+            response
+                .as_array()
+                .ok_or_else(|| {
+                    "SoundCloud returned an invalid track hydration response".to_string()
+                })
+                .map(|items| items.to_vec())
+        }))
+        .buffered(TRACK_HYDRATION_CONCURRENCY)
+        .try_collect::<Vec<Vec<Value>>>()
+        .await?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
         let by_id = hydrated
             .into_iter()
             .filter_map(|value| id(value.get("id"), "").map(|id| (id, value)))
@@ -665,7 +673,10 @@ impl SoundCloudLibraryClient {
         route: super::model::Route,
         token: SoundCloudToken,
     ) -> Result<Page, String> {
-        let client = SearchClient::new().map_err(|error| error.message)?;
+        let client = self
+            .search_client
+            .clone()
+            .map_err(|error| error.to_owned())?;
         let detail = client
             .detail(
                 DetailRoute {
@@ -2407,7 +2418,7 @@ mod tests {
                 || panic!("artist loader should be present"),
                 |(body, _)| body,
             );
-        assert!(loader.contains("SearchClient::new()"));
+        assert!(loader.contains("search_client"));
         assert!(loader.contains("ResultType::Artists"));
         assert!(loader.contains("super::client::detail_page(detail)"));
         assert!(!loader.contains("artist_page(&profile, &raw)"));

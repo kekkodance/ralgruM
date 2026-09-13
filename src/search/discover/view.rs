@@ -353,19 +353,13 @@ fn append_provider_entries(
 }
 
 fn should_defer_all_soundcloud_loading(
-    source: Source,
-    deezer_status: &DiscoverStatus,
-    soundcloud_status: &DiscoverStatus,
+    _source: Source,
+    _deezer_status: &DiscoverStatus,
+    _soundcloud_status: &DiscoverStatus,
 ) -> bool {
-    source == Source::All
-        && matches!(
-            deezer_status,
-            DiscoverStatus::Idle | DiscoverStatus::Loading
-        )
-        && matches!(
-            soundcloud_status,
-            DiscoverStatus::Idle | DiscoverStatus::Loading
-        )
+    // Providers load independently. Keep both loading surfaces visible so
+    // whichever provider completes first can publish useful content.
+    false
 }
 
 fn append_sections(
@@ -1254,13 +1248,13 @@ mod tests {
     }
 
     #[test]
-    fn all_mode_initial_loading_fills_with_deezer_before_soundcloud() {
-        assert!(should_defer_all_soundcloud_loading(
+    fn all_mode_initial_loading_keeps_both_providers_visible() {
+        assert!(!should_defer_all_soundcloud_loading(
             Source::All,
             &DiscoverStatus::Loading,
             &DiscoverStatus::Loading,
         ));
-        assert!(should_defer_all_soundcloud_loading(
+        assert!(!should_defer_all_soundcloud_loading(
             Source::All,
             &DiscoverStatus::Idle,
             &DiscoverStatus::Loading,

@@ -28,13 +28,39 @@ impl LibraryView {
         };
         let saved_user_id = self.account.read(cx).deezer_user_id();
         let cache_arl = arl.clone();
-        let task = self
+        let cache_key = self.tracks_cache.key(&cache_arl, saved_user_id.as_deref());
+        let cache_task = cache_key.clone().map(|key| {
+            let cache = self.tracks_cache.clone();
+            self.runtime.spawn(async move { cache.load(&key).await })
+        });
+        let mut task = self
             .runtime
             .spawn(async move { client.load_tracks_progressive(arl, saved_user_id).await });
+        self.set_library_load_cancel(task.abort_handle());
         cx.spawn(async move |this, cx| {
-            let result = task
-                .await
-                .unwrap_or_else(|_| Err("Deezer library request failed".into()));
+            let (result, cached_page) = if let Some(mut cache_task) = cache_task {
+                tokio::select! {
+                    cache = &mut cache_task => {
+                        let cached_page = cache.ok().flatten();
+                        let visible = cached_page.as_ref().and_then(|page| {
+                            this.update(cx, |this, cx| {
+                                this.state.accept_tracks_cached_pipeline(token, page.clone()).then(|| {
+                                    cx.notify();
+                                    page.clone()
+                                })
+                            }).ok().flatten()
+                        });
+                        let result = (&mut task).await.unwrap_or_else(|_| Err("Deezer library request failed".into()));
+                        (result, visible)
+                    }
+                    result = &mut task => {
+                        cache_task.abort();
+                        (result.unwrap_or_else(|_| Err("Deezer library request failed".into())), None)
+                    },
+                }
+            } else {
+                (task.await.unwrap_or_else(|_| Err("Deezer library request failed".into())), None)
+            };
             let load = match result {
                 Ok(load) => load,
                 Err(error) => {
@@ -61,28 +87,43 @@ impl LibraryView {
                             );
                         })
                         .ok();
+                    } else if matches!(outcome, Some(TracksPipelineLoadOutcome::Ignored))
+                        && pipeline_is_current(&this, cx, token)
+                    {
+                        this.update(cx, |this, _| {
+                            this.deezer_tracks_retry = Some(DeezerTracksRetry::Initial {
+                                arl: cache_arl.clone(),
+                            });
+                        })
+                        .ok();
                     }
                     return;
                 }
             };
+            if !pipeline_is_current(&this, cx, token) {
+                return;
+            }
 
-            let cache_and_key = this
+            let verified_key = this
                 .update(cx, |this, _| {
-                    (
-                        this.tracks_cache.clone(),
-                        this.tracks_cache.key(&cache_arl, Some(&load.user_id)),
-                        this.runtime.clone(),
-                    )
+                    this.tracks_cache.key(&cache_arl, Some(&load.user_id))
                 })
-                .ok();
-            let verified_key = cache_and_key.as_ref().and_then(|(_, key, _)| key.clone());
-            let cache_task = cache_and_key.and_then(|(cache, key, runtime)| {
-                key.map(|key| runtime.spawn(async move { cache.load(&key).await }))
-            });
-            let initial_page = load.page;
+                .ok()
+                .flatten();
             let continuation = load.continuation;
-            let visible = this
-                .update(cx, |this, cx| {
+            let keep_cached_visible = cached_page.is_some() && continuation.is_some();
+            let initial_page = if keep_cached_visible {
+                load.page
+            } else {
+                cached_page
+                    .as_ref()
+                    .map(|cached| enrich_live_page(Some(cached), &load.page))
+                    .unwrap_or(load.page)
+            };
+            let visible = if keep_cached_visible {
+                false
+            } else {
+                this.update(cx, |this, cx| {
                     let visible = if continuation.is_some() {
                         this.state
                             .accept_tracks_preview_pipeline(token, initial_page.clone())
@@ -96,7 +137,8 @@ impl LibraryView {
                     }
                     visible
                 })
-                .unwrap_or(false);
+                .unwrap_or(false)
+            };
             if continuation.is_none() {
                 if visible || pipeline_is_current(&this, cx, token) {
                     persist_snapshot(this, cx, verified_key, initial_page);
@@ -121,7 +163,7 @@ impl LibraryView {
                 token,
                 generation,
                 continuation,
-                cache_task,
+                cached_page,
                 verified_key,
             )
             .await;
@@ -137,6 +179,11 @@ impl LibraryView {
             return;
         };
         match retry {
+            DeezerTracksRetry::Initial { arl } => {
+                let generation = self.state.active_generation();
+                let token = self.state.begin_tracks_pipeline();
+                self.load_deezer_tracks_progressive(generation, token, arl, cx);
+            }
             DeezerTracksRetry::Continuation {
                 token,
                 continuation,
@@ -188,6 +235,7 @@ impl LibraryView {
                     key: key.clone(),
                 });
                 let task = self.runtime.spawn(async move { hydration.hydrate().await });
+                self.set_library_load_cancel(task.abort_handle());
                 cx.spawn(async move |this, cx| {
                     let result = task
                         .await
@@ -241,7 +289,7 @@ async fn run_deezer_tracks_continuation(
     token: u64,
     generation: u64,
     continuation: super::client::DeezerTracksContinuation,
-    cache_task: Option<tokio::task::JoinHandle<Option<Page>>>,
+    cached_page: Option<Page>,
     verified_key: Option<DeezerTracksCacheKey>,
 ) {
     let continuation_task = this
@@ -253,6 +301,11 @@ async fn run_deezer_tracks_continuation(
     let Some(continuation_task) = continuation_task else {
         return;
     };
+    let continuation_abort = continuation_task.abort_handle();
+    this.update(cx, |this, _| {
+        this.set_library_load_cancel(continuation_abort);
+    })
+    .ok();
     let result = continuation_task
         .await
         .unwrap_or_else(|_| Err("Deezer Tracks continuation failed".into()));
@@ -287,11 +340,6 @@ async fn run_deezer_tracks_continuation(
         })
         .collect::<Vec<_>>();
 
-    let cached_page = if let Some(cache_task) = cache_task {
-        cache_task.await.ok().flatten()
-    } else {
-        None
-    };
     let raw_page = completion.page;
     let preview_page = enrich_live_page(cached_page.as_ref(), &raw_page);
     let fallback_page = preview_page.clone();
@@ -363,6 +411,11 @@ async fn run_deezer_tracks_continuation(
     let Some(hydration_task) = hydration_task else {
         return;
     };
+    let hydration_abort = hydration_task.abort_handle();
+    this.update(cx, |this, _| {
+        this.set_library_load_cancel(hydration_abort);
+    })
+    .ok();
     finish_deezer_tracks_hydration(this, cx, token, hydration_task, verified_key, fallback_page)
         .await;
 }

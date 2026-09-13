@@ -1,16 +1,29 @@
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 use tokio_util::sync::CancellationToken;
 
 const RESOLVE_WINDOW: Duration = Duration::from_secs(10);
 const RESOLVE_LIMIT: usize = 6;
 const PROVIDER_MIN_INTERVAL: Duration = Duration::from_millis(1200);
 const CANCELLED_MESSAGE: &str = "Playback request cancelled";
+const MAX_INTERACTIVE_BURST: usize = 3;
+
+/// Current-track work must not wait behind speculative prefetches or queued
+/// downloads. Background work still receives a reserved turn after a small
+/// interactive burst so it cannot starve forever.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResolvePriority {
+    Interactive,
+    Background,
+}
 
 /// Coordinates the two resolve budgets shared by playback and downloads.
 ///
@@ -26,7 +39,11 @@ pub(crate) struct ResolveLimiter {
 struct ResolveLimiterState {
     recent_resolves: Mutex<SlidingWindow>,
     reservation_queue: AsyncMutex<()>,
-    provider_next: AsyncMutex<Instant>,
+    provider_next: Mutex<Instant>,
+    interactive_waiters: AtomicUsize,
+    background_waiters: AtomicUsize,
+    interactive_streak: AtomicUsize,
+    priority_changed: Notify,
     window: Duration,
     limit: usize,
     provider_min_interval: Duration,
@@ -82,7 +99,11 @@ impl ResolveLimiter {
             state: Arc::new(ResolveLimiterState {
                 recent_resolves: Mutex::new(SlidingWindow::default()),
                 reservation_queue: AsyncMutex::new(()),
-                provider_next: AsyncMutex::new(Instant::now()),
+                provider_next: Mutex::new(Instant::now()),
+                interactive_waiters: AtomicUsize::new(0),
+                background_waiters: AtomicUsize::new(0),
+                interactive_streak: AtomicUsize::new(0),
+                priority_changed: Notify::new(),
                 window,
                 limit,
                 provider_min_interval,
@@ -120,78 +141,152 @@ impl ResolveLimiter {
             .len()
     }
 
-    /// Reserves the next provider resolve in FIFO order.
+    /// Reserves the next provider resolve. Interactive playback is preferred
+    /// over background prefetch and downloads, while a background reservation
+    /// is admitted after a bounded interactive burst.
     ///
     /// This combines the original app's sliding-window reservation with its
     /// provider minimum interval. The reservation is not recorded until both
     /// waits complete, so cancelling a stale request never spends resolve
     /// budget on a request that will not be sent.
-    pub(crate) async fn reserve(&self, cancellation: &CancellationToken) -> Result<(), String> {
-        if cancellation.is_cancelled() {
-            return Err(CANCELLED_MESSAGE.into());
-        }
-
-        let _queue = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(CANCELLED_MESSAGE.into()),
-            queue = self.state.reservation_queue.lock() => queue,
-        };
-
-        if cancellation.is_cancelled() {
-            return Err(CANCELLED_MESSAGE.into());
-        }
-
-        let hold_off = self.hold_off();
-        if !hold_off.is_zero() {
-            tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => return Err(CANCELLED_MESSAGE.into()),
-                _ = tokio::time::sleep(hold_off) => {}
-            }
-        }
-
-        if cancellation.is_cancelled() {
-            return Err(CANCELLED_MESSAGE.into());
-        }
-
-        self.wait_for_provider_slot(cancellation).await?;
-        if cancellation.is_cancelled() {
-            return Err(CANCELLED_MESSAGE.into());
-        }
-
-        self.note_resolve();
-        Ok(())
-    }
-
-    /// Waits for the next provider request slot, preserving a 1.2 second
-    /// minimum spacing between provider resolve commands.
-    pub(crate) async fn wait_for_provider_slot(
+    pub(crate) async fn reserve(
         &self,
+        priority: ResolvePriority,
         cancellation: &CancellationToken,
     ) -> Result<(), String> {
         if cancellation.is_cancelled() {
             return Err(CANCELLED_MESSAGE.into());
         }
+        let _waiter = PriorityWaiter::new(&self.state, priority);
 
-        let mut next = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(CANCELLED_MESSAGE.into()),
-            next = self.state.provider_next.lock() => next,
-        };
-        let now = Instant::now();
-        if *next > now {
+        loop {
+            let queue = self.acquire_turn(priority, cancellation).await?;
+            let now = Instant::now();
+            let hold_off = self.hold_off();
+            let provider_hold_off = self
+                .state
+                .provider_next
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .saturating_duration_since(now);
+            let delay = hold_off.max(provider_hold_off);
+
+            if delay.is_zero() {
+                if cancellation.is_cancelled() {
+                    return Err(CANCELLED_MESSAGE.into());
+                }
+                self.note_resolve();
+                *self
+                    .state
+                    .provider_next
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Instant::now() + self.state.provider_min_interval;
+                self.note_priority_turn(priority);
+                drop(queue);
+                return Ok(());
+            }
+
+            // Do not keep the admission lock while sleeping. A current-track
+            // request arriving during a background wait can claim the next
+            // safe provider slot, and every contender rechecks both budgets.
+            drop(queue);
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(CANCELLED_MESSAGE.into()),
-                _ = tokio::time::sleep(*next - now) => {}
+                _ = tokio::time::sleep(delay) => {}
             }
         }
+    }
 
-        if cancellation.is_cancelled() {
-            return Err(CANCELLED_MESSAGE.into());
+    async fn acquire_turn(
+        &self,
+        priority: ResolvePriority,
+        cancellation: &CancellationToken,
+    ) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+        loop {
+            let notified = self.state.priority_changed.notified();
+            if !self.priority_can_run(priority) {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(CANCELLED_MESSAGE.into()),
+                    _ = notified => continue,
+                }
+            }
+            let queue = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(CANCELLED_MESSAGE.into()),
+                queue = self.state.reservation_queue.lock() => queue,
+            };
+            if self.priority_can_run(priority) {
+                return Ok(queue);
+            }
+            drop(queue);
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(CANCELLED_MESSAGE.into()),
+                _ = self.state.priority_changed.notified() => {}
+            }
         }
-        *next = Instant::now() + self.state.provider_min_interval;
-        Ok(())
+    }
+
+    fn priority_can_run(&self, priority: ResolvePriority) -> bool {
+        let interactive = self.state.interactive_waiters.load(Ordering::Acquire);
+        let background = self.state.background_waiters.load(Ordering::Acquire);
+        let force_background = background > 0
+            && self.state.interactive_streak.load(Ordering::Acquire) >= MAX_INTERACTIVE_BURST;
+        match priority {
+            ResolvePriority::Interactive => !force_background,
+            ResolvePriority::Background => interactive == 0 || force_background,
+        }
+    }
+
+    fn note_priority_turn(&self, priority: ResolvePriority) {
+        match priority {
+            ResolvePriority::Interactive => {
+                self.state.interactive_streak.fetch_add(1, Ordering::AcqRel);
+            }
+            ResolvePriority::Background => {
+                self.state.interactive_streak.store(0, Ordering::Release);
+            }
+        }
+        self.state.priority_changed.notify_waiters();
+    }
+}
+
+struct PriorityWaiter<'a> {
+    state: &'a ResolveLimiterState,
+    priority: ResolvePriority,
+}
+
+impl<'a> PriorityWaiter<'a> {
+    fn new(state: &'a ResolveLimiterState, priority: ResolvePriority) -> Self {
+        match priority {
+            ResolvePriority::Interactive => {
+                state.interactive_waiters.fetch_add(1, Ordering::AcqRel);
+            }
+            ResolvePriority::Background => {
+                state.background_waiters.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        state.priority_changed.notify_waiters();
+        Self { state, priority }
+    }
+}
+
+impl Drop for PriorityWaiter<'_> {
+    fn drop(&mut self) {
+        match self.priority {
+            ResolvePriority::Interactive => {
+                self.state
+                    .interactive_waiters
+                    .fetch_sub(1, Ordering::AcqRel);
+            }
+            ResolvePriority::Background => {
+                self.state.background_waiters.fetch_sub(1, Ordering::AcqRel);
+            }
+        }
+        self.state.priority_changed.notify_waiters();
     }
 }
 
@@ -254,7 +349,11 @@ mod tests {
         let cancellation = CancellationToken::new();
         let task_limiter = limiter.clone();
         let task_cancellation = cancellation.clone();
-        let task = tokio::spawn(async move { task_limiter.reserve(&task_cancellation).await });
+        let task = tokio::spawn(async move {
+            task_limiter
+                .reserve(ResolvePriority::Interactive, &task_cancellation)
+                .await
+        });
         tokio::task::yield_now().await;
         cancellation.cancel();
 
@@ -270,9 +369,15 @@ mod tests {
         let limiter = ResolveLimiter::with_config(RESOLVE_WINDOW, RESOLVE_LIMIT, test_interval);
         let cancellation = CancellationToken::new();
 
-        limiter.reserve(&cancellation).await.unwrap();
+        limiter
+            .reserve(ResolvePriority::Interactive, &cancellation)
+            .await
+            .unwrap();
         let started = Instant::now();
-        limiter.reserve(&cancellation).await.unwrap();
+        limiter
+            .reserve(ResolvePriority::Interactive, &cancellation)
+            .await
+            .unwrap();
 
         assert!(started.elapsed() >= test_interval);
     }
@@ -307,7 +412,11 @@ mod tests {
         let queued = tokio::spawn({
             let limiter = limiter.clone();
             let cancellation = queued_cancellation.clone();
-            async move { limiter.reserve(&cancellation).await }
+            async move {
+                limiter
+                    .reserve(ResolvePriority::Interactive, &cancellation)
+                    .await
+            }
         });
         tokio::task::yield_now().await;
         queued_cancellation.cancel();
@@ -315,6 +424,55 @@ mod tests {
         drop(queue_guard);
 
         let next_cancellation = CancellationToken::new();
-        assert!(limiter.reserve(&next_cancellation).await.is_ok());
+        assert!(
+            limiter
+                .reserve(ResolvePriority::Interactive, &next_cancellation)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn interactive_reservation_runs_before_a_waiting_background_request() {
+        let limiter = ResolveLimiter::with_config(RESOLVE_WINDOW, RESOLVE_LIMIT, Duration::ZERO);
+        let gate = limiter.state.reservation_queue.lock().await;
+        let background = tokio::spawn({
+            let limiter = limiter.clone();
+            async move {
+                let cancellation = CancellationToken::new();
+                limiter
+                    .reserve(ResolvePriority::Background, &cancellation)
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        let interactive = tokio::spawn({
+            let limiter = limiter.clone();
+            async move {
+                let cancellation = CancellationToken::new();
+                limiter
+                    .reserve(ResolvePriority::Interactive, &cancellation)
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        drop(gate);
+
+        interactive.await.unwrap().unwrap();
+        background.await.unwrap().unwrap();
+        assert_eq!(limiter.recorded_resolves(), 2);
+    }
+
+    #[tokio::test]
+    async fn background_gets_a_turn_after_a_bounded_interactive_burst() {
+        let limiter = ResolveLimiter::with_config(RESOLVE_WINDOW, 16, Duration::ZERO);
+        let background_waiter = PriorityWaiter::new(&limiter.state, ResolvePriority::Background);
+        for _ in 0..MAX_INTERACTIVE_BURST {
+            limiter.note_priority_turn(ResolvePriority::Interactive);
+        }
+
+        assert!(!limiter.priority_can_run(ResolvePriority::Interactive));
+        assert!(limiter.priority_can_run(ResolvePriority::Background));
+        drop(background_waiter);
     }
 }

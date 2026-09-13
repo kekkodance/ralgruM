@@ -440,6 +440,16 @@ impl LibraryView {
         {
             return;
         }
+        if !matches!(
+            self.playlist_catalog(route.source).status,
+            super::playlist_state::CatalogStatus::Ready
+        ) {
+            match route.source {
+                Provider::Deezer => self.ensure_playlist_catalog(cx),
+                Provider::SoundCloud => self.ensure_soundcloud_playlist_catalog(cx),
+            }
+            return;
+        }
         let editable = self.playlist_catalog(route.source).is_editable(&route.id);
         let reorder_pending = self.playlist_catalog(route.source).reorder_pending;
         let Some(page) = self.state.page.as_ref() else {

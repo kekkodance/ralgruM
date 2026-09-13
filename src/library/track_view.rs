@@ -2,7 +2,7 @@ use gpui::{
     AnyElement, App, Context, Entity, KeyDownEvent, MouseButton, SharedString, div, prelude::*, px,
     rgb,
 };
-use std::sync::Arc;
+use std::{fmt::Write as _, sync::Arc};
 
 use crate::{
     assets::LocalIcon,
@@ -336,25 +336,25 @@ pub(super) fn library_track_identity(track: &Track) -> String {
             .unwrap_or_else(|| id.to_owned());
     }
 
-    let artists = track
-        .artists
-        .iter()
-        .map(|artist| format!("{}={}", artist.id, artist.name))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
-        origin.unwrap_or(""),
-        track.title,
-        track.artist,
-        artists,
+    let mut identity = format!("{}:{}:{}:", origin.unwrap_or(""), track.title, track.artist);
+    for (index, artist) in track.artists.iter().enumerate() {
+        if index > 0 {
+            identity.push(',');
+        }
+        write!(identity, "{}={}", artist.id, artist.name).expect("writing to a string");
+    }
+    write!(
+        identity,
+        ":{}:{}:{}:{}:{}:{}",
         track.album_id,
         track.album,
         track.artwork,
         track.duration,
         track.explicit,
-        track.service_url
+        track.service_url,
     )
+    .expect("writing to a string");
+    identity
 }
 
 fn queue_index_for_row(source_indices: &[usize], row_index: usize) -> usize {

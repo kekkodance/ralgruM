@@ -37,7 +37,7 @@ use super::progressive::{
     ProgressiveFile, ProgressiveReader, ProgressiveWriter, TimelineSeekSession, startup_bytes,
 };
 use super::resolve_limiter::ResolveLimiter;
-use super::resolve_source_cache::{ResolvedSourceCache, SourceCacheValue};
+use super::resolve_source_cache::{ResolvedSourceCache, SourceCacheValue, SourceResolveFlights};
 use super::retry::{RequestClass, RetryBudget, send_with_retry};
 use super::soundcloud_hls::{self, HlsDescriptor};
 use super::{
@@ -73,6 +73,7 @@ pub(crate) struct StreamResolver {
     cache: Option<AudioCache>,
     limiter: ResolveLimiter,
     resolved_source_cache: ResolvedSourceCache<ResolvedSource>,
+    source_resolve_flights: SourceResolveFlights<ResolvedSource>,
     #[cfg(test)]
     backend_resolve_override: Option<backend_tests::BackendResolveOverride>,
 }
@@ -429,6 +430,7 @@ impl StreamResolver {
                 cache: None,
                 limiter,
                 resolved_source_cache: ResolvedSourceCache::new(),
+                source_resolve_flights: SourceResolveFlights::new(),
                 #[cfg(test)]
                 backend_resolve_override: None,
             })
@@ -442,6 +444,7 @@ impl StreamResolver {
 
     pub(crate) fn clear_resolved_source_cache(&self) {
         self.resolved_source_cache.clear();
+        self.source_resolve_flights.clear();
     }
 
     fn insert_resolved_source_if_current(

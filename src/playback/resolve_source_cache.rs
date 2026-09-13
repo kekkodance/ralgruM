@@ -4,6 +4,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+
 // Media URLs are short-lived, but a normal listening session can outlast the
 // old 90-second window. Media failures still invalidate and refresh entries.
 pub(crate) const RESOLVED_SOURCE_TTL: Duration = Duration::from_secs(600);
@@ -21,6 +24,119 @@ pub(crate) struct ResolvedSourceCache<T: SourceCacheValue> {
     state: Arc<Mutex<CacheState<T>>>,
     ttl: Duration,
     max_entries: usize,
+}
+
+/// Coordinates one in-progress provider resolve per cache key. Completed
+/// values remain the responsibility of `ResolvedSourceCache`; this map exists
+/// only long enough for concurrent callers to share the same network work.
+#[derive(Clone)]
+pub(crate) struct SourceResolveFlights<T: Clone> {
+    entries: Arc<Mutex<HashMap<String, Arc<SourceResolveFlight<T>>>>>,
+}
+
+pub(crate) struct SourceResolveFlight<T: Clone> {
+    result: Mutex<Option<Result<T, String>>>,
+    completed: Notify,
+}
+
+impl<T: Clone> SourceResolveFlights<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Returns the flight for `key` and whether this caller must start the
+    /// shared work. Keys are bounded by the resolver cache key space and are
+    /// removed as soon as their work completes.
+    pub(crate) fn begin(&self, key: String) -> (Arc<SourceResolveFlight<T>>, bool) {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(flight) = entries.get(&key) {
+            return (flight.clone(), false);
+        }
+        let flight = Arc::new(SourceResolveFlight {
+            result: Mutex::new(None),
+            completed: Notify::new(),
+        });
+        entries.insert(key, flight.clone());
+        (flight, true)
+    }
+
+    pub(crate) async fn wait(
+        &self,
+        flight: &Arc<SourceResolveFlight<T>>,
+        cancellation: &CancellationToken,
+    ) -> Result<T, String> {
+        loop {
+            if cancellation.is_cancelled() {
+                return Err("Playback request cancelled".into());
+            }
+            // Register before checking the result so a completion between the
+            // check and select cannot strand this waiter.
+            let notified = flight.completed.notified();
+            if let Some(result) = flight
+                .result
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+            {
+                return result;
+            }
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err("Playback request cancelled".into()),
+                _ = notified => {}
+            }
+        }
+    }
+
+    pub(crate) fn finish(
+        &self,
+        key: &str,
+        flight: &Arc<SourceResolveFlight<T>>,
+        result: Result<T, String>,
+    ) {
+        {
+            let mut stored = flight
+                .result
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *stored = Some(result);
+        }
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries
+            .get(key)
+            .is_some_and(|current| Arc::ptr_eq(current, flight))
+        {
+            entries.remove(key);
+        }
+        drop(entries);
+        flight.completed.notify_waiters();
+    }
+
+    /// A resolver epoch reset makes every existing flight stale. Dropping the
+    /// map entries lets requests in the new account/session start fresh work;
+    /// old workers retain their own `Arc` and can still notify old waiters.
+    pub(crate) fn clear(&self) {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
 }
 
 struct CacheState<T> {
@@ -326,5 +442,91 @@ mod tests {
 
         assert!(!cache.invalidate_if_epoch(stale_epoch, "current"));
         assert_eq!(cache.get("current"), Some(TestSource::Remote(2)));
+    }
+
+    #[tokio::test]
+    async fn same_key_callers_share_one_flight_and_cleanup_after_completion() {
+        let flights = SourceResolveFlights::<TestSource>::new();
+        let (first, first_starts_work) = flights.begin("track".into());
+        let (second, second_starts_work) = flights.begin("track".into());
+
+        assert!(first_starts_work);
+        assert!(!second_starts_work);
+        assert!(Arc::ptr_eq(&first, &second));
+
+        flights.finish("track", &first, Ok(TestSource::Remote(7)));
+        let cancellation = CancellationToken::new();
+        assert_eq!(
+            flights.wait(&second, &cancellation).await,
+            Ok(TestSource::Remote(7))
+        );
+        assert_eq!(flights.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn different_keys_start_independent_flights() {
+        let flights = SourceResolveFlights::<TestSource>::new();
+        let (first, first_starts_work) = flights.begin("first".into());
+        let (second, second_starts_work) = flights.begin("second".into());
+
+        assert!(first_starts_work);
+        assert!(second_starts_work);
+        assert!(!Arc::ptr_eq(&first, &second));
+
+        flights.finish("first", &first, Ok(TestSource::Remote(1)));
+        flights.finish("second", &second, Ok(TestSource::Remote(2)));
+        let cancellation = CancellationToken::new();
+        assert_eq!(
+            flights.wait(&first, &cancellation).await,
+            Ok(TestSource::Remote(1))
+        );
+        assert_eq!(
+            flights.wait(&second, &cancellation).await,
+            Ok(TestSource::Remote(2))
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_one_waiter_does_not_cancel_the_shared_flight() {
+        let flights = SourceResolveFlights::<TestSource>::new();
+        let (flight, starts_work) = flights.begin("track".into());
+        assert!(starts_work);
+
+        let cancelled = CancellationToken::new();
+        let cancelled_waiter = {
+            let flights = flights.clone();
+            let flight = flight.clone();
+            let cancellation = cancelled.clone();
+            tokio::spawn(async move { flights.wait(&flight, &cancellation).await })
+        };
+        tokio::task::yield_now().await;
+        cancelled.cancel();
+        assert_eq!(
+            cancelled_waiter.await.unwrap(),
+            Err("Playback request cancelled".into())
+        );
+
+        flights.finish("track", &flight, Ok(TestSource::Remote(9)));
+        let active = CancellationToken::new();
+        assert_eq!(
+            flights.wait(&flight, &active).await,
+            Ok(TestSource::Remote(9))
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_and_cleared_flights_do_not_retire_newer_work() {
+        let flights = SourceResolveFlights::<TestSource>::new();
+        let (old, starts_work) = flights.begin("track".into());
+        assert!(starts_work);
+        flights.clear();
+        let (current, starts_work) = flights.begin("track".into());
+        assert!(starts_work);
+        assert!(!Arc::ptr_eq(&old, &current));
+
+        flights.finish("track", &old, Err("old failure".into()));
+        assert_eq!(flights.len(), 1);
+        flights.finish("track", &current, Err("current failure".into()));
+        assert_eq!(flights.len(), 0);
     }
 }

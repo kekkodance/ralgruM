@@ -289,6 +289,9 @@ pub(crate) struct LibraryView {
     pub(crate) playlists: super::playlist_state::PlaylistState,
     pub(crate) soundcloud_playlists: super::playlist_state::PlaylistState,
     pub(super) state: LibraryState,
+    library_load_cancel: Option<tokio::task::AbortHandle>,
+    detail_load_cancel: Option<tokio::task::AbortHandle>,
+    favorite_catalog_cancels: HashMap<FavoriteKind, FavoriteCatalogRequest>,
     pub(super) deezer_tracks_retry: Option<DeezerTracksRetry>,
     pub(super) favorites: Entity<FavoriteState>,
     pub(crate) playback: Entity<PlaybackModel>,
@@ -322,6 +325,9 @@ pub(crate) struct LibraryView {
 }
 
 pub(super) enum DeezerTracksRetry {
+    Initial {
+        arl: crate::search::DeezerArl,
+    },
     Continuation {
         token: u64,
         continuation: super::client::DeezerTracksContinuation,
@@ -331,6 +337,11 @@ pub(super) enum DeezerTracksRetry {
         hydration: super::client::DeezerTracksHydration,
         key: Option<super::tracks_cache::DeezerTracksCacheKey>,
     },
+}
+
+pub(super) struct FavoriteCatalogRequest {
+    generation: u64,
+    abort: tokio::task::AbortHandle,
 }
 
 struct TrackListCache {
@@ -703,6 +714,9 @@ impl LibraryView {
             playlists,
             soundcloud_playlists,
             state: LibraryState::default(),
+            library_load_cancel: None,
+            detail_load_cancel: None,
+            favorite_catalog_cancels: HashMap::new(),
             deezer_tracks_retry: None,
             favorites,
             playback,
@@ -735,7 +749,6 @@ impl LibraryView {
             playback_action_generation: 0,
             album_info_prefetch: crate::search::AlbumInfoPrefetch::default(),
         };
-        view.preload_deezer_favorites(cx);
         view
     }
 
@@ -1966,6 +1979,9 @@ impl LibraryView {
     }
 
     pub(crate) fn account_scope_changed(&mut self, scope: String, cx: &mut Context<Self>) {
+        self.cancel_library_load();
+        self.cancel_detail_load();
+        self.cancel_favorite_catalog_loads();
         self.reset_discover_flow_context();
         self.invalidate_playback_actions();
         self.deezer_tracks_retry = None;
@@ -1976,13 +1992,19 @@ impl LibraryView {
         self.playlists.set_account_scope(scope.clone());
         self.soundcloud_playlists.set_account_scope(scope.clone());
         if self.state.service == Service::Local {
-            self.state.set_account_scope(scope);
+            if self.state.set_account_scope(scope)
+                && let Ok(client) = self.client.clone()
+            {
+                client.clear_bootstrap_cache();
+            }
             cx.notify();
             return;
         }
-        self.preload_deezer_favorites(cx);
         self.clear_track_list_states();
         if let Some((service, category)) = scope_reload(&mut self.state, scope) {
+            if let Ok(client) = self.client.clone() {
+                client.clear_bootstrap_cache();
+            }
             self.load_service(service, category, cx);
         } else {
             cx.notify();
@@ -2001,6 +2023,56 @@ impl LibraryView {
             route.action,
             route.id
         )
+    }
+
+    pub(super) fn cancel_library_load(&mut self) {
+        if let Some(handle) = self.library_load_cancel.take() {
+            handle.abort();
+        }
+    }
+
+    pub(super) fn set_library_load_cancel(&mut self, handle: tokio::task::AbortHandle) {
+        self.library_load_cancel = Some(handle);
+    }
+
+    pub(super) fn cancel_detail_load(&mut self) {
+        if let Some(handle) = self.detail_load_cancel.take() {
+            handle.abort();
+        }
+    }
+
+    pub(super) fn cancel_favorite_catalog_loads(&mut self) {
+        for request in self
+            .favorite_catalog_cancels
+            .drain()
+            .map(|(_, request)| request)
+        {
+            request.abort.abort();
+        }
+    }
+
+    pub(super) fn set_favorite_catalog_cancel(
+        &mut self,
+        kind: FavoriteKind,
+        generation: u64,
+        abort: tokio::task::AbortHandle,
+    ) {
+        if let Some(previous) = self
+            .favorite_catalog_cancels
+            .insert(kind, FavoriteCatalogRequest { generation, abort })
+        {
+            previous.abort.abort();
+        }
+    }
+
+    pub(super) fn clear_favorite_catalog_cancel(&mut self, kind: FavoriteKind, generation: u64) {
+        if self
+            .favorite_catalog_cancels
+            .get(&kind)
+            .is_some_and(|request| request.generation == generation)
+        {
+            self.favorite_catalog_cancels.remove(&kind);
+        }
     }
 
     fn load_service(&mut self, service: Service, category: Category, cx: &mut Context<Self>) {
@@ -2027,6 +2099,8 @@ impl LibraryView {
         preserve_visible_page: bool,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_library_load();
+        self.cancel_detail_load();
         if self.state.service != service {
             self.category_motion = SegmentedSelectorMotion::default();
         }
@@ -2064,15 +2138,11 @@ impl LibraryView {
         let account_scope = self.account.read(cx).library_scope();
         self.deezer_actions.set_account_scope(account_scope.clone());
         if self.state.set_account_scope(account_scope) {
+            if let Ok(client) = self.client.clone() {
+                client.clear_bootstrap_cache();
+            }
             self.favorites
                 .update(cx, |favorites, _| favorites.reset_account());
-            self.preload_deezer_favorites(cx);
-        }
-        if service == Service::Deezer && category == Category::Playlists {
-            self.ensure_playlist_catalog(cx);
-        }
-        if service == Service::SoundCloud && category == Category::Playlists {
-            self.ensure_soundcloud_playlist_catalog(cx);
         }
         let (generation, cached) = if force {
             (
@@ -2153,6 +2223,7 @@ impl LibraryView {
             }
             _ => unreachable!(),
         };
+        self.library_load_cancel = Some(task.abort_handle());
         cx.spawn(async move |this, cx| {
             let result = task
                 .await
@@ -2208,6 +2279,7 @@ impl LibraryView {
                 .load_similar_artists(&artist_id, arl, saved_user_id)
                 .await
         });
+        self.detail_load_cancel = Some(task.abort_handle());
         cx.spawn(async move |this, cx| {
             let result = task
                 .await
@@ -2239,6 +2311,8 @@ impl LibraryView {
         let Some(route) = card_route(card) else {
             return;
         };
+        self.cancel_library_load();
+        self.cancel_detail_load();
         self.invalidate_playback_actions();
         self.flow_catalog_option = None;
         if route.action == "flowTracks" {
@@ -2262,12 +2336,6 @@ impl LibraryView {
             let generation = self.state.reload_active_route().0;
             self.load_flow_route(generation, route, FlowMode::Default, cx);
             return;
-        }
-        if route.action == "playlistTracks" {
-            match route.source {
-                crate::search::Provider::Deezer => self.ensure_playlist_catalog(cx),
-                crate::search::Provider::SoundCloud => self.ensure_soundcloud_playlist_catalog(cx),
-            }
         }
         if cached.is_some() {
             cx.notify();
@@ -2371,6 +2439,8 @@ impl LibraryView {
     }
 
     pub(super) fn load_nested(&mut self, generation: u64, route: Route, cx: &mut Context<Self>) {
+        self.cancel_library_load();
+        self.cancel_detail_load();
         if route.is_local_playlist_detail() {
             let result = match self.local_playlists.as_ref() {
                 Ok(store) => store
@@ -2432,6 +2502,7 @@ impl LibraryView {
                     .spawn(async move { client.load_route(route, token).await })
             }
         };
+        self.detail_load_cancel = Some(task.abort_handle());
         cx.spawn(async move |this, cx| {
             let result = task
                 .await

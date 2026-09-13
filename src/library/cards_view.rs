@@ -374,24 +374,6 @@ pub(super) fn cards_with_snapshot(
                     .bg(rgb(SURFACE))
                     .child(card_content)
             };
-            // Start the about info fetch on hover so a following right-click
-            // menu can open the Info dialog already populated. The prefetch
-            // itself ignores cards without about data and cached entries.
-            let element = {
-                let prefetch_host = host.clone();
-                let prefetch_card = card.clone();
-                if card.library_service == Some(crate::library::Service::Local) {
-                    element
-                } else {
-                    element.on_hover(move |hovered, _, cx| {
-                        if *hovered {
-                            prefetch_host.update(cx, |view, cx| {
-                                view.prefetch_card_info(prefetch_card.clone(), cx);
-                            });
-                        }
-                    })
-                }
-            };
             let element = match card.kind {
                 Category::Artists => {
                     if let Some(entity) = context_menu::library_card_entity(card, false) {

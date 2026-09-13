@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub(crate) const CATEGORIES: [ResultType; 4] = [
     ResultType::Tracks,
@@ -7,6 +7,11 @@ pub(crate) const CATEGORIES: [ResultType; 4] = [
     ResultType::Artists,
     ResultType::Playlists,
 ];
+
+// A snapshot can contain several result groups and artwork URLs. Keep enough
+// recent searches for normal source and type switching without retaining every
+// query entered in a long-lived session.
+const SEARCH_RESULT_CACHE_LIMIT: usize = 48;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(crate) enum Source {
@@ -337,6 +342,8 @@ pub(crate) struct SearchState {
     generation: u64,
     query: String,
     result_cache: HashMap<SearchCacheKey, SearchCacheSnapshot>,
+    incremental_failures: Vec<(Provider, ProviderError)>,
+    result_cache_order: VecDeque<SearchCacheKey>,
 }
 
 impl Default for SearchState {
@@ -350,6 +357,8 @@ impl Default for SearchState {
             generation: 0,
             query: String::new(),
             result_cache: HashMap::new(),
+            incremental_failures: Vec::new(),
+            result_cache_order: VecDeque::new(),
         }
     }
 }
@@ -362,6 +371,8 @@ impl SearchState {
         self.warning = None;
         self.state = ResultState::Initial;
         self.result_cache.clear();
+        self.incremental_failures.clear();
+        self.result_cache_order.clear();
     }
     pub(crate) fn submit(&mut self, query: &str, deezer_session: bool) -> Option<SearchJob> {
         self.result_type = ResultType::All;
@@ -399,6 +410,7 @@ impl SearchState {
             return None;
         }
         self.generation = self.generation.wrapping_add(1);
+        self.incremental_failures.clear();
         self.query = query.to_owned();
         if self.source == Source::Deezer && !deezer_session {
             self.groups = Groups::default();
@@ -486,8 +498,9 @@ impl SearchState {
         if !self.query.is_empty()
             && matches!(&self.state, ResultState::Results | ResultState::Empty)
         {
-            self.result_cache.insert(
-                self.cache_key(),
+            let key = self.cache_key();
+            self.cache_insert(
+                key,
                 SearchCacheSnapshot {
                     state: self.state.clone(),
                     groups: self.groups.clone(),
@@ -498,17 +511,80 @@ impl SearchState {
         true
     }
 
+    /// Applies one independently completed provider batch. Results become
+    /// visible immediately, while a cache snapshot is recorded only after the
+    /// final batch so a later navigation can never restore a partial search.
+    pub(crate) fn complete_incremental_with_missing_accounts(
+        &mut self,
+        generation: u64,
+        results: Vec<RawResult>,
+        missing_accounts: &[Provider],
+        final_batch: bool,
+    ) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        for result in results {
+            match result.data {
+                Ok(items) => crate::search::normalize::append(
+                    &mut self.groups,
+                    result.request.provider,
+                    result.request.category,
+                    items,
+                ),
+                Err(error) => self
+                    .incremental_failures
+                    .push((result.request.provider, error)),
+            }
+        }
+        if self.source == Source::All {
+            self.groups.sort_by_provider_order();
+        }
+        let total = self.groups.count(self.result_type);
+        self.warning = partial_warning(&self.incremental_failures, missing_accounts);
+        self.state = if total > 0 {
+            ResultState::Results
+        } else if final_batch
+            && !self.incremental_failures.is_empty()
+            && self.incremental_failures.len()
+                == self.source.providers().len() * self.result_type.categories().len()
+        {
+            ResultState::Failed(self.incremental_failures[0].1.message.clone())
+        } else if final_batch {
+            ResultState::Empty
+        } else {
+            ResultState::Loading
+        };
+        if final_batch {
+            if !self.query.is_empty()
+                && matches!(&self.state, ResultState::Results | ResultState::Empty)
+            {
+                let key = self.cache_key();
+                self.cache_insert(
+                    key,
+                    SearchCacheSnapshot {
+                        state: self.state.clone(),
+                        groups: self.groups.clone(),
+                        warning: self.warning.clone(),
+                    },
+                );
+            }
+            self.incremental_failures.clear();
+        }
+        true
+    }
+
     fn cache_key(&self) -> SearchCacheKey {
         SearchCacheKey {
             source: self.source,
             result_type: self.result_type,
-            query: self.query.clone(),
+            query: normalize_cache_query(&self.query),
         }
     }
 
     fn restore_cached(&mut self) -> bool {
         let key = self.cache_key();
-        if let Some(snapshot) = self.result_cache.get(&key).cloned() {
+        if let Some(snapshot) = self.cache_get(&key) {
             self.apply_snapshot(snapshot);
             return true;
         }
@@ -516,7 +592,7 @@ impl SearchState {
             return false;
         };
         self.apply_snapshot(snapshot.clone());
-        self.result_cache.insert(key, snapshot);
+        self.cache_insert(key, snapshot);
         true
     }
 
@@ -526,13 +602,13 @@ impl SearchState {
         self.warning = snapshot.warning;
     }
 
-    fn derive_snapshot(&self) -> Option<SearchCacheSnapshot> {
+    fn derive_snapshot(&mut self) -> Option<SearchCacheSnapshot> {
         if self.source == Source::All
             && let Some(merged) = self.merge_provider_snapshots()
         {
             return Some(merged);
         }
-        let query = self.query.clone();
+        let query = normalize_cache_query(&self.query);
         let parents = [
             SearchCacheKey {
                 source: Source::All,
@@ -559,21 +635,21 @@ impl SearchState {
             {
                 continue;
             }
-            let Some(parent) = self.result_cache.get(&parent_key) else {
+            let Some(parent) = self.cache_get(&parent_key) else {
                 continue;
             };
-            return Some(narrow_snapshot(parent, self.source, self.result_type));
+            return Some(narrow_snapshot(&parent, self.source, self.result_type));
         }
         None
     }
 
-    fn merge_provider_snapshots(&self) -> Option<SearchCacheSnapshot> {
+    fn merge_provider_snapshots(&mut self) -> Option<SearchCacheSnapshot> {
         let deezer = self.provider_snapshot(Provider::Deezer)?;
         let soundcloud = self.provider_snapshot(Provider::SoundCloud)?;
         Some(merge_snapshots(deezer, soundcloud, self.result_type))
     }
 
-    fn missing_providers(&self) -> Vec<Provider> {
+    fn missing_providers(&mut self) -> Vec<Provider> {
         self.source
             .providers()
             .iter()
@@ -582,7 +658,7 @@ impl SearchState {
             .collect()
     }
 
-    fn provider_snapshot(&self, provider: Provider) -> Option<SearchCacheSnapshot> {
+    fn provider_snapshot(&mut self, provider: Provider) -> Option<SearchCacheSnapshot> {
         let source = match provider {
             Provider::Deezer => Source::Deezer,
             Provider::SoundCloud => Source::SoundCloud,
@@ -591,25 +667,58 @@ impl SearchState {
             SearchCacheKey {
                 source,
                 result_type: self.result_type,
-                query: self.query.clone(),
+                query: normalize_cache_query(&self.query),
             },
             SearchCacheKey {
                 source,
                 result_type: ResultType::All,
-                query: self.query.clone(),
+                query: normalize_cache_query(&self.query),
             },
         ];
         for key in keys {
             if !key.result_type.covers(self.result_type) {
                 continue;
             }
-            let Some(parent) = self.result_cache.get(&key) else {
+            let Some(parent) = self.cache_get(&key) else {
                 continue;
             };
-            return Some(narrow_snapshot(parent, source, self.result_type));
+            return Some(narrow_snapshot(&parent, source, self.result_type));
         }
         None
     }
+
+    fn cache_get(&mut self, key: &SearchCacheKey) -> Option<SearchCacheSnapshot> {
+        let snapshot = self.result_cache.get(key).cloned()?;
+        self.touch_cache_key(key);
+        Some(snapshot)
+    }
+
+    fn cache_insert(&mut self, key: SearchCacheKey, snapshot: SearchCacheSnapshot) {
+        if !self.result_cache.contains_key(&key)
+            && self.result_cache.len() >= SEARCH_RESULT_CACHE_LIMIT
+        {
+            if let Some(oldest) = self.result_cache_order.pop_front() {
+                self.result_cache.remove(&oldest);
+            }
+        }
+        self.result_cache.insert(key.clone(), snapshot);
+        self.touch_cache_key(&key);
+    }
+
+    fn touch_cache_key(&mut self, key: &SearchCacheKey) {
+        if let Some(position) = self
+            .result_cache_order
+            .iter()
+            .position(|candidate| candidate == key)
+        {
+            self.result_cache_order.remove(position);
+        }
+        self.result_cache_order.push_back(key.clone());
+    }
+}
+
+fn normalize_cache_query(query: &str) -> String {
+    query.trim().to_lowercase()
 }
 
 fn narrow_snapshot(
@@ -751,6 +860,51 @@ mod tests {
     }
 
     #[test]
+    fn incremental_batches_publish_early_without_caching_a_partial_snapshot() {
+        let mut state = SearchState::default();
+        let job = state.submit("query", true).unwrap();
+        let deezer = job
+            .requests
+            .iter()
+            .find(|request| {
+                request.provider == Provider::Deezer && request.category == ResultType::Tracks
+            })
+            .cloned()
+            .unwrap();
+        assert!(state.complete_incremental_with_missing_accounts(
+            job.generation,
+            vec![RawResult {
+                request: deezer,
+                data: Ok(vec![serde_json::json!({"id": 1, "title": "Track"})]),
+            }],
+            &[],
+            false,
+        ));
+        assert_eq!(state.state, ResultState::Results);
+        assert_eq!(state.groups.tracks.len(), 1);
+        assert!(state.result_cache.is_empty());
+
+        let remaining = job
+            .requests
+            .into_iter()
+            .filter(|request| {
+                request.provider != Provider::Deezer || request.category != ResultType::Tracks
+            })
+            .map(|request| RawResult {
+                request,
+                data: Ok(Vec::new()),
+            })
+            .collect();
+        assert!(state.complete_incremental_with_missing_accounts(
+            job.generation,
+            remaining,
+            &[],
+            true,
+        ));
+        assert_eq!(state.result_cache.len(), 1);
+    }
+
+    #[test]
     fn cache_hit_restores_terminal_snapshot_for_normalized_query() {
         let mut state = SearchState::default();
         let job = state
@@ -782,7 +936,7 @@ mod tests {
         assert_eq!(state.state, ResultState::Loading);
         assert!(
             state
-                .select_type(ResultType::Tracks, "  query\t", true)
+                .select_type(ResultType::Tracks, "  QuErY\t", true)
                 .is_none()
         );
         assert_eq!(state.state, cached_state);
@@ -842,6 +996,50 @@ mod tests {
         );
         assert_eq!(state.state, ResultState::Results);
         assert_eq!(state.groups.tracks, tracks);
+    }
+
+    #[test]
+    fn result_cache_uses_normalized_lru_eviction() {
+        let mut state = SearchState::default();
+        let snapshot = SearchCacheSnapshot {
+            state: ResultState::Empty,
+            groups: Groups::default(),
+            warning: None,
+        };
+        for index in 0..SEARCH_RESULT_CACHE_LIMIT {
+            state.cache_insert(
+                SearchCacheKey {
+                    source: Source::SoundCloud,
+                    result_type: ResultType::Tracks,
+                    query: normalize_cache_query(&format!(" Query {index} ")),
+                },
+                snapshot.clone(),
+            );
+        }
+        let first = SearchCacheKey {
+            source: Source::SoundCloud,
+            result_type: ResultType::Tracks,
+            query: "query 0".into(),
+        };
+        assert!(state.cache_get(&first).is_some());
+
+        state.cache_insert(
+            SearchCacheKey {
+                source: Source::SoundCloud,
+                result_type: ResultType::Tracks,
+                query: "newest".into(),
+            },
+            snapshot,
+        );
+
+        assert_eq!(state.result_cache.len(), SEARCH_RESULT_CACHE_LIMIT);
+        assert!(state.result_cache.contains_key(&first));
+        assert!(!state.result_cache.contains_key(&SearchCacheKey {
+            source: Source::SoundCloud,
+            result_type: ResultType::Tracks,
+            query: "query 1".into(),
+        }));
+        assert_eq!(normalize_cache_query("  MiXeD Case\t"), "mixed case");
     }
 
     #[test]

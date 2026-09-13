@@ -80,7 +80,16 @@ pub(super) fn resolve(directory: &Path, playlist_id: &str, reference: &str) -> O
 
 pub(crate) fn resolve_current(playlist_id: &str, reference: &str) -> Option<PathBuf> {
     let directory = crate::app::paths::config_dir()?.join("local_library");
-    resolve(&directory, playlist_id, reference)
+    display_path(&directory, playlist_id, reference)
+}
+
+// Card rendering must not synchronously canonicalize or stat the filesystem.
+// The reference is already constrained to a local cover owned by this
+// playlist, so rendering can use its deterministic path directly. File reads
+// and image fallback remain handled by GPUI's image loader.
+fn display_path(directory: &Path, playlist_id: &str, reference: &str) -> Option<PathBuf> {
+    let reference = normalize_reference(playlist_id, reference.to_owned());
+    (!reference.is_empty()).then(|| directory.join(reference))
 }
 
 pub(super) fn cleanup(directory: &Path, playlist_id: &str, reference: &str) {
@@ -175,5 +184,15 @@ mod tests {
             normalize_reference("abc", "covers/abc-0123456789abcdef01234567.jpg".into()),
             "covers/abc-0123456789abcdef01234567.jpg"
         );
+    }
+
+    #[test]
+    fn display_path_uses_validated_reference_without_filesystem_resolution() {
+        let directory = Path::new("missing-local-library");
+        assert_eq!(
+            display_path(directory, "abc", "covers/abc-0123456789abcdef01234567.jpg"),
+            Some(directory.join("covers/abc-0123456789abcdef01234567.jpg"))
+        );
+        assert_eq!(display_path(directory, "abc", "../cover.jpg"), None);
     }
 }

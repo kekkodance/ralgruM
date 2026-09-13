@@ -90,10 +90,6 @@ impl FavoriteState {
         Some(self.generation)
     }
 
-    pub(crate) fn catalog_loading(&self, provider: Provider, kind: FavoriteKind) -> bool {
-        self.loading_catalogs.contains(&(provider, kind))
-    }
-
     pub(crate) fn finish_catalog_load(
         &mut self,
         provider: Provider,

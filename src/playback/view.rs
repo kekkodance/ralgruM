@@ -1137,7 +1137,7 @@ impl PlaybackModel {
         let resolve_track = track.clone();
         let task = self.runtime.spawn(async move {
             let audio = resolver
-                .resolve(&resolve_track, arl, soundcloud, murglar, cancellation, None)
+                .resolve_background(&resolve_track, arl, soundcloud, murglar, cancellation)
                 .await?;
             let file_size = std::fs::metadata(&audio.path).ok().map(|m| m.len());
             let info = ResolvedTrackInfo {

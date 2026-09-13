@@ -5,7 +5,7 @@ use gpui::{
     ListState, ScrollHandle, Window, point, px,
 };
 use gpui_component::input::{InputEvent, InputState};
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, task::AbortHandle};
 
 use crate::{
     browser_scroll::BrowserScrollState,
@@ -85,6 +85,47 @@ pub(crate) struct SearchView {
     album_info_prefetch: AlbumInfoPrefetch,
     suggestions: SuggestionState,
     pub(super) discover: DiscoverState,
+    search_request: Option<ActiveSearchRequest>,
+    suggestion_request: Option<ActiveRequest>,
+    discover_requests: HashMap<Provider, ActiveRequest>,
+    discover_channel_request: Option<ActiveRequest>,
+    smart_mix_enrichment_request: Option<ActiveRequest>,
+    smart_mix_enrichment_started_generation: Option<u64>,
+    smart_mix_enrichment_was_cancelled: bool,
+    next_request_id: u64,
+}
+
+struct ActiveRequest {
+    generation: u64,
+    id: u64,
+    abort: AbortHandle,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SearchRequestKey {
+    source: Source,
+    result_type: ResultType,
+    query: String,
+}
+
+struct ActiveSearchRequest {
+    generation: u64,
+    id: u64,
+    aborts: Vec<AbortHandle>,
+    pending_batches: usize,
+    key: SearchRequestKey,
+}
+
+impl Drop for SearchView {
+    fn drop(&mut self) {
+        self.cancel_search_request();
+        self.cancel_suggestion_request();
+        for request in self.discover_requests.drain().map(|(_, request)| request) {
+            request.abort.abort();
+        }
+        self.cancel_discover_channel_request();
+        self.cancel_smart_mix_enrichment_request();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -314,6 +355,8 @@ impl SearchView {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(""));
         cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
             InputEvent::Change => {
+                this.cancel_discover_requests();
+                this.cancel_discover_channel_request();
                 this.discover.close_channel();
                 this.suggestions.set_focused(true);
                 this.refresh_suggestions(cx);
@@ -329,6 +372,7 @@ impl SearchView {
                 this.input.update(cx, |input, cx| {
                     input.set_placeholder("", window, cx);
                 });
+                this.cancel_suggestion_request();
                 this.suggestions.set_focused(false);
                 cx.notify();
             }
@@ -412,6 +456,14 @@ impl SearchView {
             album_info_prefetch: AlbumInfoPrefetch::default(),
             suggestions,
             discover: DiscoverState::new(account_scope.clone()),
+            search_request: None,
+            suggestion_request: None,
+            discover_requests: HashMap::new(),
+            discover_channel_request: None,
+            smart_mix_enrichment_request: None,
+            smart_mix_enrichment_started_generation: None,
+            smart_mix_enrichment_was_cancelled: false,
+            next_request_id: 0,
         }
     }
 
@@ -825,7 +877,125 @@ impl SearchView {
     pub(crate) fn set_search_active(&mut self, active: bool) {
         self.search_active = active;
         if !active {
+            self.cancel_suggestion_request();
             self.suggestions.set_focused(false);
+        }
+    }
+
+    fn cancel_search_request(&mut self) {
+        if let Some(request) = self.search_request.take() {
+            for abort in request.aborts {
+                abort.abort();
+            }
+        }
+    }
+
+    fn next_request_id(&mut self) -> u64 {
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        self.next_request_id
+    }
+
+    fn search_request_is_active(
+        &self,
+        source: Source,
+        result_type: ResultType,
+        query: &str,
+    ) -> bool {
+        self.search_request.as_ref().is_some_and(|request| {
+            request.key
+                == SearchRequestKey {
+                    source,
+                    result_type,
+                    query: query.trim().to_owned(),
+                }
+        })
+    }
+
+    fn finish_search_request_batch(&mut self, generation: u64, id: u64) -> Option<bool> {
+        let request = self
+            .search_request
+            .as_mut()
+            .filter(|request| request.generation == generation && request.id == id)?;
+        request.pending_batches = request.pending_batches.saturating_sub(1);
+        let final_batch = request.pending_batches == 0;
+        if final_batch {
+            self.search_request = None;
+        }
+        Some(final_batch)
+    }
+
+    fn cancel_suggestion_request(&mut self) {
+        if let Some(request) = self.suggestion_request.take() {
+            request.abort.abort();
+        }
+    }
+
+    fn clear_suggestion_request(&mut self, generation: u64, id: u64) {
+        if self
+            .suggestion_request
+            .as_ref()
+            .is_some_and(|request| request.generation == generation && request.id == id)
+        {
+            self.suggestion_request = None;
+        }
+    }
+
+    fn cancel_discover_provider_request(&mut self, provider: Provider) {
+        if let Some(request) = self.discover_requests.remove(&provider) {
+            request.abort.abort();
+        }
+        self.discover.cancel_loading(provider);
+    }
+
+    fn clear_discover_provider_request(&mut self, provider: Provider, generation: u64, id: u64) {
+        if self
+            .discover_requests
+            .get(&provider)
+            .is_some_and(|request| request.generation == generation && request.id == id)
+        {
+            self.discover_requests.remove(&provider);
+        }
+    }
+
+    fn cancel_discover_requests(&mut self) {
+        for request in self.discover_requests.drain().map(|(_, request)| request) {
+            request.abort.abort();
+        }
+        self.discover.cancel_loading(Provider::Deezer);
+        self.discover.cancel_loading(Provider::SoundCloud);
+        self.cancel_smart_mix_enrichment_request();
+    }
+
+    fn cancel_discover_channel_request(&mut self) {
+        if let Some(request) = self.discover_channel_request.take() {
+            request.abort.abort();
+        }
+    }
+
+    fn clear_discover_channel_request(&mut self, generation: u64, id: u64) {
+        if self
+            .discover_channel_request
+            .as_ref()
+            .is_some_and(|request| request.generation == generation && request.id == id)
+        {
+            self.discover_channel_request = None;
+        }
+    }
+
+    fn cancel_smart_mix_enrichment_request(&mut self) {
+        if let Some(request) = self.smart_mix_enrichment_request.take() {
+            request.abort.abort();
+            self.smart_mix_enrichment_was_cancelled = true;
+        }
+    }
+
+    fn clear_smart_mix_enrichment_request(&mut self, generation: u64, id: u64) {
+        if self
+            .smart_mix_enrichment_request
+            .as_ref()
+            .is_some_and(|request| request.generation == generation && request.id == id)
+        {
+            self.smart_mix_enrichment_request = None;
         }
     }
 
@@ -857,6 +1027,7 @@ impl SearchView {
     }
 
     pub(crate) fn dismiss_suggestions(&mut self, cx: &mut Context<Self>) {
+        self.cancel_suggestion_request();
         self.suggestions.set_focused(false);
         cx.notify();
     }
@@ -872,6 +1043,8 @@ impl SearchView {
     }
 
     pub(crate) fn clear_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_discover_requests();
+        self.cancel_discover_channel_request();
         self.discover.close_channel();
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -910,6 +1083,9 @@ impl SearchView {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
+        if !enabled {
+            self.cancel_suggestion_request();
+        }
         if self.suggestions.set_enabled(enabled) && enabled && self.suggestions.is_focused() {
             self.refresh_suggestions(cx);
         } else {
@@ -925,7 +1101,9 @@ impl SearchView {
         history: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        self.suggestions.replace_history(history);
+        if self.suggestions.replace_history(history) {
+            self.cancel_suggestion_request();
+        }
         self.set_soundcloud_suggestions_enabled(suggestions_enabled, cx);
         if self.source() != source {
             self.select_source(source, cx);
@@ -940,6 +1118,7 @@ impl SearchView {
     }
 
     fn replace_query(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_suggestion_request();
         self.input
             .update(cx, |input, cx| input.set_value(query, window, cx));
         self.suggestions.invalidate_request();
@@ -954,6 +1133,17 @@ impl SearchView {
 
     fn refresh_suggestions(&mut self, cx: &mut Context<Self>) {
         let query = self.input.read(cx).value().trim().to_owned();
+        if !query.is_empty()
+            && self.suggestions.enabled()
+            && self.suggestions.is_focused()
+            && self
+                .suggestion_request
+                .as_ref()
+                .is_some_and(|_| self.suggestions.request_matches(&query))
+        {
+            return;
+        }
+        self.cancel_suggestion_request();
         let generation = self.suggestions.begin_request(&query);
         cx.notify();
         if query.is_empty() || !self.suggestions.enabled() || !self.suggestions.is_focused() {
@@ -967,9 +1157,16 @@ impl SearchView {
             tokio::time::sleep(SUGGESTION_DEBOUNCE).await;
             client.soundcloud_suggestions(&task_query).await
         });
+        let request_id = self.next_request_id();
+        self.suggestion_request = Some(ActiveRequest {
+            generation,
+            id: request_id,
+            abort: task.abort_handle(),
+        });
         cx.spawn(async move |this, cx| {
             let remote = task.await.ok().and_then(Result::ok).unwrap_or_default();
             this.update(cx, |this, cx| {
+                this.clear_suggestion_request(generation, request_id);
                 if this
                     .suggestions
                     .complete_request(generation, &query, remote)
@@ -984,6 +1181,16 @@ impl SearchView {
 
     pub(crate) fn account_scope_changed(&mut self, scope: String, cx: &mut Context<Self>) {
         if self.account_scope != scope {
+            self.cancel_search_request();
+            self.cancel_suggestion_request();
+            if let Ok(client) = &self.client {
+                client.clear_deezer_sessions();
+            }
+            self.suggestions.invalidate_request();
+            self.cancel_discover_requests();
+            self.cancel_discover_channel_request();
+            self.smart_mix_enrichment_started_generation = None;
+            self.smart_mix_enrichment_was_cancelled = false;
             self.clear_track_list_states();
             self.clear_card_grid_states();
             self.clear_discover_feed_states();
@@ -1013,6 +1220,7 @@ impl SearchView {
 
     pub(super) fn ensure_discover(&mut self, cx: &mut Context<Self>) {
         if !self.should_show_discover(cx) {
+            self.cancel_discover_requests();
             return;
         }
         let (deezer_arl, soundcloud_token) = self.search_credentials(cx);
@@ -1022,6 +1230,7 @@ impl SearchView {
                 deezer_arl.is_some(),
                 soundcloud_token.is_some(),
             ) {
+                self.cancel_discover_provider_request(*provider);
                 self.discover.mark_account_required(*provider);
                 continue;
             }
@@ -1040,11 +1249,21 @@ impl SearchView {
                     Err(error) => Err(error.message),
                 }
             });
+            let request_id = self.next_request_id();
+            self.discover_requests.insert(
+                provider,
+                ActiveRequest {
+                    generation,
+                    id: request_id,
+                    abort: task.abort_handle(),
+                },
+            );
             cx.spawn(async move |this, cx| {
                 let result = task
                     .await
                     .unwrap_or_else(|_| Err("Discover request failed".to_owned()));
                 this.update(cx, |this, cx| {
+                    this.clear_discover_provider_request(provider, generation, request_id);
                     let accepted =
                         this.discover
                             .complete(provider, generation, &account_scope, result);
@@ -1064,6 +1283,19 @@ impl SearchView {
             })
             .detach();
         }
+        if self.state.source.providers().contains(&Provider::Deezer)
+            && let Some(generation) = self.discover.ready_generation(Provider::Deezer)
+            && self.smart_mix_enrichment_request.is_none()
+            && (self.smart_mix_enrichment_started_generation != Some(generation)
+                || self.smart_mix_enrichment_was_cancelled)
+        {
+            self.start_smart_mix_title_enrichment(
+                generation,
+                self.account_scope.clone(),
+                deezer_arl,
+                cx,
+            );
+        }
     }
 
     fn start_smart_mix_title_enrichment(
@@ -1080,15 +1312,26 @@ impl SearchView {
         if ids.is_empty() {
             return;
         }
+        self.cancel_smart_mix_enrichment_request();
+        self.smart_mix_enrichment_started_generation = Some(generation);
+        self.smart_mix_enrichment_was_cancelled = false;
         let Ok(client) = self.client.clone() else {
             return;
         };
         let task = self
             .runtime
             .spawn(async move { discover::enrich_smart_mix_titles(&client, arl, ids).await });
+        let request_id = self.next_request_id();
+        self.smart_mix_enrichment_request = Some(ActiveRequest {
+            generation,
+            id: request_id,
+            abort: task.abort_handle(),
+        });
         cx.spawn(async move |this, cx| {
             let titles = task.await.unwrap_or_default();
             this.update(cx, |this, cx| {
+                this.clear_smart_mix_enrichment_request(generation, request_id);
+                this.smart_mix_enrichment_was_cancelled = false;
                 if this.discover.apply_enriched_smart_mix_titles(
                     generation,
                     &account_scope,
@@ -1191,6 +1434,17 @@ impl SearchView {
     }
 
     pub(crate) fn select_source(&mut self, source: Source, cx: &mut Context<Self>) {
+        let query = self.input.read(cx).value().to_string();
+        if self.search_request_is_active(source, self.state.result_type, &query) {
+            self.cancel_suggestion_request();
+            self.suggestions.set_focused(false);
+            cx.notify();
+            return;
+        }
+        self.cancel_search_request();
+        self.cancel_suggestion_request();
+        self.cancel_discover_requests();
+        self.cancel_discover_channel_request();
         self.discover.close_channel();
         self.clear_track_list_states();
         self.result_scroll_offsets.clear();
@@ -1198,7 +1452,6 @@ impl SearchView {
         self.pending_forward_detail_scroll_reset = None;
         self.reset_detail_scroll();
         self.detail.reset();
-        let query = self.input.read(cx).value().to_string();
         self.search_query = query.trim().to_owned();
         let (deezer_arl, soundcloud_token) = self.search_credentials(cx);
         let job = self
@@ -1208,6 +1461,17 @@ impl SearchView {
     }
 
     pub(super) fn select_type(&mut self, result_type: ResultType, cx: &mut Context<Self>) {
+        let query = self.input.read(cx).value().to_string();
+        if self.search_request_is_active(self.state.source, result_type, &query) {
+            self.cancel_suggestion_request();
+            self.suggestions.set_focused(false);
+            cx.notify();
+            return;
+        }
+        self.cancel_search_request();
+        self.cancel_suggestion_request();
+        self.cancel_discover_requests();
+        self.cancel_discover_channel_request();
         self.discover.close_channel();
         // Tab switches keep per-tab view state. Track lists and card grids
         // are keyed by source, type, query, and content, so reuse them
@@ -1220,7 +1484,6 @@ impl SearchView {
         // Re-presenting cached results must not replay the entrance
         // animation. Fresh fetches re-arm it when they complete.
         self.results_entrance_key = None;
-        let query = self.input.read(cx).value().to_string();
         self.search_query = query.trim().to_owned();
         let (deezer_arl, soundcloud_token) = self.search_credentials(cx);
         let job = self
@@ -1241,6 +1504,17 @@ impl SearchView {
     }
 
     pub(crate) fn submit(&mut self, cx: &mut Context<Self>) {
+        let query = self.input.read(cx).value().to_string();
+        if self.search_request_is_active(self.state.source, ResultType::All, &query) {
+            self.cancel_suggestion_request();
+            self.suggestions.set_focused(false);
+            cx.notify();
+            return;
+        }
+        self.cancel_search_request();
+        self.cancel_suggestion_request();
+        self.cancel_discover_requests();
+        self.cancel_discover_channel_request();
         self.discover.close_channel();
         self.clear_track_list_states();
         self.clear_card_grid_states();
@@ -1249,7 +1523,6 @@ impl SearchView {
         self.pending_forward_detail_scroll_reset = None;
         self.reset_detail_scroll();
         self.detail.reset();
-        let query = self.input.read(cx).value().to_string();
         self.search_query = query.trim().to_owned();
         if self.suggestions.record(&query) {
             self.persist_search_history(cx);
@@ -1444,6 +1717,8 @@ impl SearchView {
         let Some(slug) = discover::valid_channel_slug(&slug) else {
             return;
         };
+        self.cancel_discover_requests();
+        self.cancel_discover_channel_request();
         self.pending_forward_detail_scroll_reset = None;
         self.detail.reset();
         let title = if card.title.trim().is_empty() {
@@ -1470,6 +1745,7 @@ impl SearchView {
     }
 
     pub(crate) fn close_discover_channel(&mut self, cx: &mut Context<Self>) {
+        self.cancel_discover_channel_request();
         if self.discover.close_channel() {
             cx.notify();
         }
@@ -1513,15 +1789,23 @@ impl SearchView {
             );
             return;
         };
+        self.cancel_discover_channel_request();
         let request_slug = slug.clone();
         let task = self
             .runtime
             .spawn(async move { discover::load_channel(&client, arl, &request_slug).await });
+        let request_id = self.next_request_id();
+        self.discover_channel_request = Some(ActiveRequest {
+            generation,
+            id: request_id,
+            abort: task.abort_handle(),
+        });
         cx.spawn(async move |this, cx| {
             let result = task
                 .await
                 .unwrap_or_else(|_| Err("Deezer channel request failed".into()));
             this.update(cx, |this, cx| {
+                this.clear_discover_channel_request(generation, request_id);
                 if this
                     .discover
                     .complete_channel(generation, &account_scope, &slug, result)
@@ -1830,74 +2114,125 @@ impl SearchView {
             return;
         };
         let generation = job.generation;
+        let request_key = SearchRequestKey {
+            source: self.state.source,
+            result_type: self.state.result_type,
+            query: self.search_query.clone(),
+        };
         let account_scope = self.account_scope.clone();
         let account_required = all_search_missing_accounts(
             self.state.source,
             deezer_arl.is_some(),
             soundcloud_token.is_some(),
         );
-        let task = self.runtime.spawn(async move {
-            client
-                .execute(job.requests, deezer_arl, soundcloud_token)
-                .await
-        });
-        cx.spawn(async move |this, cx| {
-            let results = task.await.unwrap_or_default();
-            for result in &results {
-                if let Err(error) = &result.data {
-                    eprintln!(
-                        "Search request failed: {} {}: {}",
-                        result.request.provider.label(),
-                        result.request.category.label(),
-                        error.message
-                    );
-                }
+        let request_id = self.next_request_id();
+        let mut tasks = Vec::new();
+        for provider in self.state.source.providers() {
+            let requests = job
+                .requests
+                .iter()
+                .filter(|request| request.provider == *provider)
+                .cloned()
+                .collect::<Vec<_>>();
+            if requests.is_empty() {
+                continue;
             }
-            this.update(cx, |this, cx| {
-                if this.account_scope == account_scope
-                    && this.state.complete_with_missing_accounts(
-                        generation,
-                        results,
-                        &account_required,
-                    )
-                {
-                    if !account_required.is_empty() {
-                        let (title, description) = account_required_toast_copy(&account_required);
-                        crate::toast::push_global(
-                            cx,
-                            crate::toast::ToastKind::Warning,
-                            title,
-                            Some(description.into()),
+            let task_client = client.clone();
+            let task_arl = deezer_arl.clone();
+            let task_token = soundcloud_token.clone();
+            tasks.push(
+                self.runtime.spawn(async move {
+                    task_client.execute(requests, task_arl, task_token).await
+                }),
+            );
+        }
+        if tasks.is_empty() {
+            self.state.complete_incremental_with_missing_accounts(
+                generation,
+                Vec::new(),
+                &account_required,
+                true,
+            );
+            cx.notify();
+            return;
+        }
+        self.search_request = Some(ActiveSearchRequest {
+            generation,
+            id: request_id,
+            aborts: tasks
+                .iter()
+                .map(tokio::task::JoinHandle::abort_handle)
+                .collect(),
+            pending_batches: tasks.len(),
+            key: request_key,
+        });
+        for task in tasks {
+            let account_scope = account_scope.clone();
+            let account_required = account_required.clone();
+            cx.spawn(async move |this, cx| {
+                let results = task.await.unwrap_or_default();
+                for result in &results {
+                    if let Err(error) = &result.data {
+                        eprintln!(
+                            "Search request failed: {} {}: {}",
+                            result.request.provider.label(),
+                            result.request.category.label(),
+                            error.message
                         );
                     }
-                    for track in &this.state.groups.tracks {
-                        if let Some(favorite) = track.favorite {
-                            this.favorites.update(cx, |favorites, _| {
-                                favorites.set_known(
-                                    FavoriteKey::for_provider(
-                                        track.source,
-                                        FavoriteKind::Track,
-                                        track.id.clone(),
-                                    ),
-                                    favorite,
-                                )
-                            });
-                        }
-                    }
-                    // Fresh results earn one entrance animation. Cached tab
-                    // switches restore synchronously without completing, so
-                    // they keep the gate closed and never flash.
-                    if matches!(this.state.state, ResultState::Results) {
-                        let identity =
-                            search_results_content_identity(this.state.source, this.search_query());
-                        this.results_entrance_key = Some(identity);
-                    }
-                    cx.notify();
                 }
+                this.update(cx, |this, cx| {
+                    let Some(final_batch) =
+                        this.finish_search_request_batch(generation, request_id)
+                    else {
+                        return;
+                    };
+                    if this.account_scope == account_scope
+                        && this.state.complete_incremental_with_missing_accounts(
+                            generation,
+                            results,
+                            &account_required,
+                            final_batch,
+                        )
+                    {
+                        if final_batch && !account_required.is_empty() {
+                            let (title, description) =
+                                account_required_toast_copy(&account_required);
+                            crate::toast::push_global(
+                                cx,
+                                crate::toast::ToastKind::Warning,
+                                title,
+                                Some(description.into()),
+                            );
+                        }
+                        for track in &this.state.groups.tracks {
+                            if let Some(favorite) = track.favorite {
+                                this.favorites.update(cx, |favorites, _| {
+                                    favorites.set_known(
+                                        FavoriteKey::for_provider(
+                                            track.source,
+                                            FavoriteKind::Track,
+                                            track.id.clone(),
+                                        ),
+                                        favorite,
+                                    )
+                                });
+                            }
+                        }
+                        if matches!(this.state.state, ResultState::Results) {
+                            let identity = search_results_content_identity(
+                                this.state.source,
+                                this.search_query(),
+                            );
+                            this.results_entrance_key = Some(identity);
+                        }
+                        cx.notify();
+                    }
+                })
+                .ok();
             })
-            .ok();
-        })
-        .detach();
+            .detach();
+        }
     }
 
     pub(crate) fn open_card(&mut self, card: Card, cx: &mut Context<Self>) {
@@ -1918,6 +2253,7 @@ impl SearchView {
             preserve_discover_channel,
             self.discover_channel_open(),
         ) {
+            self.cancel_discover_channel_request();
             self.discover.close_channel();
         }
         self.library
@@ -1963,6 +2299,7 @@ impl SearchView {
     /// navigation also makes the toolbar back action return to the caller
     /// instead of exposing an unrelated stale detail stack.
     pub(crate) fn open_external_card(&mut self, card: Card, cx: &mut Context<Self>) {
+        self.cancel_discover_channel_request();
         self.discover.close_channel();
         self.pending_forward_detail_scroll_reset = None;
         self.reset_detail_scroll();
@@ -3064,14 +3401,14 @@ mod account_required_tests {
                 |(run, _)| run,
             );
         let complete = run
-            .find("this.state.complete_with_missing_accounts(")
+            .find("this.state.complete_incremental_with_missing_accounts(")
             .expect("search completion guard");
         let toast = run
             .find("crate::toast::push_global(")
             .expect("account-required toast dispatch");
         assert!(complete < toast);
         assert!(run.contains(
-            "this.account_scope == account_scope\n                    && this.state.complete_with_missing_accounts"
+            "this.account_scope == account_scope\n                        && this.state.complete_incremental_with_missing_accounts"
         ));
 
         let select_type = include_str!("view.rs")

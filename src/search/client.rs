@@ -1,8 +1,11 @@
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use reqwest::{Client, Response, Url, header};
 use serde_json::{Value, json};
-use std::collections::HashSet;
 
 use super::{
     credential::{DeezerArl, SoundCloudToken},
@@ -12,6 +15,7 @@ use super::{
 pub(crate) const SOUNDCLOUD_CLIENT_ID: &str = "Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
 const DEEZER_USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
+const DEEZER_SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 
 const fn deezer_spec(category: ResultType) -> Option<(&'static str, u32, u32)> {
     match category {
@@ -26,6 +30,18 @@ const fn deezer_spec(category: ResultType) -> Option<(&'static str, u32, u32)> {
 #[derive(Clone)]
 pub(crate) struct SearchClient {
     client: Client,
+    deezer_sessions: Arc<DeezerSessionCache>,
+}
+
+#[derive(Default)]
+struct DeezerSessionCache {
+    slots: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<CachedDeezerSession>>>>>,
+}
+
+#[derive(Clone)]
+struct CachedDeezerSession {
+    session: DeezerSession,
+    refreshed_at: Instant,
 }
 
 impl SearchClient {
@@ -37,7 +53,10 @@ impl SearchClient {
             .pool_max_idle_per_host(4)
             .user_agent(USER_AGENT)
             .build()
-            .map(|client| Self { client })
+            .map(|client| Self {
+                client,
+                deezer_sessions: Arc::new(DeezerSessionCache::default()),
+            })
             .map_err(|_| ProviderError::new("Search client could not be created"))
     }
 
@@ -114,6 +133,42 @@ impl SearchClient {
     }
 
     pub(super) async fn deezer_session(
+        &self,
+        arl: DeezerArl,
+    ) -> Result<DeezerSession, ProviderError> {
+        let key = arl.expose().to_owned();
+        let slot = self
+            .deezer_sessions
+            .slots
+            .lock()
+            .expect("Deezer session cache lock poisoned")
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
+            .clone();
+        let mut cached = slot.lock().await;
+        if let Some(entry) = cached
+            .as_ref()
+            .filter(|entry| entry.refreshed_at.elapsed() < DEEZER_SESSION_CACHE_TTL)
+        {
+            return Ok(entry.session.clone());
+        }
+        let session = self.deezer_session_uncached(arl).await?;
+        *cached = Some(CachedDeezerSession {
+            session: session.clone(),
+            refreshed_at: Instant::now(),
+        });
+        Ok(session)
+    }
+
+    pub(crate) fn clear_deezer_sessions(&self) {
+        self.deezer_sessions
+            .slots
+            .lock()
+            .expect("Deezer session cache lock poisoned")
+            .clear();
+    }
+
+    async fn deezer_session_uncached(
         &self,
         arl: DeezerArl,
     ) -> Result<DeezerSession, ProviderError> {

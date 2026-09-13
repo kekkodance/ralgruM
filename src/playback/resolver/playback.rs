@@ -1,5 +1,9 @@
 use super::*;
 
+use futures::FutureExt;
+
+use crate::playback::resolve_limiter::ResolvePriority;
+
 impl StreamResolver {
     /// Resolve a source for playback, reusing the short-lived remote URL
     /// cache for playback and seamless prefetches. Downloads and metadata
@@ -12,6 +16,7 @@ impl StreamResolver {
         soundcloud_token: Option<SoundCloudToken>,
         backend: Option<MediaCredentials>,
         cancellation: CancellationToken,
+        priority: ResolvePriority,
         refresh: bool,
         expected_cache_epoch: u64,
     ) -> Result<ResolvedSource, String> {
@@ -65,33 +70,117 @@ impl StreamResolver {
             }
         }
 
-        // Mirror the original app's shared resolve reservation and provider
-        // spacing only when a fresh provider resolve is needed. A valid cache
-        // hit must not spend resolve budget or touch the provider.
-        self.limiter.reserve(&cancellation).await?;
-        let source = self
-            .resolve_source(
-                track,
-                deezer_arl,
-                soundcloud_token,
-                backend,
-                cancellation.clone(),
-                false,
-            )
-            .await?;
-        if let Some(key) =
-            Self::resolved_source_cache_key_for_source(track, soundcloud_token_available, &source)
-        {
-            self.insert_resolved_source_if_current(
-                expected_cache_epoch,
-                &cancellation,
-                key,
-                source.clone(),
-            );
-        }
-        Ok(source)
+        let Some(key) = key else {
+            // Empty identifiers cannot be placed in a bounded keyed flight.
+            // Keep the existing direct behavior for these malformed tracks.
+            self.limiter.reserve(priority, &cancellation).await?;
+            return self
+                .resolve_source(
+                    track,
+                    deezer_arl,
+                    soundcloud_token,
+                    backend,
+                    cancellation,
+                    false,
+                )
+                .await;
+        };
+
+        self.resolve_playback_flight(
+            key,
+            track.clone(),
+            deezer_arl,
+            soundcloud_token,
+            backend,
+            refresh,
+            cancellation,
+            expected_cache_epoch,
+            priority,
+        )
+        .await
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_playback_flight(
+        &self,
+        key: String,
+        track: PlaybackTrack,
+        deezer_arl: Option<DeezerArl>,
+        soundcloud_token: Option<SoundCloudToken>,
+        backend: Option<MediaCredentials>,
+        refresh: bool,
+        cancellation: CancellationToken,
+        expected_cache_epoch: u64,
+        priority: ResolvePriority,
+    ) -> Result<ResolvedSource, String> {
+        let (flight, starts_work) = self.source_resolve_flights.begin(key.clone());
+        if starts_work {
+            let resolver = self.clone();
+            let flights = self.source_resolve_flights.clone();
+            let worker_flight = flight.clone();
+            tokio::spawn(async move {
+                // The worker deliberately owns its cancellation token. The
+                // caller that happened to start a flight may skip away while
+                // another caller still needs this same source.
+                let worker_cancellation = CancellationToken::new();
+                let result = std::panic::AssertUnwindSafe(async {
+                    resolver
+                        .limiter
+                        .reserve(priority, &worker_cancellation)
+                        .await?;
+                    if resolver.resolved_source_cache.epoch() != expected_cache_epoch {
+                        return Err("Playback request cancelled".into());
+                    }
+                    // A different flight can complete while this one waits
+                    // for the provider budget. Recheck before any network IO.
+                    if !refresh
+                        && let Some(source) = resolver.resolved_source_cache.get(&key)
+                        && (!backend.is_some() || source.uses_backend())
+                    {
+                        return Ok(source);
+                    }
+                    let source = resolver
+                        .resolve_source(
+                            &track,
+                            deezer_arl,
+                            soundcloud_token.clone(),
+                            backend,
+                            worker_cancellation,
+                            false,
+                        )
+                        .await?;
+                    if let Some(cache_key) = StreamResolver::resolved_source_cache_key_for_source(
+                        &track,
+                        soundcloud_token.is_some(),
+                        &source,
+                    ) {
+                        resolver.resolved_source_cache.insert_if_epoch(
+                            expected_cache_epoch,
+                            cache_key,
+                            source.clone(),
+                        );
+                    }
+                    Ok(source)
+                })
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| Err("The playback source worker stopped unexpectedly".into()));
+                flights.finish(&key, &worker_flight, result);
+            });
+        }
+
+        let result = self
+            .source_resolve_flights
+            .wait(&flight, &cancellation)
+            .await;
+        if cancellation.is_cancelled() || self.resolved_source_cache.epoch() != expected_cache_epoch
+        {
+            return Err("Playback request cancelled".into());
+        }
+        result
+    }
+
+    #[allow(dead_code)]
     pub(crate) async fn resolve(
         &self,
         track: &PlaybackTrack,
@@ -100,6 +189,49 @@ impl StreamResolver {
         murglar: Option<MediaCredentials>,
         cancellation: CancellationToken,
         progress: Option<ProgressCallback>,
+    ) -> Result<ResolvedAudio, String> {
+        self.resolve_with_priority(
+            track,
+            deezer_arl,
+            soundcloud_token,
+            murglar,
+            cancellation,
+            progress,
+            ResolvePriority::Interactive,
+        )
+        .await
+    }
+
+    pub(crate) async fn resolve_background(
+        &self,
+        track: &PlaybackTrack,
+        deezer_arl: Option<DeezerArl>,
+        soundcloud_token: Option<SoundCloudToken>,
+        murglar: Option<MediaCredentials>,
+        cancellation: CancellationToken,
+    ) -> Result<ResolvedAudio, String> {
+        self.resolve_with_priority(
+            track,
+            deezer_arl,
+            soundcloud_token,
+            murglar,
+            cancellation,
+            None,
+            ResolvePriority::Background,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_with_priority(
+        &self,
+        track: &PlaybackTrack,
+        deezer_arl: Option<DeezerArl>,
+        soundcloud_token: Option<SoundCloudToken>,
+        murglar: Option<MediaCredentials>,
+        cancellation: CancellationToken,
+        progress: Option<ProgressCallback>,
+        priority: ResolvePriority,
     ) -> Result<ResolvedAudio, String> {
         if cancellation.is_cancelled() {
             return Err("Playback request cancelled".into());
@@ -118,6 +250,7 @@ impl StreamResolver {
                 soundcloud_token.clone(),
                 murglar.clone(),
                 cancellation.clone(),
+                priority,
                 false,
                 source_cache_epoch,
             )
@@ -177,6 +310,7 @@ impl StreamResolver {
                             soundcloud_token.clone(),
                             murglar.clone(),
                             cancellation.clone(),
+                            priority,
                             true,
                             source_cache_epoch,
                         )
@@ -294,6 +428,7 @@ impl StreamResolver {
                 soundcloud_token.clone(),
                 murglar.clone(),
                 cancellation.clone(),
+                ResolvePriority::Interactive,
                 false,
                 source_cache_epoch,
             )
@@ -705,6 +840,7 @@ impl StreamResolver {
                             soundcloud_token.clone(),
                             murglar.clone(),
                             cancellation.clone(),
+                            ResolvePriority::Interactive,
                             true,
                             source_cache_epoch,
                         )
@@ -1178,6 +1314,7 @@ impl StreamResolver {
                 soundcloud_token,
                 murglar,
                 cancellation.clone(),
+                ResolvePriority::Background,
                 false,
                 source_cache_epoch,
             )

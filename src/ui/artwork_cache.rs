@@ -11,8 +11,9 @@ use std::{
 
 use futures::FutureExt;
 use gpui::{
-    App, AppContext, Asset, AssetLogger, Entity, ImageAssetLoader, ImageCache, ImageCacheError,
-    ImageCacheItem, ImageLoadingTask, RenderImage, Resource, Window,
+    App, AppContext, Asset, AssetLogger, Entity, Image, ImageAssetLoader, ImageCache,
+    ImageCacheError, ImageCacheItem, ImageFormat, ImageLoadingTask, RenderImage, Resource,
+    SvgRenderer, Window,
 };
 use reqwest::Client;
 use sha2::{Digest, Sha256};
@@ -114,15 +115,29 @@ impl ArtworkCache {
         window: &mut Window,
         cx: &mut App,
     ) {
-        while self.items.len() > ARTWORK_MEMORY_CACHE_LIMIT {
+        // Loading tasks own the only in-flight request for their URI. Retain
+        // them even while trimming so a cache limit cannot turn one image into
+        // several concurrent downloads.
+        let mut remaining_candidates = self.access_order.len();
+        while self.items.len() > ARTWORK_MEMORY_CACHE_LIMIT && remaining_candidates > 0 {
             let Some(victim) = self.access_order.pop_oldest_except(protected) else {
                 break;
             };
-            if let Some(mut item) = self.items.remove(&victim)
-                && let Some(Ok(image)) = item.get()
-            {
-                cx.drop_image(image, Some(window));
+            let is_loading = self
+                .items
+                .get_mut(&victim)
+                .is_some_and(|item| item.get().is_none());
+            if is_loading {
+                self.access_order.touch(&victim);
+                remaining_candidates -= 1;
+                continue;
             }
+            if let Some(mut item) = self.items.remove(&victim) {
+                if let Some(Ok(image)) = item.get() {
+                    cx.drop_image(image, Some(window));
+                }
+            }
+            remaining_candidates = self.access_order.len();
         }
     }
 
@@ -136,61 +151,47 @@ impl ArtworkCache {
         let cache_path = cache_path(&self.cache_dir, uri);
         let path_resource = Resource::Path(cache_path.clone().into());
         let path_loader = AssetLogger::<ImageAssetLoader>::load(path_resource, cx);
-        let uri_loader = AssetLogger::<ImageAssetLoader>::load(source.clone(), cx);
-
-        let future = if let Some(disk_fingerprint) = disk_cache_candidate(&cache_path) {
-            let fallback_path = cache_path.clone();
-            let repair_runtime = self.runtime.clone();
-            let repair_client = self.client.clone();
-            let repair_cache_dir = self.cache_dir.clone();
-            let repair_url = uri.to_owned();
-            let repair_path = cache_path.clone();
-            async move {
+        let runtime = self.runtime.clone();
+        let client = self.client.clone();
+        let cache_dir = self.cache_dir.clone();
+        let url = uri.to_owned();
+        let probe_path = cache_path.clone();
+        let decode_path = cache_path.clone();
+        let svg_renderer = cx.svg_renderer();
+        let future = async move {
+            let cached = runtime
+                .spawn_blocking(move || disk_cache_candidate(&probe_path))
+                .await
+                .ok()
+                .flatten();
+            if cached.is_some() {
                 match path_loader.await {
-                    Ok(image) => Ok(image),
+                    Ok(image) => return Ok(image),
                     Err(_) => {
-                        remove_if_unchanged(&fallback_path, Some(disk_fingerprint));
-                        let repair = repair_runtime.spawn(async move {
-                            let _ = download_and_persist(
-                                repair_client,
-                                repair_url,
-                                repair_cache_dir,
-                                repair_path,
-                            )
+                        let stale_path = decode_path.clone();
+                        let _ = runtime
+                            .spawn_blocking(move || remove_if_unchanged(&stale_path, cached))
                             .await;
-                        });
-                        drop(repair);
-                        uri_loader.await
                     }
                 }
             }
-            .boxed()
-        } else {
-            let runtime = self.runtime.clone();
-            let client = self.client.clone();
-            let cache_dir = self.cache_dir.clone();
-            let url = uri.to_owned();
-            let fallback_path = cache_path.clone();
+
+            let bytes = download_artwork(client, url.clone())
+                .await
+                .map_err(image_error)?;
+            let image = decode_artwork(runtime.clone(), svg_renderer, bytes.clone()).await?;
+
+            // Persistence is deliberately detached from the render path. The
+            // validated render image is ready now; disk writes and pruning must
+            // not delay the first paint.
+            let persist_runtime = runtime.clone();
             let persistence = runtime.spawn(async move {
-                download_and_persist(client, url, cache_dir, cache_path).await
+                let _ = persist_artwork(persist_runtime, cache_dir, decode_path, bytes).await;
             });
-            async move {
-                let persisted = persistence.await.ok().and_then(Result::ok).is_some();
-                if persisted {
-                    let persisted_fingerprint = cache_fingerprint(&fallback_path);
-                    match path_loader.await {
-                        Ok(image) => Ok(image),
-                        Err(_) => {
-                            remove_if_unchanged(&fallback_path, persisted_fingerprint);
-                            uri_loader.await
-                        }
-                    }
-                } else {
-                    uri_loader.await
-                }
-            }
-            .boxed()
-        };
+            drop(persistence);
+            Ok(image)
+        }
+        .boxed();
         let task = cx.background_executor().spawn(future).shared();
         self.insert_loading(source.clone(), task, window, cx)
     }
@@ -251,6 +252,10 @@ impl<K: Clone + Eq> LruOrder<K> {
     fn clear(&mut self) {
         self.entries.clear();
     }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 fn cache_path(cache_dir: &Path, url: &str) -> PathBuf {
@@ -298,12 +303,7 @@ fn remove_if_unchanged(path: &Path, expected: Option<CacheFingerprint>) {
     }
 }
 
-async fn download_and_persist(
-    client: Client,
-    url: String,
-    cache_dir: PathBuf,
-    cache_path: PathBuf,
-) -> Result<(), String> {
+async fn download_artwork(client: Client, url: String) -> Result<Vec<u8>, String> {
     let response = client
         .get(&url)
         .send()
@@ -327,26 +327,55 @@ async fn download_and_persist(
         }
         bytes.extend_from_slice(&chunk);
     }
-    if !supported_image_bytes(&bytes) {
-        return Err("artwork response is not a supported image".to_owned());
-    }
+    Ok(bytes)
+}
 
+async fn decode_artwork(
+    runtime: Arc<Runtime>,
+    svg_renderer: SvgRenderer,
+    bytes: Vec<u8>,
+) -> Result<Arc<RenderImage>, ImageCacheError> {
+    runtime
+        .spawn_blocking(move || {
+            let format = supported_image_format(&bytes)
+                .ok_or_else(|| image_error("artwork response is not a supported image"))?;
+            Image::from_bytes(format, bytes)
+                .to_image_data(svg_renderer)
+                .map_err(|error| ImageCacheError::Other(Arc::new(error)))
+        })
+        .await
+        .map_err(|_| image_error("artwork image decoder stopped unexpectedly"))?
+}
+
+async fn persist_artwork(
+    runtime: Arc<Runtime>,
+    cache_dir: PathBuf,
+    cache_path: PathBuf,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
     tokio::fs::create_dir_all(&cache_dir)
         .await
         .map_err(|error| error.to_string())?;
     write_atomically(&cache_path, &bytes).await?;
-    prune_cache_dir(&cache_dir, ARTWORK_CACHE_LIMIT_BYTES)?;
+    let prune_dir = cache_dir.clone();
+    runtime
+        .spawn_blocking(move || prune_cache_dir(&prune_dir, ARTWORK_CACHE_LIMIT_BYTES))
+        .await
+        .map_err(|_| "artwork cache pruner stopped unexpectedly".to_owned())??;
     Ok(())
 }
 
-fn supported_image_bytes(bytes: &[u8]) -> bool {
-    let Ok(format) = image::guess_format(bytes) else {
-        return false;
-    };
-    matches!(
-        format,
-        image::ImageFormat::Jpeg | image::ImageFormat::Png | image::ImageFormat::WebP
-    ) && image::load_from_memory(bytes).is_ok()
+fn supported_image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Jpeg => Some(ImageFormat::Jpeg),
+        image::ImageFormat::Png => Some(ImageFormat::Png),
+        image::ImageFormat::WebP => Some(ImageFormat::Webp),
+        _ => None,
+    }
+}
+
+fn image_error(message: impl Into<String>) -> ImageCacheError {
+    std::io::Error::other(message.into()).into()
 }
 
 async fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -566,18 +595,33 @@ mod tests {
     }
 
     #[test]
-    fn supported_image_bytes_requires_complete_configured_raster() {
+    fn supported_image_format_accepts_only_configured_rasters() {
         let mut png = std::io::Cursor::new(Vec::new());
         image::DynamicImage::new_rgba8(1, 1)
             .write_to(&mut png, image::ImageFormat::Png)
             .unwrap();
-        assert!(supported_image_bytes(png.get_ref()));
-        assert!(!supported_image_bytes(&[
-            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
-        ]));
-        assert!(!supported_image_bytes(
-            b"<svg xmlns=\"http://www.w3.org/2000/svg\">"
-        ));
-        assert!(!supported_image_bytes(b"not an image"));
+        assert_eq!(
+            supported_image_format(png.get_ref()),
+            Some(ImageFormat::Png)
+        );
+        assert_eq!(
+            supported_image_format(b"<svg xmlns=\"http://www.w3.org/2000/svg\">"),
+            None
+        );
+        assert_eq!(supported_image_format(b"not an image"), None);
+    }
+
+    #[test]
+    fn incomplete_raster_is_deferred_to_the_final_decoder() {
+        // Format detection rejects unsupported data up front, while the final
+        // GPUI decoder validates complete raster bytes exactly once.
+        assert_eq!(
+            supported_image_format(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+            Some(ImageFormat::Png)
+        );
+        assert_eq!(
+            supported_image_format(b"<svg xmlns=\"http://www.w3.org/2000/svg\">"),
+            None
+        );
     }
 }

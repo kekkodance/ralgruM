@@ -556,6 +556,7 @@ async fn murglar_eligible_playback_reuses_a_cached_direct_fallback() {
             None,
             Some(crate::murglar_backend::test_media_credentials()),
             CancellationToken::new(),
+            crate::playback::resolve_limiter::ResolvePriority::Interactive,
             false,
             epoch,
         )
