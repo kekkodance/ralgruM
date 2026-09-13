@@ -271,10 +271,13 @@ impl LibraryClient {
             .timeout(Duration::from_secs(20))
             .user_agent(USER_AGENT)
             .build()
-            .map(|client| Self {
-                client,
-                search_client: SearchClient::new().map_err(|error| error.message),
-                bootstrap_cache: Arc::new(BootstrapCache::default()),
+            .map(|client| {
+                let search_client = Ok(SearchClient::with_http_client(client.clone()));
+                Self {
+                    client,
+                    search_client,
+                    bootstrap_cache: Arc::new(BootstrapCache::default()),
+                }
             })
             .map_err(|_| "Library client could not be created".into())
     }

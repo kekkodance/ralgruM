@@ -221,11 +221,18 @@ impl ResolveLimiter {
             if self.priority_can_run(priority) {
                 return Ok(queue);
             }
+            // Register before releasing the queue guard, then recheck the
+            // condition. This closes the notification window where the
+            // preferred class could change between the check and the wait.
+            let notified = self.state.priority_changed.notified();
             drop(queue);
+            if self.priority_can_run(priority) {
+                continue;
+            }
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(CANCELLED_MESSAGE.into()),
-                _ = self.state.priority_changed.notified() => {}
+                _ = notified => {}
             }
         }
     }

@@ -1577,9 +1577,9 @@ impl SearchView {
 
     /// Starts a background detail fetch for an album or playlist card so the
     /// Info dialog can open already populated. Called when a context menu
-    /// opens and when a card is hovered. Duplicate and cached requests are
-    /// skipped, and other kinds are ignored. The dialog still fetches on its
-    /// own when prefetch has not completed.
+    /// opens. Duplicate and cached requests are skipped, and other kinds are
+    /// ignored. The dialog still fetches on its own when prefetch has not
+    /// completed.
     pub(crate) fn prefetch_card_info(&mut self, card: Card, cx: &mut Context<Self>) {
         let Some(key) = AlbumInfoCacheKey::from_card(&card) else {
             return;
@@ -2126,25 +2126,16 @@ impl SearchView {
             soundcloud_token.is_some(),
         );
         let request_id = self.next_request_id();
-        let mut tasks = Vec::new();
-        for provider in self.state.source.providers() {
-            let requests = job
-                .requests
-                .iter()
-                .filter(|request| request.provider == *provider)
-                .cloned()
-                .collect::<Vec<_>>();
-            if requests.is_empty() {
-                continue;
-            }
+        let mut tasks = Vec::with_capacity(job.requests.len());
+        for request in job.requests {
             let task_client = client.clone();
             let task_arl = deezer_arl.clone();
             let task_token = soundcloud_token.clone();
-            tasks.push(
-                self.runtime.spawn(async move {
-                    task_client.execute(requests, task_arl, task_token).await
-                }),
-            );
+            tasks.push(self.runtime.spawn(async move {
+                task_client
+                    .execute(vec![request], task_arl, task_token)
+                    .await
+            }));
         }
         if tasks.is_empty() {
             self.state.complete_incremental_with_missing_accounts(

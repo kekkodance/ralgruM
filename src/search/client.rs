@@ -53,11 +53,15 @@ impl SearchClient {
             .pool_max_idle_per_host(4)
             .user_agent(USER_AGENT)
             .build()
-            .map(|client| Self {
-                client,
-                deezer_sessions: Arc::new(DeezerSessionCache::default()),
-            })
+            .map(Self::with_http_client)
             .map_err(|_| ProviderError::new("Search client could not be created"))
+    }
+
+    pub(crate) fn with_http_client(client: Client) -> Self {
+        Self {
+            client,
+            deezer_sessions: Arc::new(DeezerSessionCache::default()),
+        }
     }
 
     pub(crate) async fn execute(

@@ -694,7 +694,7 @@ impl LibraryView {
             let persistence = persistence_for_quit.clone();
             async move { persistence.flush().await }
         });
-        let mut view = Self {
+        Self {
             input,
             account,
             settings,
@@ -748,8 +748,7 @@ impl LibraryView {
             extension_observer_key: None,
             playback_action_generation: 0,
             album_info_prefetch: crate::search::AlbumInfoPrefetch::default(),
-        };
-        view
+        }
     }
 
     pub(super) fn seed_loaded_root_favorites(
