@@ -90,9 +90,6 @@ impl Render for PlaybackView {
         let quality_badge_opacity =
             quality_badge_opacity_endpoints(&previous_quality_label, &quality_label);
         let now = Instant::now();
-        let player_bar_visual =
-            self.player_bar_motion
-                .prepare(open, narrow, now, cx.reduce_motion());
         let viewport_width = f32::from(viewport.width).max(0.);
         let layout =
             PlayerBarLayout::from_geometry(desktop_player_geometry(viewport_width, compact));
@@ -109,7 +106,7 @@ impl Render for PlaybackView {
             self.seek_fill_motion.reset(seek_commit_epoch);
             self.last_seek_commit_epoch = seek_commit_epoch;
             self.last_display_progress = 0.;
-            return render_player_bar_host(narrow, player_bar_visual, None);
+            return render_player_bar_host(narrow, false, None);
         }
         let favorite_key = current_favorite_key(current.as_ref());
         let (favorite, favorite_pending) = favorite_key.as_ref().map_or((None, false), |key| {
@@ -782,17 +779,13 @@ impl Render for PlaybackView {
                 move |_, _, cx| model.update(cx, |model, cx| model.close(cx))
             }));
 
-        render_player_bar_host(
-            narrow,
-            player_bar_visual,
-            Some(player_content.into_any_element()),
-        )
+        render_player_bar_host(narrow, true, Some(player_content.into_any_element()))
     }
 }
 
 pub(super) fn render_player_bar_host(
     narrow: bool,
-    visual: PlayerBarVisual,
+    open: bool,
     content: Option<AnyElement>,
 ) -> AnyElement {
     let has_content = content.is_some();
@@ -807,36 +800,17 @@ pub(super) fn render_player_bar_host(
         .children(content);
 
     if narrow {
-        host = if has_content {
+        host = if has_content && open {
             host.h_auto()
         } else {
             host.h(px(0.))
         };
-    } else if !visual.active {
-        host = host.h(px(visual.target_height));
-    }
-
-    if visual.active {
-        host.with_animation(
-            format!("player-bar-host-{}", visual.epoch),
-            crate::motion::panel(),
-            move |this, delta| {
-                let opacity =
-                    crate::motion::lerp(visual.from_opacity, visual.target_opacity, delta);
-                if narrow {
-                    this.opacity(opacity)
-                } else {
-                    this.h(px(crate::motion::lerp(
-                        visual.from_height,
-                        visual.target_height,
-                        delta,
-                    )))
-                    .opacity(opacity)
-                }
-            },
-        )
-        .into_any_element()
     } else {
-        host.opacity(visual.target_opacity).into_any_element()
+        host = host.h(px(if open {
+            PLAYER_BAR_DESKTOP_HEIGHT_PX
+        } else {
+            0.
+        }));
     }
+    host.opacity(if open { 1. } else { 0. }).into_any_element()
 }

@@ -22,8 +22,8 @@ use crate::{
     lyrics::{LyricsPanel, LyricsTrackInput},
     navigation_state::{RightSidebarView, StartPage},
     playback::{
-        ListenHistorySignal, PlaybackModel, PlaybackProvider, PlaybackView, QueuePanel,
-        RightSidebar,
+        ListenHistorySignal, PlaybackModel, PlaybackProvider, PlaybackView, PlayerBarMotion,
+        QueuePanel, RightSidebar,
     },
     search::{Provider, SearchView, Source},
     settings::{
@@ -63,6 +63,9 @@ mod search_suggestions;
 mod toolbar;
 use toolbar::render_top_toolbar;
 
+mod player_bar_slot;
+use player_bar_slot::render_player_bar_slot;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Nav {
     Discover,
@@ -92,6 +95,7 @@ pub(crate) struct RalgrumApp {
     cache_view: Entity<CacheView>,
     right_sidebar_transition: RightSidebarTransition,
     right_sidebar_close_task: Option<Task<()>>,
+    player_bar_motion: PlayerBarMotion,
     settings_motion_generation: u64,
     sidebar_width_motion: SidebarWidthMotion,
     sidebar_bottom_motion: SidebarBottomMotion,
@@ -1148,6 +1152,7 @@ impl RalgrumApp {
             cache_view,
             right_sidebar_transition: RightSidebarTransition::new(initial_right_sidebar),
             right_sidebar_close_task: None,
+            player_bar_motion: PlayerBarMotion::default(),
             settings_motion_generation: 0,
             sidebar_width_motion: SidebarWidthMotion::default(),
             sidebar_bottom_motion: SidebarBottomMotion::default(),
@@ -1729,6 +1734,12 @@ impl Render for RalgrumApp {
             let state = &self.playback.read(cx).state;
             (state.right_sidebar, state.position, state.player_bar_open())
         };
+        let player_bar_visual = self.player_bar_motion.prepare(
+            player_bar_open,
+            metrics.narrow_content,
+            now,
+            cx.reduce_motion(),
+        );
         // The lyrics panel shows the playing track unless a context track was
         // requested from a menu; a context track has no playback position, so
         // synced highlighting stays parked at the top.
@@ -2051,7 +2062,11 @@ impl Render for RalgrumApp {
                     )
                 },
             )
-            .child(self.playback_view.clone())
+            .child(render_player_bar_slot(
+                self.playback_view.clone(),
+                metrics.narrow_content,
+                player_bar_visual,
+            ))
             .child(
                 div()
                     .absolute()

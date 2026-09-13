@@ -210,17 +210,17 @@ impl SeekFillMotion {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct PlayerBarVisual {
-    pub(super) from_height: f32,
-    pub(super) target_height: f32,
-    pub(super) from_opacity: f32,
-    pub(super) target_opacity: f32,
-    pub(super) epoch: u64,
-    pub(super) active: bool,
+pub(crate) struct PlayerBarVisual {
+    pub(crate) from_height: f32,
+    pub(crate) target_height: f32,
+    pub(crate) from_opacity: f32,
+    pub(crate) target_opacity: f32,
+    pub(crate) epoch: u64,
+    pub(crate) active: bool,
 }
 
 #[derive(Debug)]
-pub(super) struct PlayerBarMotion {
+pub(crate) struct PlayerBarMotion {
     pub(super) open: Option<bool>,
     pub(super) narrow: Option<bool>,
     pub(super) from_height: f32,
@@ -247,7 +247,7 @@ impl Default for PlayerBarMotion {
 }
 
 impl PlayerBarMotion {
-    pub(super) fn prepare(
+    pub(crate) fn prepare(
         &mut self,
         open: bool,
         narrow: bool,

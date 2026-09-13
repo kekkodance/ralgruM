@@ -36,7 +36,7 @@ use super::{
 const QUALITY_BADGE_HEIGHT_PX: f32 = 20.;
 const QUALITY_BADGE_MIN_WIDTH_PX: f32 = 42.0;
 const QUALITY_BADGE_TEXT_OFFSET_PX: f32 = -1.;
-const PLAYER_BAR_DESKTOP_HEIGHT_PX: f32 = 94.;
+pub(crate) const PLAYER_BAR_DESKTOP_HEIGHT_PX: f32 = 94.;
 const PLAYER_ACTION_BUTTON_RADIUS_PX: f32 = 6.;
 const PLAYER_ACTION_DISABLED_OPACITY: f32 = 0.4;
 const PLAYER_CLOSE_GLYPH_PX: f32 = 9.;
@@ -75,7 +75,6 @@ pub(crate) struct PlaybackView {
     volume_motion: VolumeMotion,
     last_seek_commit_epoch: u64,
     last_display_progress: f32,
-    player_bar_motion: PlayerBarMotion,
     player_bar_layout_motion: PlayerBarLayoutMotion,
     text_width_motion: ScalarMotion,
     favorite_motion: FadeMotion,
@@ -117,7 +116,6 @@ impl PlaybackView {
             volume_motion: VolumeMotion::default(),
             last_seek_commit_epoch: 0,
             last_display_progress: 0.,
-            player_bar_motion: PlayerBarMotion::default(),
             player_bar_layout_motion: PlayerBarLayoutMotion::default(),
             text_width_motion: ScalarMotion::default(),
             favorite_motion: FadeMotion::default(),
@@ -169,6 +167,7 @@ impl PlaybackView {
 
 mod motion;
 use motion::*;
+pub(crate) use motion::{PlayerBarMotion, PlayerBarVisual};
 
 mod volume;
 use volume::*;
