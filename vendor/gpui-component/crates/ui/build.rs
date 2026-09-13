@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, path::Path};
 
 fn main() {
     // `gpui-component-assets` exposes the absolute path of its default
@@ -21,6 +21,21 @@ fn main() {
          build.rs via its `links` field; make sure the regular dependency on \
          gpui-component-assets is intact in Cargo.toml",
     );
+
+    // Fail here rather than letting `icon_named!` panic mid-expansion.
+    // The assets crate validates this directory when it publishes the
+    // path, so a miss at this point means we were handed a value that no
+    // longer describes this machine: almost always a `target/` directory
+    // carrying build script output recorded under a different checkout.
+    if !Path::new(&icons_dir).is_dir() {
+        panic!(
+            "gpui-component-assets published an icons directory that does not exist:\n  \
+             {icons_dir}\n\
+             This is stale build script output, usually from a `target/` directory that was \
+             produced under a different path. Run `cargo clean -p gpui-component-assets -p \
+             gpui-component` and build again."
+        );
+    }
 
     println!("cargo:rustc-env=GPUI_COMPONENT_DEFAULT_ICONS_DIR={icons_dir}");
 

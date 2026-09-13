@@ -29,10 +29,23 @@ fn main() {
 
     println!("cargo:icons-dir={}", icons_dir.display());
 
-    // Rerun if the icon set changes (rename/add/remove). Per-SVG watching
-    // isn't needed because the dependent reads from this advertised path
-    // at *its own* expansion time, not via cached build-script output.
-    println!("cargo:rerun-if-changed=assets/icons");
+    // Rerun if the icon set changes (rename/add/remove).
+    //
+    // This MUST name the absolute path rather than the relative
+    // `assets/icons`. Cargo records these instructions in this build
+    // script's fingerprint, so an absolute path pins our location:
+    // relocating the checkout, or reusing a `target/` directory produced
+    // under a different path, makes the recorded instructions differ,
+    // cargo reports "the rerun-if-changed instructions changed", and we
+    // rerun and republish a correct `icons-dir` above.
+    //
+    // The relative form is location-independent, so cargo instead replays
+    // this script's cached output. The stale absolute `icons-dir` that
+    // output carries then either breaks the dependent's `icon_named!`
+    // expansion with a "failed to read" panic (old path gone) or, worse,
+    // silently builds against the other checkout's icons (old path still
+    // present).
+    println!("cargo:rerun-if-changed={}", icons_dir.display());
 
     // Also rerun if anyone fiddles with this script itself.
     println!("cargo:rerun-if-changed=build.rs");
