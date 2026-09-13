@@ -666,6 +666,13 @@ impl StreamResolver {
             SourceData::Backend(source) => source.metadata().initial_buffered_fraction,
             SourceData::Remote(_) | SourceData::Inline(_) => None,
         };
+        let duration = (!track.duration.is_zero())
+            .then_some(track.duration)
+            .or_else(|| match &source.data {
+                SourceData::Hls(descriptor) => descriptor.duration(),
+                SourceData::Backend(source) => source.metadata().duration,
+                SourceData::Remote(_) | SourceData::Inline(_) => None,
+            });
         let timeline_seek_session: Option<Arc<dyn TimelineSeekSession>> = match &source.data {
             SourceData::Hls(descriptor) => Some(Arc::new(soundcloud_hls::HlsSeekSession::new(
                 self.client.clone(),
@@ -676,7 +683,10 @@ impl StreamResolver {
                 BROWSER_USER_AGENT,
             ))),
             SourceData::Backend(source) => source.timeline_seek_session(cancellation.clone()),
-            SourceData::Remote(_) | SourceData::Inline(_) => None,
+            SourceData::Remote(url) => {
+                self.mp3_range_seek_session(url, &source, total, duration, &cancellation)
+            }
+            SourceData::Inline(_) => None,
         };
         if fully_cached && let (Some(progress), Some(total)) = (&progress, total) {
             progress(ProgressUpdate::bytes(total, Some(total)));
@@ -686,13 +696,6 @@ impl StreamResolver {
             cancellation: Some(worker_cancellation),
             task: Some(task),
         };
-        let duration = (!track.duration.is_zero())
-            .then_some(track.duration)
-            .or_else(|| match &source.data {
-                SourceData::Hls(descriptor) => descriptor.duration(),
-                SourceData::Backend(source) => source.metadata().duration,
-                SourceData::Remote(_) | SourceData::Inline(_) => None,
-            });
         Ok(ResolvedProgressiveAudio {
             reader,
             file: buffer.into_file(),
@@ -707,6 +710,55 @@ impl StreamResolver {
             timeline_seek_session,
             worker: Some(worker),
         })
+    }
+
+    /// Builds the byte range seek session for a remote progressive MP3
+    /// source. Constant bitrate MP3 maps a seek target to a byte offset, so
+    /// the CDN can serve the rest of the file from that offset and the seek
+    /// lands while the download is still running.
+    fn mp3_range_seek_session(
+        &self,
+        url: &str,
+        source: &ResolvedSource,
+        total: Option<u64>,
+        duration: Option<Duration>,
+        cancellation: &CancellationToken,
+    ) -> Option<Arc<dyn TimelineSeekSession>> {
+        let total = total.filter(|total| *total > 0)?;
+        let duration = duration.filter(|duration| !duration.is_zero())?;
+        if source.format != AudioFormat::Mp3 {
+            return None;
+        }
+        let resolver = self.clone();
+        let url = url.to_string();
+        let deezer_track_id = source.deezer_track_id.clone();
+        let is_soundcloud = source.is_soundcloud;
+        let fetch: range_seek::RangeFetch = Arc::new(move |start, end, fetch_cancellation| {
+            let resolver = resolver.clone();
+            let url = url.clone();
+            let deezer_track_id = deezer_track_id.clone();
+            Box::pin(async move {
+                resolver
+                    .fetch_cached_range(
+                        &url,
+                        start,
+                        end,
+                        total,
+                        deezer_track_id.as_deref(),
+                        is_soundcloud,
+                        &fetch_cancellation,
+                    )
+                    .await
+                    .map_err(|error| error.message)
+            })
+        });
+        Some(Arc::new(range_seek::RangeTimelineSession::new(
+            fetch,
+            total,
+            duration,
+            tokio::runtime::Handle::current(),
+            cancellation.clone(),
+        )))
     }
 
     pub(super) fn spawn_progressive_download(

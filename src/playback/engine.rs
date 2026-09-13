@@ -742,15 +742,22 @@ impl AudioEngine for RodioEngine {
     }
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, String> {
         if let Some(progressive_seek) = self.progressive_seek.as_ref() {
-            if let Some(timeline_seek_session) = progressive_seek.timeline_seek_session.clone() {
-                self.schedule_timeline_reload(timeline_seek_session, position)?;
-                return Ok(SeekOutcome::Deferred);
-            }
             if !progressive_seek.completion.is_complete() {
+                // While the buffer is still downloading, a timeline session
+                // can land the seek right away by fetching a suffix that
+                // starts at the target; sources without one queue the target
+                // until the download completes.
+                if let Some(timeline_seek_session) = progressive_seek.timeline_seek_session.clone()
+                {
+                    self.schedule_timeline_reload(timeline_seek_session, position)?;
+                    return Ok(SeekOutcome::Deferred);
+                }
                 progressive_seek.completion.request_seek(position);
                 self.pending_position = Some(position);
                 return Ok(SeekOutcome::Deferred);
             }
+            // The buffer is complete, so a fresh decoder can be positioned
+            // locally instead of fetching anything over the network again.
             progressive_seek.completion.clear_pending_seek();
             if progressive_seek.format == AudioFormat::M4a {
                 self.schedule_progressive_reload(position)?;
@@ -1117,7 +1124,7 @@ mod tests {
             worker: None,
         };
         let prepared = RodioEngine::decode_progressive(audio).unwrap();
-        let (_sink_source, file, progressive_seek) = prepared.into_parts();
+        let (_sink_source, _file, progressive_seek) = prepared.into_parts();
         let progressive_seek =
             progressive_seek.expect("fragmented M4A must seek through the discard-based reload");
         assert_eq!(progressive_seek.format, AudioFormat::M4a);

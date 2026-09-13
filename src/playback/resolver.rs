@@ -397,6 +397,7 @@ mod format;
 mod playback;
 mod providers;
 mod range;
+mod range_seek;
 mod source;
 
 use crypto::{DeezerStripeStream, decrypt_stripes};
