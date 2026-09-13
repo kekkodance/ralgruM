@@ -164,26 +164,6 @@ fn search_results_root_visible(
         && !matches!(state, ResultState::Initial)
 }
 
-fn account_required_toast_copy(providers: &[Provider]) -> (&'static str, &'static str) {
-    let deezer = providers.contains(&Provider::Deezer);
-    let soundcloud = providers.contains(&Provider::SoundCloud);
-    match (deezer, soundcloud) {
-        (true, false) => (
-            "Deezer account required",
-            "Log in to Deezer from Settings to search Deezer music.",
-        ),
-        (false, true) => (
-            "SoundCloud account required",
-            "Log in to SoundCloud from Settings to continue.",
-        ),
-        (true, true) => (
-            "Accounts required",
-            "Log in to Deezer and SoundCloud from Settings to continue.",
-        ),
-        (false, false) => ("Account required", "Sign in from Settings to continue."),
-    }
-}
-
 fn discover_provider_has_credentials(
     provider: Provider,
     deezer_available: bool,
@@ -195,22 +175,13 @@ fn discover_provider_has_credentials(
     }
 }
 
-fn all_search_missing_accounts(
-    source: Source,
-    deezer_available: bool,
-    soundcloud_available: bool,
-) -> Vec<Provider> {
-    if source != Source::All {
+fn all_search_missing_accounts(source: Source, soundcloud_available: bool) -> Vec<Provider> {
+    // Deezer search runs anonymously. Only SoundCloud account state can
+    // leave an All search missing one of its providers.
+    if source != Source::All || soundcloud_available {
         return Vec::new();
     }
-    source
-        .providers()
-        .iter()
-        .copied()
-        .filter(|provider| {
-            !discover_provider_has_credentials(*provider, deezer_available, soundcloud_available)
-        })
-        .collect()
+    vec![Provider::SoundCloud]
 }
 
 struct PlaylistReorderSnapshot {
@@ -1454,9 +1425,7 @@ impl SearchView {
         self.detail.reset();
         self.search_query = query.trim().to_owned();
         let (deezer_arl, soundcloud_token) = self.search_credentials(cx);
-        let job = self
-            .state
-            .select_source(source, &query, deezer_arl.is_some());
+        let job = self.state.select_source(source, &query);
         self.run(job, deezer_arl, soundcloud_token, cx);
     }
 
@@ -1486,9 +1455,7 @@ impl SearchView {
         self.results_entrance_key = None;
         self.search_query = query.trim().to_owned();
         let (deezer_arl, soundcloud_token) = self.search_credentials(cx);
-        let job = self
-            .state
-            .select_type(result_type, &query, deezer_arl.is_some());
+        let job = self.state.select_type(result_type, &query);
         // Reuse the same scroll handle so the scroll surface is not
         // remounted. Fresh fetches start at the top; cache hits restore
         // the returning tab's saved viewport.
@@ -1529,7 +1496,7 @@ impl SearchView {
         }
         self.suggestions.set_focused(false);
         let (deezer_arl, soundcloud_token) = self.search_credentials(cx);
-        let job = self.state.submit(&query, deezer_arl.is_some());
+        let job = self.state.submit(&query);
         self.run(job, deezer_arl, soundcloud_token, cx);
     }
 
@@ -1607,8 +1574,9 @@ impl SearchView {
             return;
         }
         let (deezer_arl, soundcloud_token) = self.search_credentials(cx);
+        // Deezer detail loads anonymously; SoundCloud detail needs its token.
         let has_account = match route.provider {
-            Provider::Deezer => deezer_arl.is_some(),
+            Provider::Deezer => true,
             Provider::SoundCloud => soundcloud_token.is_some(),
         };
         if !has_account {
@@ -2120,11 +2088,8 @@ impl SearchView {
             query: self.search_query.clone(),
         };
         let account_scope = self.account_scope.clone();
-        let account_required = all_search_missing_accounts(
-            self.state.source,
-            deezer_arl.is_some(),
-            soundcloud_token.is_some(),
-        );
+        let account_required =
+            all_search_missing_accounts(self.state.source, soundcloud_token.is_some());
         let request_id = self.next_request_id();
         let mut tasks = Vec::with_capacity(job.requests.len());
         for request in job.requests {
@@ -2187,13 +2152,11 @@ impl SearchView {
                         )
                     {
                         if final_batch && !account_required.is_empty() {
-                            let (title, description) =
-                                account_required_toast_copy(&account_required);
                             crate::toast::push_global(
                                 cx,
                                 crate::toast::ToastKind::Warning,
-                                title,
-                                Some(description.into()),
+                                "SoundCloud account required",
+                                Some("Log in to SoundCloud from Settings to continue.".into()),
                             );
                         }
                         for track in &this.state.groups.tracks {
@@ -2253,8 +2216,9 @@ impl SearchView {
             let account = self.account.read(cx);
             (account.deezer_arl(), account.soundcloud_token())
         };
+        // Deezer detail loads anonymously; SoundCloud detail needs its token.
         let has_account = match card.source {
-            Provider::Deezer => deezer_arl.is_some(),
+            Provider::Deezer => true,
             Provider::SoundCloud => soundcloud_token.is_some(),
         };
         let valid_route = super::detail::DetailRoute::from_card(&card).is_some();
@@ -2300,8 +2264,9 @@ impl SearchView {
             let account = self.account.read(cx);
             (account.deezer_arl(), account.soundcloud_token())
         };
+        // Deezer detail loads anonymously; SoundCloud detail needs its token.
         let has_account = match card.source {
-            Provider::Deezer => deezer_arl.is_some(),
+            Provider::Deezer => true,
             Provider::SoundCloud => soundcloud_token.is_some(),
         };
         let opened = self.detail.replace(&card, has_account);
@@ -3298,31 +3263,6 @@ mod account_required_tests {
     use super::*;
 
     #[test]
-    fn account_required_toast_copy_covers_each_provider_and_both() {
-        assert_eq!(
-            account_required_toast_copy(&[Provider::Deezer]),
-            (
-                "Deezer account required",
-                "Log in to Deezer from Settings to search Deezer music."
-            )
-        );
-        assert_eq!(
-            account_required_toast_copy(&[Provider::SoundCloud]),
-            (
-                "SoundCloud account required",
-                "Log in to SoundCloud from Settings to continue."
-            )
-        );
-        assert_eq!(
-            account_required_toast_copy(&[Provider::Deezer, Provider::SoundCloud]),
-            (
-                "Accounts required",
-                "Log in to Deezer and SoundCloud from Settings to continue."
-            )
-        );
-    }
-
-    #[test]
     fn discover_credential_gate_covers_each_provider_and_all() {
         assert!(discover_provider_has_credentials(
             Provider::Deezer,
@@ -3364,22 +3304,14 @@ mod account_required_tests {
     }
 
     #[test]
-    fn all_search_missing_accounts_uses_login_state_for_both_providers() {
-        assert!(all_search_missing_accounts(Source::All, true, true).is_empty());
+    fn all_search_missing_accounts_reports_only_soundcloud() {
+        assert!(all_search_missing_accounts(Source::All, true).is_empty());
         assert_eq!(
-            all_search_missing_accounts(Source::All, false, true),
-            vec![Provider::Deezer]
-        );
-        assert_eq!(
-            all_search_missing_accounts(Source::All, true, false),
+            all_search_missing_accounts(Source::All, false),
             vec![Provider::SoundCloud]
         );
-        assert_eq!(
-            all_search_missing_accounts(Source::All, false, false),
-            vec![Provider::Deezer, Provider::SoundCloud]
-        );
-        assert!(all_search_missing_accounts(Source::Deezer, false, true).is_empty());
-        assert!(all_search_missing_accounts(Source::SoundCloud, true, false).is_empty());
+        assert!(all_search_missing_accounts(Source::Deezer, false).is_empty());
+        assert!(all_search_missing_accounts(Source::SoundCloud, false).is_empty());
     }
 
     #[test]
@@ -3789,7 +3721,7 @@ mod card_grid_tests {
             .find("self.clear_card_grid_states();")
             .expect("fresh submit must clear card grids");
         let run_index = submit
-            .find("let job = self.state.submit(&query, deezer_arl.is_some());")
+            .find("let job = self.state.submit(&query);")
             .expect("fresh submit must create a search job");
         assert!(clear_index < run_index);
     }

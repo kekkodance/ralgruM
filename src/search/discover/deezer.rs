@@ -36,7 +36,7 @@ pub(crate) async fn load_channel(
 
 async fn load_page(client: &SearchClient, arl: DeezerArl, page: &str) -> Result<Value, String> {
     let session = client
-        .deezer_session(arl)
+        .deezer_session(Some(arl))
         .await
         .map_err(|error| error.message)?;
     let cookie = session_cookie_header(&session)?;
@@ -66,7 +66,7 @@ pub(crate) async fn enrich_smart_mix_titles(
     if ids.is_empty() {
         return Vec::new();
     }
-    let Ok(session) = client.deezer_session(arl).await else {
+    let Ok(session) = client.deezer_session(Some(arl)).await else {
         return Vec::new();
     };
     futures::stream::iter(ids.into_iter().map(|id| {
@@ -108,7 +108,12 @@ async fn fetch_smart_mix_title(
 }
 
 fn session_cookie_header(session: &DeezerSession) -> Result<header::HeaderValue, String> {
-    let mut cookie = session.arl.cookie_header().map_err(|error| error.message)?;
+    // Discover stays authenticated-only, so the session always carries an arl.
+    let arl = session
+        .arl
+        .as_ref()
+        .ok_or_else(|| "Deezer account required".to_owned())?;
+    let mut cookie = arl.cookie_header().map_err(|error| error.message)?;
     if !session.cookies.is_empty() {
         let arl = cookie
             .to_str()

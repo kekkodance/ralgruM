@@ -21,9 +21,7 @@ impl SearchClient {
     ) -> Result<DetailPage, ProviderError> {
         match route.provider {
             Provider::Deezer => {
-                let arl =
-                    deezer_arl.ok_or_else(|| ProviderError::new("Deezer account required"))?;
-                let page = self.deezer_artist(id, arl).await?;
+                let page = self.deezer_artist(id, deezer_arl).await?;
                 route.title = page.profile.title.clone();
                 route.artwork = page.profile.artwork.clone();
                 route.subtitle = page
@@ -103,7 +101,11 @@ impl SearchClient {
         })
     }
 
-    async fn deezer_artist(&self, id: &str, arl: DeezerArl) -> Result<ArtistPage, ProviderError> {
+    async fn deezer_artist(
+        &self,
+        id: &str,
+        arl: Option<DeezerArl>,
+    ) -> Result<ArtistPage, ProviderError> {
         let session = self.deezer_session(arl).await?;
         let popular = self.deezer_gateway(
             &session,

@@ -33,9 +33,7 @@ impl SearchClient {
         let (items, total, raw_loaded_count, authoritative_total, description, album_info) =
             match route.provider {
                 Provider::Deezer => {
-                    let arl =
-                        deezer_arl.ok_or_else(|| ProviderError::new("Deezer account required"))?;
-                    let session = self.deezer_session(arl).await?;
+                    let session = self.deezer_session(deezer_arl).await?;
                     let (detail, album_info) =
                         tokio::join!(self.deezer_detail(&route, &id, &session), async {
                             match route.kind {
@@ -244,15 +242,7 @@ impl SearchClient {
         operation: &str,
         body: Value,
     ) -> Result<Value, ProviderError> {
-        let mut cookie = session.arl.cookie_header()?;
-        if !session.cookies.is_empty() {
-            let arl = cookie
-                .to_str()
-                .map_err(|_| ProviderError::new("The saved Deezer session is invalid"))?;
-            cookie = header::HeaderValue::from_str(&format!("{arl}; {}", session.cookies))
-                .map_err(|_| ProviderError::new("Deezer returned an invalid session"))?;
-            cookie.set_sensitive(true);
-        }
+        let cookie = session.request_cookie()?;
         let mut url = Url::parse("https://www.deezer.com/ajax/gw-light.php")
             .map_err(|_| ProviderError::new("Invalid Deezer collection endpoint"))?;
         url.query_pairs_mut()
@@ -260,11 +250,16 @@ impl SearchClient {
             .append_pair("input", "3")
             .append_pair("api_version", "1.0")
             .append_pair("api_token", &session.check_form);
-        let response = self
+        // The arl segment keeps the merged cookie non-empty, but a defensive
+        // check keeps an empty merge from sending a malformed COOKIE header.
+        let mut request = self
             .http()
             .post(url)
-            .header(header::COOKIE, cookie)
-            .header(header::CONTENT_TYPE, "application/json; charset=UTF-8")
+            .header(header::CONTENT_TYPE, "application/json; charset=UTF-8");
+        if !cookie.as_bytes().is_empty() {
+            request = request.header(header::COOKIE, cookie);
+        }
+        let response = request
             .json(&body)
             .send()
             .await

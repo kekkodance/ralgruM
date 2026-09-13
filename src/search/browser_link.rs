@@ -56,7 +56,7 @@ impl SearchClient {
             }));
         }
         let arl = arl.ok_or_else(|| ProviderError::new("Sign in to Deezer to play this track"))?;
-        let session = self.deezer_session(arl).await?;
+        let session = self.deezer_session(Some(arl)).await?;
         let response = self
             .deezer_gateway(
                 &session,

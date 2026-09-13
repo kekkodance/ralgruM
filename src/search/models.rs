@@ -314,7 +314,6 @@ pub(crate) enum ResultState {
     Loading,
     Results,
     Empty,
-    AccountRequired,
     Failed(String),
 }
 
@@ -374,32 +373,26 @@ impl SearchState {
         self.incremental_failures.clear();
         self.result_cache_order.clear();
     }
-    pub(crate) fn submit(&mut self, query: &str, deezer_session: bool) -> Option<SearchJob> {
+    pub(crate) fn submit(&mut self, query: &str) -> Option<SearchJob> {
         self.result_type = ResultType::All;
-        self.start(query, deezer_session)
+        self.start(query)
     }
 
-    pub(crate) fn select_source(
-        &mut self,
-        source: Source,
-        query: &str,
-        deezer_session: bool,
-    ) -> Option<SearchJob> {
+    pub(crate) fn select_source(&mut self, source: Source, query: &str) -> Option<SearchJob> {
         self.source = source;
-        self.start(query, deezer_session)
+        self.start(query)
     }
 
     pub(crate) fn select_type(
         &mut self,
         result_type: ResultType,
         query: &str,
-        deezer_session: bool,
     ) -> Option<SearchJob> {
         self.result_type = result_type;
-        self.start(query, deezer_session)
+        self.start(query)
     }
 
-    fn start(&mut self, query: &str, deezer_session: bool) -> Option<SearchJob> {
+    fn start(&mut self, query: &str) -> Option<SearchJob> {
         let query = query.trim();
         if query.is_empty() {
             self.generation = self.generation.wrapping_add(1);
@@ -412,12 +405,6 @@ impl SearchState {
         self.generation = self.generation.wrapping_add(1);
         self.incremental_failures.clear();
         self.query = query.to_owned();
-        if self.source == Source::Deezer && !deezer_session {
-            self.groups = Groups::default();
-            self.warning = None;
-            self.state = ResultState::AccountRequired;
-            return None;
-        }
         if self.restore_cached() {
             return None;
         }
@@ -821,7 +808,7 @@ mod tests {
     #[test]
     fn all_expands_categories_with_deezer_before_soundcloud() {
         let mut state = SearchState::default();
-        let job = state.submit(" query ", true).unwrap();
+        let job = state.submit(" query ").unwrap();
         assert_eq!(job.requests.len(), 8);
         for pair in job.requests.chunks_exact(2) {
             assert_eq!(pair[0].provider, Provider::Deezer);
@@ -837,24 +824,24 @@ mod tests {
             result_type: ResultType::Artists,
             ..SearchState::default()
         };
-        assert_eq!(state.submit("x", true).unwrap().requests.len(), 8);
+        assert_eq!(state.submit("x").unwrap().requests.len(), 8);
         assert_eq!(state.result_type, ResultType::All);
         assert_eq!(
             state
-                .select_type(ResultType::Albums, "x", true)
+                .select_type(ResultType::Albums, "x")
                 .unwrap()
                 .requests
                 .len(),
             2
         );
-        assert!(state.select_source(Source::SoundCloud, " ", true).is_none());
+        assert!(state.select_source(Source::SoundCloud, " ").is_none());
     }
 
     #[test]
     fn stale_completion_is_ignored() {
         let mut state = SearchState::default();
-        let first = state.submit("first", true).unwrap();
-        let _second = state.submit("second", true).unwrap();
+        let first = state.submit("first").unwrap();
+        let _second = state.submit("second").unwrap();
         assert!(!state.complete(first.generation, Vec::new()));
         assert_eq!(state.state, ResultState::Loading);
     }
@@ -862,7 +849,7 @@ mod tests {
     #[test]
     fn incremental_batches_publish_early_without_caching_a_partial_snapshot() {
         let mut state = SearchState::default();
-        let job = state.submit("query", true).unwrap();
+        let job = state.submit("query").unwrap();
         let deezer = job
             .requests
             .iter()
@@ -907,9 +894,7 @@ mod tests {
     #[test]
     fn cache_hit_restores_terminal_snapshot_for_normalized_query() {
         let mut state = SearchState::default();
-        let job = state
-            .select_type(ResultType::Tracks, " query ", true)
-            .unwrap();
+        let job = state.select_type(ResultType::Tracks, " query ").unwrap();
         assert!(state.complete(
             job.generation,
             vec![
@@ -932,13 +917,9 @@ mod tests {
         assert_eq!(cached_state, ResultState::Results);
         assert!(cached_warning.is_some());
 
-        assert!(state.submit("other", true).is_some());
+        assert!(state.submit("other").is_some());
         assert_eq!(state.state, ResultState::Loading);
-        assert!(
-            state
-                .select_type(ResultType::Tracks, "  QuErY\t", true)
-                .is_none()
-        );
+        assert!(state.select_type(ResultType::Tracks, "  QuErY\t").is_none());
         assert_eq!(state.state, cached_state);
         assert_eq!(state.groups, cached_groups);
         assert_eq!(state.warning, cached_warning);
@@ -947,9 +928,7 @@ mod tests {
     #[test]
     fn cache_is_separated_by_result_type_and_query() {
         let mut state = SearchState::default();
-        let track_job = state
-            .select_type(ResultType::Tracks, "shared", true)
-            .unwrap();
+        let track_job = state.select_type(ResultType::Tracks, "shared").unwrap();
         assert!(state.complete(
             track_job.generation,
             vec![RawResult {
@@ -962,38 +941,22 @@ mod tests {
         ));
         let tracks = state.groups.tracks.clone();
 
-        let album_job = state
-            .select_type(ResultType::Albums, "shared", true)
-            .unwrap();
+        let album_job = state.select_type(ResultType::Albums, "shared").unwrap();
         assert_eq!(state.state, ResultState::Loading);
         assert!(state.complete(album_job.generation, Vec::new()));
         assert_eq!(state.state, ResultState::Empty);
 
-        assert!(
-            state
-                .select_type(ResultType::Tracks, " shared ", true)
-                .is_none()
-        );
+        assert!(state.select_type(ResultType::Tracks, " shared ").is_none());
         assert_eq!(state.state, ResultState::Results);
         assert_eq!(state.groups.tracks, tracks);
 
-        let other_query_job = state
-            .select_type(ResultType::Tracks, "other", true)
-            .unwrap();
+        let other_query_job = state.select_type(ResultType::Tracks, "other").unwrap();
         assert!(state.complete(other_query_job.generation, Vec::new()));
         assert_eq!(state.state, ResultState::Empty);
 
-        assert!(
-            state
-                .select_type(ResultType::Albums, "shared", true)
-                .is_none()
-        );
+        assert!(state.select_type(ResultType::Albums, "shared").is_none());
         assert_eq!(state.state, ResultState::Empty);
-        assert!(
-            state
-                .select_type(ResultType::Tracks, "shared", true)
-                .is_none()
-        );
+        assert!(state.select_type(ResultType::Tracks, "shared").is_none());
         assert_eq!(state.state, ResultState::Results);
         assert_eq!(state.groups.tracks, tracks);
     }
@@ -1045,9 +1008,7 @@ mod tests {
     #[test]
     fn account_scope_change_clears_search_result_cache() {
         let mut state = SearchState::default();
-        let job = state
-            .select_type(ResultType::Tracks, "query", true)
-            .unwrap();
+        let job = state.select_type(ResultType::Tracks, "query").unwrap();
         assert!(state.complete(
             job.generation,
             vec![RawResult {
@@ -1063,20 +1024,14 @@ mod tests {
         state.account_scope_changed();
 
         assert!(state.result_cache.is_empty());
-        assert!(
-            state
-                .select_type(ResultType::Tracks, "query", true)
-                .is_some()
-        );
+        assert!(state.select_type(ResultType::Tracks, "query").is_some());
         assert_eq!(state.state, ResultState::Loading);
     }
 
     #[test]
     fn failed_results_are_not_cached() {
         let mut state = SearchState::default();
-        let job = state
-            .select_source(Source::SoundCloud, "query", false)
-            .unwrap();
+        let job = state.select_source(Source::SoundCloud, "query").unwrap();
         let failures = job
             .requests
             .iter()
@@ -1090,11 +1045,7 @@ mod tests {
         assert!(matches!(state.state, ResultState::Failed(_)));
         assert!(state.result_cache.is_empty());
 
-        assert!(
-            state
-                .select_source(Source::SoundCloud, " query ", false)
-                .is_some()
-        );
+        assert!(state.select_source(Source::SoundCloud, " query ").is_some());
         assert_eq!(state.state, ResultState::Loading);
     }
 
@@ -1114,9 +1065,7 @@ mod tests {
             warning: Some("old account warning".into()),
             ..SearchState::default()
         };
-        let job = state
-            .select_type(ResultType::Tracks, "first", true)
-            .unwrap();
+        let job = state.select_type(ResultType::Tracks, "first").unwrap();
         state.groups.tracks.push(Track {
             id: "42".into(),
             favorite: Some(true),
@@ -1137,8 +1086,8 @@ mod tests {
     #[test]
     fn empty_query_clears_results_and_invalidates_pending_work() {
         let mut state = SearchState::default();
-        let job = state.submit("first", true).unwrap();
-        assert!(state.select_source(Source::SoundCloud, " ", true).is_none());
+        let job = state.submit("first").unwrap();
+        assert!(state.select_source(Source::SoundCloud, " ").is_none());
         assert_eq!(state.state, ResultState::Initial);
         assert_eq!(state.groups, Groups::default());
         assert!(!state.complete(job.generation, Vec::new()));
@@ -1147,10 +1096,9 @@ mod tests {
     #[test]
     fn exact_error_states_are_selected() {
         let mut state = SearchState::default();
-        assert!(state.select_source(Source::Deezer, "x", false).is_none());
-        assert_eq!(state.state, ResultState::AccountRequired);
-        assert!(state.select_type(ResultType::Tracks, "", false).is_none());
-        let job = state.select_source(Source::SoundCloud, "x", false).unwrap();
+        assert!(state.select_type(ResultType::Tracks, "").is_none());
+        assert_eq!(state.state, ResultState::Initial);
+        let job = state.select_source(Source::SoundCloud, "x").unwrap();
         let request = job.requests[0].clone();
         state.complete(
             job.generation,
@@ -1166,9 +1114,23 @@ mod tests {
     }
 
     #[test]
+    fn deezer_search_runs_without_an_account() {
+        let mut state = SearchState::default();
+        let job = state.select_source(Source::Deezer, "query").unwrap();
+        assert_eq!(state.state, ResultState::Loading);
+        assert_eq!(job.requests.len(), 4);
+        assert!(
+            job.requests
+                .iter()
+                .all(|request| request.provider == Provider::Deezer)
+        );
+        assert!(job.requests.iter().all(|request| request.query == "query"));
+    }
+
+    #[test]
     fn all_source_switch_reuses_cached_all_results() {
         let mut state = SearchState::default();
-        let job = state.submit("query", true).unwrap();
+        let job = state.submit("query").unwrap();
         let results = job
             .requests
             .iter()
@@ -1191,7 +1153,7 @@ mod tests {
         assert!(state.complete(job.generation, results));
         assert_eq!(state.groups.tracks.len(), 2);
 
-        assert!(state.select_source(Source::Deezer, "query", true).is_none());
+        assert!(state.select_source(Source::Deezer, "query").is_none());
         assert_eq!(state.source, Source::Deezer);
         assert_eq!(state.state, ResultState::Results);
         assert_eq!(state.groups.tracks.len(), 1);
@@ -1203,11 +1165,7 @@ mod tests {
                 .all(|track| track.source == Provider::Deezer)
         );
 
-        assert!(
-            state
-                .select_source(Source::SoundCloud, "query", true)
-                .is_none()
-        );
+        assert!(state.select_source(Source::SoundCloud, "query").is_none());
         assert_eq!(state.groups.tracks.len(), 1);
         assert!(
             state
@@ -1217,14 +1175,14 @@ mod tests {
                 .all(|track| track.source == Provider::SoundCloud)
         );
 
-        assert!(state.select_source(Source::All, "query", true).is_none());
+        assert!(state.select_source(Source::All, "query").is_none());
         assert_eq!(state.groups.tracks.len(), 2);
     }
 
     #[test]
     fn all_type_switch_reuses_cached_all_results() {
         let mut state = SearchState::default();
-        let job = state.submit("query", true).unwrap();
+        let job = state.submit("query").unwrap();
         let results = job
             .requests
             .iter()
@@ -1246,21 +1204,13 @@ mod tests {
             .collect();
         assert!(state.complete(job.generation, results));
 
-        assert!(
-            state
-                .select_type(ResultType::Tracks, "query", true)
-                .is_none()
-        );
+        assert!(state.select_type(ResultType::Tracks, "query").is_none());
         assert_eq!(state.result_type, ResultType::Tracks);
         assert_eq!(state.state, ResultState::Results);
         assert_eq!(state.groups.tracks.len(), 2);
         assert_eq!(state.groups.albums.len(), 2);
 
-        assert!(
-            state
-                .select_type(ResultType::Albums, "query", true)
-                .is_none()
-        );
+        assert!(state.select_type(ResultType::Albums, "query").is_none());
         assert_eq!(state.result_type, ResultType::Albums);
         assert_eq!(state.state, ResultState::Results);
         assert_eq!(state.groups.count(ResultType::Albums), 2);
@@ -1269,7 +1219,7 @@ mod tests {
     #[test]
     fn dedicated_source_search_only_fetches_the_missing_provider_for_all() {
         let mut state = SearchState::default();
-        let job = state.select_source(Source::Deezer, "query", true).unwrap();
+        let job = state.select_source(Source::Deezer, "query").unwrap();
         assert!(state.complete(
             job.generation,
             vec![RawResult {
@@ -1281,7 +1231,7 @@ mod tests {
             }],
         ));
 
-        let job = state.select_source(Source::All, "query", true).unwrap();
+        let job = state.select_source(Source::All, "query").unwrap();
         assert_eq!(state.state, ResultState::Loading);
         assert_eq!(state.groups.tracks.len(), 1);
         assert!(
@@ -1294,7 +1244,7 @@ mod tests {
     #[test]
     fn all_reuses_cached_deezer_and_soundcloud_searches() {
         let mut state = SearchState::default();
-        let deezer = state.select_source(Source::Deezer, "query", true).unwrap();
+        let deezer = state.select_source(Source::Deezer, "query").unwrap();
         assert!(state.complete(
             deezer.generation,
             vec![RawResult {
@@ -1305,9 +1255,7 @@ mod tests {
                 })]),
             }],
         ));
-        let soundcloud = state
-            .select_source(Source::SoundCloud, "query", true)
-            .unwrap();
+        let soundcloud = state.select_source(Source::SoundCloud, "query").unwrap();
         assert!(state.complete(
             soundcloud.generation,
             vec![RawResult {
@@ -1319,7 +1267,7 @@ mod tests {
             }],
         ));
 
-        assert!(state.select_source(Source::All, "query", true).is_none());
+        assert!(state.select_source(Source::All, "query").is_none());
         assert_eq!(state.state, ResultState::Results);
         assert_eq!(state.groups.tracks.len(), 2);
         assert!(
@@ -1350,9 +1298,7 @@ mod tests {
     #[test]
     fn all_source_orders_late_deezer_before_cached_soundcloud_and_reentry() {
         let mut state = SearchState::default();
-        let soundcloud = state
-            .select_source(Source::SoundCloud, "query", true)
-            .unwrap();
+        let soundcloud = state.select_source(Source::SoundCloud, "query").unwrap();
         let soundcloud_request = soundcloud
             .requests
             .iter()
@@ -1371,7 +1317,7 @@ mod tests {
         ));
 
         let all = state
-            .select_source(Source::All, "query", true)
+            .select_source(Source::All, "query")
             .expect("missing Deezer provider should be fetched");
         assert_eq!(
             state
@@ -1422,7 +1368,7 @@ mod tests {
             vec!["Deezer", "SoundCloud"]
         );
 
-        assert!(state.select_source(Source::All, "query", true).is_none());
+        assert!(state.select_source(Source::All, "query").is_none());
         assert_eq!(
             state
                 .groups
@@ -1437,7 +1383,7 @@ mod tests {
     #[test]
     fn derived_single_source_view_drops_the_other_provider_warning() {
         let mut state = SearchState::default();
-        let job = state.submit("query", true).unwrap();
+        let job = state.submit("query").unwrap();
         let results = job
             .requests
             .iter()
@@ -1459,15 +1405,11 @@ mod tests {
             Some("Deezer did not return every requested category.")
         );
 
-        assert!(
-            state
-                .select_source(Source::SoundCloud, "query", true)
-                .is_none()
-        );
+        assert!(state.select_source(Source::SoundCloud, "query").is_none());
         assert!(state.warning.is_none());
         assert_eq!(state.state, ResultState::Results);
 
-        assert!(state.select_source(Source::Deezer, "query", true).is_none());
+        assert!(state.select_source(Source::Deezer, "query").is_none());
         assert_eq!(
             state.warning.as_deref(),
             Some("Deezer did not return every requested category.")
@@ -1478,7 +1420,7 @@ mod tests {
     #[test]
     fn all_keeps_soundcloud_results_without_account_warning_for_missing_deezer() {
         let mut state = SearchState::default();
-        let job = state.submit("x", false).unwrap();
+        let job = state.submit("x").unwrap();
         let results = job
             .requests
             .iter()
@@ -1503,7 +1445,7 @@ mod tests {
     #[test]
     fn server_login_error_does_not_override_known_local_account_state() {
         let mut state = SearchState::default();
-        let job = state.submit("x", true).unwrap();
+        let job = state.submit("x").unwrap();
         let results = job
             .requests
             .iter()
@@ -1530,7 +1472,7 @@ mod tests {
     #[test]
     fn all_still_reports_real_provider_failures_after_account_filtering() {
         let mut state = SearchState::default();
-        let job = state.submit("x", false).unwrap();
+        let job = state.submit("x").unwrap();
         let results = job
             .requests
             .iter()
@@ -1556,7 +1498,7 @@ mod tests {
     #[test]
     fn known_missing_account_suppresses_provider_warning_regardless_of_error_text() {
         let mut state = SearchState::default();
-        let job = state.submit("x", true).unwrap();
+        let job = state.submit("x").unwrap();
         let results = job
             .requests
             .iter()
@@ -1582,7 +1524,7 @@ mod tests {
         assert!(state.warning.is_none());
 
         let mut ordinary_failure = SearchState::default();
-        let ordinary_job = ordinary_failure.submit("x", true).unwrap();
+        let ordinary_job = ordinary_failure.submit("x").unwrap();
         assert!(ordinary_failure.complete(ordinary_job.generation, results));
         assert_eq!(
             ordinary_failure.warning.as_deref(),

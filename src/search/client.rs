@@ -15,6 +15,13 @@ use super::{
 pub(crate) const SOUNDCLOUD_CLIENT_ID: &str = "Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo";
 const DEEZER_USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
 const DEEZER_SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+// Placeholder ARL sent when no account is signed in. Deezer's gateway only
+// mints the anonymous sid cookie when the request carries an arl, and any
+// value, even a dead one, yields the same anonymous session.
+const ANONYMOUS_DEEZER_ARL: &str = "0000000000000000000000000000000000000000";
+// Cache key for the anonymous session slot. Saved ARLs can never contain a
+// control character, so this key can never collide with a real one.
+const ANONYMOUS_DEEZER_CACHE_KEY: &str = "\u{0}anonymous-deezer-session";
 
 const fn deezer_spec(category: ResultType) -> Option<(&'static str, u32, u32)> {
     match category {
@@ -76,17 +83,13 @@ impl SearchClient {
             if deezer_requests.is_empty() {
                 return Vec::new();
             }
-            let deezer_session = match deezer_arl {
-                Some(arl) => self.deezer_session(arl).await.map(Some),
-                None => Ok(None),
-            };
+            let deezer_session = self.deezer_session(deezer_arl).await;
             let deezer = deezer_requests.into_iter().map(|request| {
                 let client = self.clone();
                 let deezer_session = deezer_session.clone();
                 async move {
                     let data = match deezer_session {
-                        Ok(Some(session)) => client.deezer(&request, &session).await,
-                        Ok(None) => Err(ProviderError::new("Deezer login required")),
+                        Ok(session) => client.deezer(&request, &session).await,
                         Err(error) => Err(error),
                     };
                     RawResult { request, data }
@@ -137,9 +140,9 @@ impl SearchClient {
 
     pub(super) async fn deezer_session(
         &self,
-        arl: DeezerArl,
+        arl: Option<DeezerArl>,
     ) -> Result<DeezerSession, ProviderError> {
-        let key = arl.expose().to_owned();
+        let key = deezer_session_cache_key(arl.as_ref());
         let slot = self
             .deezer_sessions
             .slots
@@ -173,14 +176,18 @@ impl SearchClient {
 
     async fn deezer_session_uncached(
         &self,
-        arl: DeezerArl,
+        arl: Option<DeezerArl>,
     ) -> Result<DeezerSession, ProviderError> {
-        let response = deezer_session_request(&self.client, arl.cookie_header()?)
+        let bootstrap_cookie = match arl.as_ref() {
+            Some(arl) => arl.cookie_header()?,
+            None => anonymous_arl_cookie()?,
+        };
+        let response = deezer_session_request(&self.client, bootstrap_cookie)
             .send()
             .await
             .map_err(classify_deezer_error)?;
         let cookies = response_cookies(&response);
-        if let Some(jar) = arl.attached_jar() {
+        if let Some(jar) = arl.as_ref().and_then(DeezerArl::attached_jar) {
             jar.refresh(&cookies);
         }
         let value = deezer_json(response).await?;
@@ -208,26 +215,7 @@ impl SearchClient {
     ) -> Result<Vec<Value>, ProviderError> {
         let (output, nb, start) = deezer_spec(request.category)
             .ok_or_else(|| ProviderError::new("Unsupported Deezer search category"))?;
-        let mut cookie = session.arl.cookie_header()?;
-        if !session.cookies.is_empty() {
-            let value = cookie
-                .to_str()
-                .map_err(|_| ProviderError::new("The saved Deezer session is invalid"))?;
-            // The saved arl value cannot contain ';', so the first segment is
-            // always the arl cookie and any remainder is the jar snapshot.
-            let (arl_part, rest) = value.split_once("; ").unwrap_or((value, ""));
-            // Repeated cookie names replace instead of duplicating, and any
-            // arl set by the server is dropped, so the saved arl wins.
-            let parts = merge_cookie_parts(rest, &session.cookies);
-            let merged = if parts.is_empty() {
-                arl_part.to_owned()
-            } else {
-                format!("{arl_part}; {parts}")
-            };
-            cookie = header::HeaderValue::from_str(&merged)
-                .map_err(|_| ProviderError::new("Deezer returned an invalid session"))?;
-            cookie.set_sensitive(true);
-        }
+        let cookie = session.request_cookie()?;
         let mut url = Url::parse("https://www.deezer.com/ajax/gw-light.php")
             .map_err(|_| ProviderError::new("Invalid Deezer search endpoint"))?;
         url.query_pairs_mut()
@@ -235,11 +223,16 @@ impl SearchClient {
             .append_pair("input", "3")
             .append_pair("api_version", "1.0")
             .append_pair("api_token", &session.check_form);
-        let response = self
+        // The arl segment keeps the merged cookie non-empty, but a defensive
+        // check keeps an empty merge from sending a malformed COOKIE header.
+        let mut builder = self
             .client
             .post(url)
-            .header(header::COOKIE, cookie)
-            .header(header::CONTENT_TYPE, "application/json; charset=UTF-8")
+            .header(header::CONTENT_TYPE, "application/json; charset=UTF-8");
+        if !cookie.as_bytes().is_empty() {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        let response = builder
             .json(&json!({
                 "query": request.query,
                 "filter": "all",
@@ -345,6 +338,25 @@ fn deezer_session_request(client: &Client, arl: header::HeaderValue) -> reqwest:
         .body("")
 }
 
+/// Cookie header that bootstraps the anonymous session. The gateway only
+/// hands out the anonymous sid when some arl is present, so the placeholder
+/// is sent whenever no account is signed in.
+fn anonymous_arl_cookie() -> Result<header::HeaderValue, ProviderError> {
+    let mut value = header::HeaderValue::from_str(&format!("arl={ANONYMOUS_DEEZER_ARL}"))
+        .map_err(|_| ProviderError::new("The anonymous Deezer session is invalid"))?;
+    value.set_sensitive(true);
+    Ok(value)
+}
+
+/// Cache key under which a session is memoized. Anonymous sessions share a
+/// single slot that can never alias a saved ARL.
+fn deezer_session_cache_key(arl: Option<&DeezerArl>) -> String {
+    match arl {
+        Some(arl) => arl.expose().to_owned(),
+        None => ANONYMOUS_DEEZER_CACHE_KEY.to_owned(),
+    }
+}
+
 impl SearchClient {
     pub(super) fn http(&self) -> &Client {
         &self.client
@@ -353,10 +365,43 @@ impl SearchClient {
 
 #[derive(Clone)]
 pub(super) struct DeezerSession {
-    pub(super) arl: DeezerArl,
+    pub(super) arl: Option<DeezerArl>,
     pub(super) check_form: String,
     pub(super) cookies: String,
     pub(super) user_id: Option<String>,
+}
+
+impl DeezerSession {
+    /// Builds the COOKIE header for a gateway request: the saved arl plus its
+    /// jar for authenticated sessions, or the placeholder arl for anonymous
+    /// ones, merged with the cookies the bootstrap received. Repeated names
+    /// replace instead of duplicating, and any arl set by the server is
+    /// dropped, so the saved value wins.
+    pub(super) fn request_cookie(&self) -> Result<header::HeaderValue, ProviderError> {
+        let cookie = match self.arl.as_ref() {
+            Some(arl) => arl.cookie_header()?,
+            None => anonymous_arl_cookie()?,
+        };
+        if self.cookies.is_empty() {
+            return Ok(cookie);
+        }
+        let value = cookie
+            .to_str()
+            .map_err(|_| ProviderError::new("The saved Deezer session is invalid"))?;
+        // The arl value cannot contain ';', so the first segment is always
+        // the arl cookie and any remainder is the jar snapshot.
+        let (arl_part, rest) = value.split_once("; ").unwrap_or((value, ""));
+        let parts = merge_cookie_parts(rest, &self.cookies);
+        let merged = if parts.is_empty() {
+            arl_part.to_owned()
+        } else {
+            format!("{arl_part}; {parts}")
+        };
+        let mut merged = header::HeaderValue::from_str(&merged)
+            .map_err(|_| ProviderError::new("Deezer returned an invalid session"))?;
+        merged.set_sensitive(true);
+        Ok(merged)
+    }
 }
 
 fn value_string(value: Option<&Value>) -> Option<String> {
@@ -629,6 +674,108 @@ mod tests {
         assert_eq!(
             request.body().and_then(reqwest::Body::as_bytes),
             Some(&b""[..])
+        );
+    }
+
+    #[test]
+    fn anonymous_session_bootstrap_matches_post_contract() {
+        let request = deezer_session_request(&Client::new(), anonymous_arl_cookie().unwrap())
+            .build()
+            .unwrap();
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(request.url().as_str(), DEEZER_USER_DATA_URL);
+        assert_eq!(
+            request.headers()[header::COOKIE],
+            format!("arl={ANONYMOUS_DEEZER_ARL}")
+        );
+        assert!(request.headers()[header::COOKIE].is_sensitive());
+        assert_eq!(request.headers()[header::CONTENT_LENGTH], "0");
+        assert_eq!(
+            request.body().and_then(reqwest::Body::as_bytes),
+            Some(&b""[..])
+        );
+    }
+
+    #[test]
+    fn anonymous_cache_key_never_collides_with_a_saved_arl() {
+        let arl = DeezerArl::from_saved("sentinel").unwrap();
+        assert_eq!(deezer_session_cache_key(Some(&arl)), "sentinel");
+        assert_eq!(deezer_session_cache_key(None), ANONYMOUS_DEEZER_CACHE_KEY);
+        assert_ne!(
+            deezer_session_cache_key(Some(&arl)),
+            deezer_session_cache_key(None)
+        );
+        // A control character can never survive DeezerArl::from_saved, so no
+        // saved ARL can ever alias the anonymous slot.
+        assert!(DeezerArl::from_saved(ANONYMOUS_DEEZER_CACHE_KEY).is_none());
+    }
+
+    #[test]
+    fn request_cookie_merges_session_cookies_and_skips_a_server_arl() {
+        let session = DeezerSession {
+            arl: Some(DeezerArl::from_saved("sentinel").unwrap()),
+            check_form: "check".into(),
+            cookies: "sid=session; arl=server".into(),
+            user_id: None,
+        };
+        let cookie = session.request_cookie().unwrap();
+        assert_eq!(cookie.to_str().unwrap(), "arl=sentinel; sid=session");
+        assert!(cookie.is_sensitive());
+    }
+
+    #[test]
+    fn request_cookie_replaces_repeated_jar_cookies() {
+        let jar = super::super::credential::DeezerCookieJar::new(Some(
+            "sid=stale; datadome=guard".into(),
+        ));
+        let session = DeezerSession {
+            arl: Some(DeezerArl::from_saved_with_jar("sentinel", &jar).unwrap()),
+            check_form: "check".into(),
+            cookies: "sid=fresh".into(),
+            user_id: None,
+        };
+        assert_eq!(
+            session.request_cookie().unwrap().to_str().unwrap(),
+            "arl=sentinel; sid=fresh; datadome=guard"
+        );
+    }
+
+    #[test]
+    fn request_cookie_sends_the_bare_arl_without_session_cookies() {
+        let session = DeezerSession {
+            arl: Some(DeezerArl::from_saved("sentinel").unwrap()),
+            check_form: "check".into(),
+            cookies: String::new(),
+            user_id: None,
+        };
+        assert_eq!(
+            session.request_cookie().unwrap().to_str().unwrap(),
+            "arl=sentinel"
+        );
+    }
+
+    #[test]
+    fn request_cookie_uses_the_placeholder_arl_for_anonymous_sessions() {
+        let session = DeezerSession {
+            arl: None,
+            check_form: "check".into(),
+            cookies: "sid=anon; arl=server".into(),
+            user_id: Some("0".into()),
+        };
+        assert_eq!(
+            session.request_cookie().unwrap().to_str().unwrap(),
+            format!("arl={ANONYMOUS_DEEZER_ARL}; sid=anon")
+        );
+
+        let empty = DeezerSession {
+            arl: None,
+            check_form: "check".into(),
+            cookies: String::new(),
+            user_id: None,
+        };
+        assert_eq!(
+            empty.request_cookie().unwrap().to_str().unwrap(),
+            format!("arl={ANONYMOUS_DEEZER_ARL}")
         );
     }
 }

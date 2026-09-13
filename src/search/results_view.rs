@@ -496,11 +496,6 @@ impl SearchView {
                 "No results found",
                 "Try a different search or result category.",
             ),
-            ResultState::AccountRequired => message(
-                LocalIcon::UserLock,
-                "Deezer Account Required",
-                "Log in to Deezer from Settings to search Deezer music.",
-            ),
             ResultState::Failed(error) => {
                 message(LocalIcon::TriangleExclamation, "Search Failed", error)
             }
