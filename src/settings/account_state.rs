@@ -174,11 +174,8 @@ impl AccountState {
     pub(super) fn begin_settings_session(&mut self) {
         self.settings_active = true;
         self.generation = self.generation.wrapping_add(1);
-        self.service_generation = self.service_generation.wrapping_add(1);
         self.invalidate_service_identity_requests();
         self.loading = false;
-        self.service_loading = false;
-        self.service_loading_service = None;
         self.status = None;
         self.service_status = None;
         self.service_session_error = None;
@@ -290,9 +287,9 @@ impl AccountState {
         self.referral_status = None;
         self.referral_copy_status = None;
         self.plans_status = None;
-        self.service_generation = self.service_generation.wrapping_add(1);
-        self.service_loading = false;
-        self.service_loading_service = None;
+        // A provider sign-in is a process-global flow: its webview window
+        // outlives the settings page, so its in-flight guard and generation
+        // must survive closing and reopening settings.
         self.invalidate_service_identity_requests();
         self.service_session_error = None;
         self.deezer_identity_attempted = false;

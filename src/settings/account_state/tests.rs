@@ -522,6 +522,43 @@ fn service_auth_attempts_are_serial_and_completion_is_terminal() {
 }
 
 #[test]
+fn service_auth_survives_closing_and_reopening_settings() {
+    let temp = TempDir::new().unwrap();
+    let mut state = account_state_with_saved_accounts(&temp);
+    state.begin_settings_session();
+
+    let generation = state.begin_service_auth(Service::Deezer).unwrap();
+
+    // The user leaves settings and comes back while the webview window is
+    // still open. The sign-in button must stay busy and a second sign-in
+    // must not be startable.
+    state.end_settings_session();
+    state.begin_settings_session();
+    assert!(state.service_loading_for(Service::Deezer));
+    assert!(state.begin_service_auth(Service::SoundCloud).is_none());
+
+    // Finishing the still-open window must still save the credentials.
+    state.complete_service_auth(
+        generation,
+        Ok(ValidatedCredentials {
+            desktop: "fresh-deezer".into(),
+            mobile: None,
+            soundcloud_cookies: None,
+            deezer_cookies: None,
+            deezer_user_id: Some("99".into()),
+            identity: Some(ServiceIdentity::new("fresh-user", None).unwrap()),
+        }),
+        Service::Deezer,
+    );
+    assert!(!state.service_loading_for(Service::Deezer));
+    assert!(state.service_signed_in(Service::Deezer));
+    assert_eq!(
+        state.session_store.as_ref().unwrap().session().deezer(),
+        "fresh-deezer"
+    );
+}
+
+#[test]
 fn service_auth_invalidates_both_stale_identity_loaders() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state_with_saved_accounts(&temp);

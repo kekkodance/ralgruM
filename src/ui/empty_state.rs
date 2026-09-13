@@ -67,12 +67,31 @@ pub(crate) fn account_required_copy(provider: &str) -> (&'static str, &'static s
     }
 }
 
+/// Account-required copy for the Discover page, which serves personalized
+/// recommendation feeds rather than the library.
+pub(crate) fn discover_account_required_copy(provider: &str) -> (&'static str, &'static str) {
+    match provider {
+        "SoundCloud" => (
+            "SoundCloud account required",
+            "Log in to SoundCloud to load personalized recommendations.",
+        ),
+        "Deezer" => (
+            "Deezer account required",
+            "Log in to Deezer to load personalized recommendations.",
+        ),
+        _ => (
+            "Account required",
+            "Sign in to load personalized recommendations.",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ACTION_MARGIN_TOP_PX, CONTENT_PADDING_X_PX, CONTENT_PADDING_Y_PX, DESCRIPTION_SIZE_PX,
         ICON_SIZE_PX, TITLE_MARGIN_BOTTOM_PX, TITLE_MARGIN_TOP_PX, TITLE_SIZE_PX,
-        account_required_copy,
+        account_required_copy, discover_account_required_copy,
     };
 
     #[test]
@@ -85,6 +104,16 @@ mod tests {
         assert_eq!(TITLE_SIZE_PX, 16.);
         assert_eq!(DESCRIPTION_SIZE_PX, 13.);
         assert_eq!(ACTION_MARGIN_TOP_PX, 14.);
+    }
+
+    #[test]
+    fn discover_account_required_copy_never_mentions_the_library() {
+        for provider in ["Deezer", "SoundCloud", "Unknown"] {
+            let (title, description) = discover_account_required_copy(provider);
+            assert!(!description.contains("library"), "{description}");
+            assert!(description.contains("recommendations"), "{description}");
+            assert!(title.contains(provider) || provider == "Unknown");
+        }
     }
 
     #[test]

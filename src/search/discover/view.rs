@@ -445,7 +445,7 @@ fn render_entry(
 }
 
 fn render_account_required(provider: Provider, host: &Entity<SearchView>) -> AnyElement {
-    let (title, description) = crate::empty_state::account_required_copy(provider.label());
+    let (title, description) = crate::empty_state::discover_account_required_copy(provider.label());
     let click_host = host.clone();
     let action = primary_button(
         format!("discover-account-settings-{provider:?}"),
