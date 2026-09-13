@@ -683,6 +683,7 @@ fn provider_detail_route(
             .to_owned(),
         artwork: route.artwork.clone(),
         release_date,
+        service_url: page.service_url.clone(),
     }
 }
 
@@ -1838,7 +1839,14 @@ fn detail_more_card(view: &LibraryView) -> Option<Card> {
         } else {
             String::new()
         },
-        service_url: String::new(),
+        // The loaded page carries the canonical provider URL (SoundCloud
+        // permalink); Deezer links derive from the numeric id instead.
+        service_url: view
+            .state
+            .page
+            .as_ref()
+            .map(|page| page.service_url.clone())
+            .unwrap_or_default(),
         is_private: None,
         library_service: None,
     })

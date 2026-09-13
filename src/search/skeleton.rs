@@ -457,6 +457,7 @@ mod tests {
             subtitle: String::new(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         }
     }
 

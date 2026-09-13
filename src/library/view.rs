@@ -522,6 +522,7 @@ impl LibraryView {
                         subtitle: current.subtitle.clone(),
                         artwork: current.artwork.clone(),
                         release_date: current.release_date.clone(),
+                        service_url: page.service_url.clone(),
                     },
                     info.clone(),
                 ));

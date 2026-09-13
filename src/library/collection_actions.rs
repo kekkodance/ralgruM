@@ -125,13 +125,7 @@ impl LibraryView {
                             collection_toast(empty_notice.0, empty_notice.1, cx);
                         } else {
                             let status_scope = this.add_status_scope();
-                            this.open_add_picker(
-                                track_ids,
-                                status_scope,
-                                Provider::Deezer,
-                                window,
-                                cx,
-                            );
+                            this.open_add_picker(track_ids, status_scope, provider, window, cx);
                         }
                     }
                     (Ok(page), action) if !page.tracks.is_empty() => {
@@ -203,7 +197,7 @@ fn collection_route(card: &Card) -> Option<super::model::Route> {
 }
 
 fn add_to_playlist_eligible(card: &Card) -> bool {
-    card.source == Provider::Deezer
+    matches!(card.source, Provider::Deezer | Provider::SoundCloud)
         && card.kind == Category::Albums
         && collection_route(card).is_some()
 }
@@ -264,10 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn add_to_playlist_only_accepts_deezer_albums() {
+    fn add_to_playlist_accepts_provider_albums_only() {
         assert!(add_to_playlist_eligible(&card(
             Category::Albums,
             Provider::Deezer,
+            "42"
+        )));
+        assert!(add_to_playlist_eligible(&card(
+            Category::Albums,
+            Provider::SoundCloud,
             "42"
         )));
         assert!(!add_to_playlist_eligible(&card(
@@ -276,7 +275,7 @@ mod tests {
             "42"
         )));
         assert!(!add_to_playlist_eligible(&card(
-            Category::Albums,
+            Category::Playlists,
             Provider::SoundCloud,
             "42"
         )));

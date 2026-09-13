@@ -499,6 +499,7 @@ pub(crate) fn open_local_playlist_info_dialog<T: 'static>(
         subtitle: String::new(),
         artwork: String::new(),
         release_date: String::new(),
+        service_url: String::new(),
     };
     let info = AlbumInfo {
         title,
@@ -854,6 +855,7 @@ mod tests {
             subtitle: "Curator".into(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         };
         let rows = info.rows(&route);
         assert_eq!(rows[0], ("Author", "Curator".into()));
@@ -879,6 +881,7 @@ mod tests {
             subtitle: "Curator".into(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         };
         // The right-click entry point seeds the dialog with card data only.
         // Rows without backing data stay hidden instead of rendering empty.
@@ -898,6 +901,7 @@ mod tests {
             subtitle: "Artist".into(),
             artwork: String::new(),
             release_date: "2019-05-10".into(),
+            service_url: String::new(),
         };
         let info = AlbumInfo {
             title: "Album".into(),
@@ -1078,6 +1082,7 @@ mod tests {
             subtitle: "Artist".to_owned(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         };
 
         for (raw_date, expected) in [

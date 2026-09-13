@@ -78,6 +78,9 @@ pub(crate) struct DetailRoute {
     pub(crate) subtitle: String,
     pub(crate) artwork: String,
     pub(crate) release_date: String,
+    /// Provider-supplied public web URL (SoundCloud permalink). Deezer links
+    /// are derived from the numeric id instead.
+    pub(crate) service_url: String,
 }
 
 impl DetailRoute {
@@ -97,6 +100,7 @@ impl DetailRoute {
             subtitle: card.subtitle.clone(),
             artwork: card.artwork.clone(),
             release_date: card.release_date.clone(),
+            service_url: card.service_url.clone(),
         })
     }
 }
@@ -423,6 +427,24 @@ mod tests {
     }
 
     #[test]
+    fn detail_routes_carry_the_card_service_url() {
+        // The detail page's more menu copies the same link the search card
+        // menu copies, so the route must keep the card's provider URL.
+        let card = Card {
+            kind: ResultType::Albums,
+            id: "42".into(),
+            source: Provider::SoundCloud,
+            service_url: "https://soundcloud.com/artist/sets/album".into(),
+            ..Card::default()
+        };
+        let route = DetailRoute::from_card(&card).expect("valid album card");
+        assert_eq!(
+            route.service_url,
+            "https://soundcloud.com/artist/sets/album"
+        );
+    }
+
+    #[test]
     fn external_replace_discards_stale_detail_stack_and_starts_at_top() {
         let first = Card {
             kind: ResultType::Artists,
@@ -494,6 +516,7 @@ mod tests {
             subtitle: " SoundCloud ".into(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         };
         assert_eq!(detail_metadata(&route), "");
         route.subtitle = "New!".into();
@@ -548,6 +571,7 @@ mod tests {
             subtitle: String::new(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         };
         let empty_tracks = DetailPage {
             route: route.clone(),
@@ -596,6 +620,7 @@ mod tests {
                 subtitle: "Owner".into(),
                 artwork: String::new(),
                 release_date: String::new(),
+                service_url: String::new(),
             },
             tracks: Vec::new(),
             total: Some(0),
@@ -623,6 +648,7 @@ mod tests {
             subtitle: String::new(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         };
         let page = DetailPage {
             route,
@@ -652,6 +678,7 @@ mod tests {
                 subtitle: String::new(),
                 artwork: String::new(),
                 release_date: String::new(),
+                service_url: String::new(),
             },
             tracks: Vec::new(),
             total: None,

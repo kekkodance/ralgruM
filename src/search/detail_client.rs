@@ -8,7 +8,7 @@ use super::{
     client::{SOUNDCLOUD_CLIENT_ID, SearchClient, deezer_json},
     credential::{DeezerArl, SoundCloudToken},
     detail::{DetailPage, DetailRoute, validate_id},
-    models::{Provider, ProviderError, ResultType},
+    models::{Provider, ProviderError, ResultType, Track},
     normalize::{normalize_tracks, soundcloud_artwork},
 };
 
@@ -95,6 +95,7 @@ impl SearchClient {
             };
         let tracks = normalize_tracks(route.provider, &items);
         apply_track_metadata_fallback(&mut route, &tracks);
+        let tracks = soundcloud_album_tracks(tracks, &route);
         let normalized_count = tracks.len();
         Ok(DetailPage {
             tracks,
@@ -625,6 +626,40 @@ fn apply_soundcloud_metadata(route: &mut DetailRoute, playlist: &Value) {
     if !artwork.is_empty() {
         route.artwork = artwork;
     }
+    // The permalink is the canonical link the card menus copy; detail menus
+    // read it from the route once the payload has supplied it.
+    let service_url = crate::search::soundcloud_service_url(playlist);
+    if !service_url.is_empty() {
+        route.service_url = service_url;
+    }
+}
+
+/// Album identity a SoundCloud album detail stamps onto its tracks. Track
+/// payloads carry no album id, so the album page is the only source; giving
+/// each track the id and title lets menus away from the page (the player
+/// bar, the queue) resolve the album, matching Deezer tracks that always
+/// carry ALB_ID. Playlist details leave track album data untouched.
+fn soundcloud_album_tracks(tracks: Vec<Track>, route: &DetailRoute) -> Vec<Track> {
+    if route.provider != Provider::SoundCloud || route.kind != ResultType::Albums {
+        return tracks;
+    }
+    let album_id = route.id.trim();
+    if album_id.is_empty() || !album_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return tracks;
+    }
+    let album_title = route.title.trim();
+    tracks
+        .into_iter()
+        .map(|mut track| {
+            if track.album_id.trim().is_empty() {
+                track.album_id = album_id.to_owned();
+            }
+            if track.album.trim().is_empty() && !album_title.is_empty() {
+                track.album = album_title.to_owned();
+            }
+            track
+        })
+        .collect()
 }
 
 fn nonempty_string(value: Option<&Value>) -> Option<String> {
@@ -842,6 +877,7 @@ mod tests {
             subtitle: "Search owner".into(),
             artwork: "https://example.com/search.jpg".into(),
             release_date: "2020".into(),
+            service_url: String::new(),
         };
         apply_soundcloud_metadata(
             &mut route,
@@ -849,6 +885,7 @@ mod tests {
                 "title": "Detail title",
                 "artwork_url": "http://127.0.0.1/private.jpg",
                 "release_date": "2024-02-03",
+                "permalink_url": "https://soundcloud.com/owner/sets/detail-title",
                 "user": {"username": "Detail owner"}
             }),
         );
@@ -856,6 +893,10 @@ mod tests {
         assert_eq!(route.subtitle, "Detail owner");
         assert_eq!(route.release_date, "2024-02-03");
         assert_eq!(route.artwork, "https://example.com/search.jpg");
+        assert_eq!(
+            route.service_url,
+            "https://soundcloud.com/owner/sets/detail-title"
+        );
     }
 
     #[test]
@@ -868,6 +909,7 @@ mod tests {
             subtitle: String::new(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         };
         apply_deezer_metadata(
             &mut route,
@@ -893,6 +935,7 @@ mod tests {
             subtitle: "Existing artist".into(),
             artwork: "https://example.com/cover.jpg".into(),
             release_date: "2001".into(),
+            service_url: String::new(),
         };
         apply_deezer_metadata(&mut route, &Default::default());
         assert_eq!(route.title, "Existing title");
@@ -911,6 +954,7 @@ mod tests {
             subtitle: String::new(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         };
         let tracks = vec![
             super::super::models::Track::default(),
@@ -928,6 +972,57 @@ mod tests {
         assert_eq!(route.subtitle, "Daft Punk");
         assert_eq!(route.release_date, "2001-03-07");
         assert_eq!(route.artwork, "https://example.com/track.jpg");
+    }
+    #[test]
+    fn soundcloud_album_tracks_inherit_the_album_identity() {
+        let album_route = DetailRoute {
+            provider: Provider::SoundCloud,
+            kind: ResultType::Albums,
+            id: "2189715572".into(),
+            title: "Album".into(),
+            subtitle: String::new(),
+            artwork: String::new(),
+            release_date: String::new(),
+            service_url: String::new(),
+        };
+        let named = super::super::models::Track {
+            id: "7".into(),
+            album: "Own album name".into(),
+            ..Default::default()
+        };
+        let stamped = soundcloud_album_tracks(
+            vec![super::super::models::Track::default(), named],
+            &album_route,
+        );
+        assert_eq!(stamped[0].album_id, "2189715572");
+        assert_eq!(stamped[0].album, "Album");
+        // The track's own album name wins over the page title, matching the
+        // album tracklist menu which also prefers the track album data.
+        assert_eq!(stamped[1].album_id, "2189715572");
+        assert_eq!(stamped[1].album, "Own album name");
+
+        // Playlists and Deezer albums keep their track album data as loaded.
+        let playlist_route = DetailRoute {
+            kind: ResultType::Playlists,
+            ..album_route.clone()
+        };
+        assert_eq!(
+            soundcloud_album_tracks(
+                vec![super::super::models::Track::default()],
+                &playlist_route
+            )[0]
+            .album_id,
+            ""
+        );
+        let deezer_route = DetailRoute {
+            provider: Provider::Deezer,
+            ..album_route
+        };
+        assert_eq!(
+            soundcloud_album_tracks(vec![super::super::models::Track::default()], &deezer_route)[0]
+                .album_id,
+            ""
+        );
     }
 
     #[test]

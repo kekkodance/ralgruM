@@ -56,6 +56,7 @@ pub(crate) fn filtered_page(page: &Page, query: &str) -> Page {
         subtitle: page.subtitle.clone(),
         description: page.description.clone(),
         album_info: page.album_info.clone(),
+        service_url: page.service_url.clone(),
         artwork: page.artwork.clone(),
         platform: page.platform,
         count_noun: page.count_noun.clone(),

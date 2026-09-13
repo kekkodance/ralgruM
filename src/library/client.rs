@@ -1087,6 +1087,7 @@ fn detail_route(route: Route, kind: ResultType) -> DetailRoute {
         subtitle: route.subtitle,
         artwork: route.artwork,
         release_date: route.release_date,
+        service_url: String::new(),
     }
 }
 
@@ -1136,6 +1137,7 @@ pub(super) fn detail_page(detail: DetailPage) -> Page {
         subtitle: route.subtitle.clone(),
         description,
         album_info,
+        service_url: route.service_url.clone(),
         artwork: route.artwork.clone(),
         platform: Some(match route.provider {
             crate::search::Provider::Deezer => crate::library::model::Service::Deezer,
@@ -1616,6 +1618,7 @@ mod tests {
                 subtitle: String::new(),
                 artwork: String::new(),
                 release_date: String::new(),
+                service_url: String::new(),
             },
             total: None,
             raw_loaded_count: 0,
@@ -1668,6 +1671,7 @@ mod tests {
                 subtitle: "Artist".into(),
                 artwork: String::new(),
                 release_date: String::new(),
+                service_url: String::new(),
             },
             total: None,
             raw_loaded_count: 0,
@@ -1692,6 +1696,7 @@ mod tests {
                 subtitle: String::new(),
                 artwork: String::new(),
                 release_date: String::new(),
+                service_url: String::new(),
             },
             total: None,
             raw_loaded_count: 0,
@@ -1754,6 +1759,7 @@ mod tests {
                 subtitle: "Artist".into(),
                 artwork: "https://example.com/album.jpg".into(),
                 release_date: "2024".into(),
+                service_url: String::new(),
             },
             total: Some(9),
             raw_loaded_count: 0,

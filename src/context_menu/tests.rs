@@ -435,12 +435,21 @@ fn playlist_card_menus_share_info_action_and_skip_add_to_playlist() {
 }
 
 #[test]
-fn card_menu_enables_add_to_playlist_only_for_deezer_albums() {
+fn card_menu_enables_add_to_playlist_for_provider_albums_with_accounts() {
     assert!(album_add_to_playlist_enabled(
         &EntityKind::Album,
         Provider::Deezer,
         "42",
         true,
+        true,
+        false
+    ));
+    assert!(album_add_to_playlist_enabled(
+        &EntityKind::Album,
+        Provider::SoundCloud,
+        "42",
+        true,
+        false,
         true
     ));
     assert!(!album_add_to_playlist_enabled(
@@ -448,33 +457,39 @@ fn card_menu_enables_add_to_playlist_only_for_deezer_albums() {
         Provider::Deezer,
         "42",
         true,
-        true
-    ));
-    assert!(!album_add_to_playlist_enabled(
-        &EntityKind::Album,
-        Provider::SoundCloud,
-        "42",
         true,
-        true
+        false
     ));
     assert!(!album_add_to_playlist_enabled(
         &EntityKind::Album,
         Provider::Deezer,
         "not-numeric",
         true,
-        true
+        true,
+        false
     ));
     assert!(!album_add_to_playlist_enabled(
         &EntityKind::Album,
         Provider::Deezer,
         "42",
         false,
-        true
+        true,
+        false
     ));
+    // Each provider needs its own account credential for the picker.
     assert!(!album_add_to_playlist_enabled(
         &EntityKind::Album,
         Provider::Deezer,
         "42",
+        true,
+        false,
+        false
+    ));
+    assert!(!album_add_to_playlist_enabled(
+        &EntityKind::Album,
+        Provider::SoundCloud,
+        "42",
+        true,
         true,
         false
     ));

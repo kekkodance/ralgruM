@@ -924,7 +924,7 @@ fn detail_route_card(route: &DetailRoute, total: usize) -> Card {
         source: route.provider,
         badge: total.to_string(),
         release_date: route.release_date.clone(),
-        service_url: String::new(),
+        service_url: route.service_url.clone(),
     }
 }
 
@@ -984,9 +984,32 @@ fn artist_tracks_preview(tracks_only: bool, expanded: Option<ArtistSection>) -> 
 #[cfg(test)]
 mod layout_tests {
     use super::{
-        ArtistSection, Provider, artist_popular_actions, artist_tracks_preview, artist_tracks_title,
+        ArtistSection, Provider, artist_popular_actions, artist_tracks_preview,
+        artist_tracks_title, detail_route_card,
     };
     use crate::collection_detail::DETAIL_CONTEXT_OPTICAL_OFFSET_PX;
+    use crate::search::detail::DetailRoute;
+    use crate::search::models::ResultType;
+
+    #[test]
+    fn detail_more_card_keeps_the_collection_link_for_copy_actions() {
+        // The detail header's more menu must copy the same provider link the
+        // search results card menu copies for SoundCloud collections.
+        let route = DetailRoute {
+            provider: Provider::SoundCloud,
+            kind: ResultType::Albums,
+            id: "42".into(),
+            title: "Album".into(),
+            subtitle: "Artist".into(),
+            artwork: String::new(),
+            release_date: String::new(),
+            service_url: "https://soundcloud.com/artist/sets/album".into(),
+        };
+        let card = detail_route_card(&route, 9);
+        assert_eq!(card.service_url, "https://soundcloud.com/artist/sets/album");
+        assert_eq!(card.source, Provider::SoundCloud);
+        assert_eq!(card.badge, "9");
+    }
 
     #[test]
     fn detail_heading_uses_the_legacy_18_pixel_line_height_ratio() {

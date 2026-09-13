@@ -30,12 +30,15 @@ pub(super) fn album_add_to_playlist_enabled(
     id: &str,
     has_tracks: bool,
     deezer_arl: bool,
+    soundcloud_token: bool,
 ) -> bool {
     matches!(kind, EntityKind::Album)
-        && provider == crate::search::Provider::Deezer
         && super::links::valid_id(id).is_some()
         && has_tracks
-        && deezer_arl
+        && match provider {
+            crate::search::Provider::Deezer => deezer_arl,
+            crate::search::Provider::SoundCloud => soundcloud_token,
+        }
 }
 
 fn collection_add_to_playlist_item<F>(
@@ -227,6 +230,7 @@ where
                     &entity.id,
                     has_tracks,
                     deezer_arl,
+                    soundcloud_token,
                 );
                 let add_host = host.clone();
                 let add_card = card.clone();
@@ -583,7 +587,13 @@ where
                 menu.separator()
                     .item(items::disabled_action("Download", LocalIcon::Download))
             };
-            let deezer_arl = account.read(cx).deezer_arl().is_some();
+            let (deezer_arl, soundcloud_token) = {
+                let account = account.read(cx);
+                (
+                    account.deezer_arl().is_some(),
+                    account.soundcloud_token().is_some(),
+                )
+            };
             let menu = if playlist_add_to_playlist_enabled(&entity.kind) {
                 let add_enabled = album_add_to_playlist_enabled(
                     &entity.kind,
@@ -591,6 +601,7 @@ where
                     &entity.id,
                     has_tracks,
                     deezer_arl,
+                    soundcloud_token,
                 );
                 let add_search = search.clone();
                 let add_card = card.clone();

@@ -158,8 +158,11 @@ fn valid_id(id: &str) -> Option<&str> {
 
 /// Mirrors albumRouteForTrackContext in public/js/core/service-urls.js for the
 /// fields this app models: Deezer prefers the track album data and falls back
-/// to an albumTracks context route; SoundCloud only accepts a SoundCloud
-/// albumTracks context route.
+/// to an albumTracks context route; SoundCloud accepts the album identity a
+/// track carries when it was loaded from an album page, and otherwise only a
+/// SoundCloud albumTracks context route. The track-carried identity keeps
+/// menus away from the album page (the player bar, the queue) resolving the
+/// album exactly like the album tracklist menu does.
 pub(crate) fn album_route_for_track(
     provider: Provider,
     album_id: &str,
@@ -192,6 +195,18 @@ pub(crate) fn album_route_for_track(
             })
         }
         Provider::SoundCloud => {
+            if let (Some(id), Some(title)) = (
+                trimmed_non_empty(&[album_id]),
+                trimmed_non_empty(&[album_title]),
+            ) {
+                if title != "SoundCloud Upload" {
+                    return Some(MenuRoute {
+                        kind: MenuRouteKind::Album,
+                        id: id.to_owned(),
+                        title: title.to_owned(),
+                    });
+                }
+            }
             let route = context?;
             if route.provider != Provider::SoundCloud || route.action != "albumTracks" {
                 return None;
@@ -559,10 +574,17 @@ mod tests {
     }
 
     #[test]
-    fn soundcloud_album_requires_a_soundcloud_album_context() {
+    fn soundcloud_album_prefers_track_identity_and_falls_back_to_context() {
+        // Tracks loaded from a SoundCloud album page carry the album id and
+        // title, so the player bar and queue menus resolve the album without
+        // any page context, exactly like the album tracklist menu does.
         assert_eq!(
             album_route_for_track(Provider::SoundCloud, "7", "Album", None),
-            None
+            Some(MenuRoute {
+                kind: MenuRouteKind::Album,
+                id: "7".into(),
+                title: "Album".into(),
+            })
         );
         let wrong_action = ContextRoute {
             provider: Provider::SoundCloud,
@@ -572,12 +594,20 @@ mod tests {
         };
         assert_eq!(
             album_route_for_track(Provider::SoundCloud, "7", "Album", Some(&wrong_action)),
-            None
+            Some(MenuRoute {
+                kind: MenuRouteKind::Album,
+                id: "7".into(),
+                title: "Album".into(),
+            })
         );
         let wrong_provider = deezer_context("albumTracks", "9", "Album");
         assert_eq!(
             album_route_for_track(Provider::SoundCloud, "7", "Album", Some(&wrong_provider)),
-            None
+            Some(MenuRoute {
+                kind: MenuRouteKind::Album,
+                id: "7".into(),
+                title: "Album".into(),
+            })
         );
 
         let context = ContextRoute {
@@ -615,6 +645,24 @@ mod tests {
                     title: "Context Album".into(),
                 })
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn soundcloud_album_track_identity_needs_both_id_and_title() {
+        // Standalone SoundCloud tracks never carry an album id, so a
+        // publisher album name alone must not invent an album entry.
+        assert_eq!(
+            album_route_for_track(Provider::SoundCloud, "", "Album", None),
+            None
+        );
+        assert_eq!(
+            album_route_for_track(Provider::SoundCloud, "7", "", None),
+            None
+        );
+        assert_eq!(
+            album_route_for_track(Provider::SoundCloud, "7", "SoundCloud Upload", None),
             None
         );
     }

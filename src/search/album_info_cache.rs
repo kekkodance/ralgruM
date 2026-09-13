@@ -212,6 +212,7 @@ mod tests {
             subtitle: "Artist".into(),
             artwork: String::new(),
             release_date: String::new(),
+            service_url: String::new(),
         }
     }
 

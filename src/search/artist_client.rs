@@ -373,6 +373,11 @@ fn apply_soundcloud_artist_profile(route: &mut DetailRoute, value: &Value) {
     route.title = profile.title;
     route.subtitle = profile.subtitle;
     route.artwork = profile.artwork;
+    // The permalink is the canonical link the card menus copy; detail menus
+    // read it from the route once the profile has supplied it.
+    if !profile.service_url.is_empty() {
+        route.service_url = profile.service_url;
+    }
 }
 
 fn value_string(value: Option<&Value>) -> Option<String> {
@@ -779,6 +784,7 @@ mod tests {
             subtitle: "Old subtitle".into(),
             artwork: "https://example.com/old.jpg".into(),
             release_date: String::new(),
+            service_url: String::new(),
         };
 
         apply_soundcloud_artist_profile(

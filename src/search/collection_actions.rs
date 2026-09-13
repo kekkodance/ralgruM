@@ -64,6 +64,7 @@ impl SearchView {
             let account = self.account.read(cx);
             (account.deezer_arl(), account.soundcloud_token())
         };
+        let provider = card.source;
         cx.notify();
         let task = self
             .runtime
@@ -81,12 +82,7 @@ impl SearchView {
                         if track_ids.is_empty() {
                             collection_toast(empty_notice.0, empty_notice.1.to_owned(), cx);
                         } else {
-                            this.open_add_picker(
-                                track_ids,
-                                crate::search::Provider::Deezer,
-                                window,
-                                cx,
-                            );
+                            this.open_add_picker(track_ids, provider, window, cx);
                         }
                     }
                     (Ok(page), action) if !page.tracks.is_empty() => {
@@ -167,8 +163,10 @@ fn collection_route(card: &Card) -> Option<DetailRoute> {
 }
 
 fn add_to_playlist_eligible(card: &Card) -> bool {
-    card.source == crate::search::Provider::Deezer
-        && card.kind == super::models::ResultType::Albums
+    matches!(
+        card.source,
+        crate::search::Provider::Deezer | crate::search::Provider::SoundCloud
+    ) && card.kind == super::models::ResultType::Albums
         && collection_route(card).is_some()
 }
 
@@ -239,10 +237,15 @@ mod tests {
     }
 
     #[test]
-    fn add_to_playlist_only_accepts_deezer_albums() {
+    fn add_to_playlist_accepts_provider_albums_only() {
         assert!(add_to_playlist_eligible(&card(
             ResultType::Albums,
             Provider::Deezer,
+            "42"
+        )));
+        assert!(add_to_playlist_eligible(&card(
+            ResultType::Albums,
+            Provider::SoundCloud,
             "42"
         )));
         assert!(!add_to_playlist_eligible(&card(
@@ -251,7 +254,7 @@ mod tests {
             "42"
         )));
         assert!(!add_to_playlist_eligible(&card(
-            ResultType::Albums,
+            ResultType::Playlists,
             Provider::SoundCloud,
             "42"
         )));

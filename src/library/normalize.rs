@@ -423,6 +423,7 @@ mod tests {
             subtitle: route.subtitle,
             artwork: route.artwork,
             release_date: route.release_date,
+            service_url: String::new(),
         };
         assert_eq!(
             crate::search::detail_metadata(&detail),

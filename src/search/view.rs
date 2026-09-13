@@ -1810,6 +1810,7 @@ impl SearchView {
             subtitle: card.subtitle.clone(),
             artwork: card.artwork.clone(),
             release_date: String::new(),
+            service_url: card.service_url.clone(),
         };
         let opened = self
             .detail
@@ -3189,6 +3190,7 @@ mod favorite_tests {
                     subtitle: String::new(),
                     artwork: String::new(),
                     release_date: String::new(),
+                    service_url: String::new(),
                 }
             },
             tracks: vec![favorite_track(Provider::Deezer, "page-track", Some(true))],
@@ -3244,6 +3246,7 @@ mod favorite_tests {
                 subtitle: String::new(),
                 artwork: String::new(),
                 release_date: String::new(),
+                service_url: String::new(),
             },
             tracks: vec![favorite_track(Provider::Deezer, "", None)],
             total: None,

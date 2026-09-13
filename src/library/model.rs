@@ -315,6 +315,9 @@ pub(crate) struct Page {
     pub description: String,
     pub album_info: Option<crate::search::AlbumInfo>,
     pub artwork: String,
+    /// Provider-supplied public web URL of the loaded collection (SoundCloud
+    /// permalink). Deezer links are derived from the numeric id instead.
+    pub service_url: String,
     pub platform: Option<Service>,
     pub count_noun: String,
     pub meta_text: String,

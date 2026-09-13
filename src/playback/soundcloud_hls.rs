@@ -1282,6 +1282,162 @@ mod tests {
         fn set_total_hint(&mut self, _total: Option<u64>) {}
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "temporary network repro"]
+    async fn repro_hls_mid_download_seek_landing() {
+        use rodio::Source as _;
+        const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+        const MAX_AUDIO_SIZE: u64 = 512 * 1024 * 1024;
+        let client = Client::new();
+        let resolve_url = format!(
+            "https://api-v2.soundcloud.com/resolve?url=https%3A%2F%2Fsoundcloud.com%2Ffurryconvention2005%2Fcalvintrix-summer303-wenomecha&client_id={}",
+            crate::search::SOUNDCLOUD_CLIENT_ID
+        );
+        let track: serde_json::Value = client
+            .get(&resolve_url)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let transcoding = track
+            .pointer("/media/transcodings")
+            .and_then(serde_json::Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|item| item.get("preset").and_then(serde_json::Value::as_str) == Some("aac_160k"))
+            .unwrap();
+        let transcoding_url = transcoding.get("url").unwrap().as_str().unwrap();
+        let stream: serde_json::Value = client
+            .get(format!(
+                "{transcoding_url}?client_id={}",
+                crate::search::SOUNDCLOUD_CLIENT_ID
+            ))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let manifest_url = stream.get("url").unwrap().as_str().unwrap().to_string();
+        let cancellation = CancellationToken::new();
+        let descriptor = inspect(&client, &manifest_url, &cancellation, USER_AGENT)
+            .await
+            .unwrap();
+        eprintln!(
+            "descriptor segments: {} total: {:?}",
+            descriptor.segments.len(),
+            descriptor.total_duration
+        );
+
+        let budget = Arc::new(AtomicU64::new(0));
+        let init = fetch_media_bytes(
+            &client,
+            &descriptor.init_url,
+            &cancellation,
+            USER_AGENT,
+            budget.clone(),
+            MAX_AUDIO_SIZE,
+        )
+        .await
+        .unwrap();
+        let mut full = init.clone();
+        for segment in &descriptor.segments {
+            let bytes = fetch_media_bytes(
+                &client,
+                segment,
+                &cancellation,
+                USER_AGENT,
+                budget.clone(),
+                MAX_AUDIO_SIZE,
+            )
+            .await
+            .unwrap();
+            full.extend_from_slice(&bytes);
+        }
+        let full_path = std::env::temp_dir().join("repro-full.m4a");
+        std::fs::write(&full_path, &full).unwrap();
+        let full_file = std::fs::File::open(&full_path).unwrap();
+        let mut full_decoder = rodio::Decoder::builder()
+            .with_data(std::io::BufReader::new(full_file))
+            .with_hint("m4a")
+            .build()
+            .unwrap();
+        let full_samples: Vec<f32> = std::iter::from_fn(|| full_decoder.next()).collect();
+        eprintln!("full samples: {}", full_samples.len());
+
+        let session = HlsSeekSession::new(
+            client.clone(),
+            descriptor.clone(),
+            tokio::runtime::Handle::current(),
+            cancellation.clone(),
+            MAX_AUDIO_SIZE,
+            USER_AGENT,
+        );
+        for target in [Duration::from_secs(90), Duration::from_secs(45)] {
+            let request = TimelineSeekSession::request(&session, target).unwrap();
+            eprintln!("intra segment offset: {:?}", request.intra_segment_offset);
+            let startup = request.startup.recv().unwrap().unwrap();
+            let mut decoder = rodio::Decoder::builder()
+                .with_data(startup.reader)
+                .with_hint("m4a")
+                .build()
+                .unwrap();
+            let rate = f64::from(decoder.sample_rate());
+            let channels = f64::from(decoder.channels());
+            let mut discard =
+                (request.intra_segment_offset.as_secs_f64() * rate * channels) as usize;
+            while discard > 0 {
+                if decoder.next().is_none() {
+                    break;
+                }
+                discard -= 1;
+            }
+            let suffix: Vec<f32> = (0..8_192).map(|_| decoder.next().unwrap()).collect();
+
+            // Locate the suffix inside the full decode with normalized
+            // cross correlation, which is invariant to local loudness.
+            let suffix_mean = suffix.iter().sum::<f32>() / suffix.len() as f32;
+            let suffix_norm = suffix
+                .iter()
+                .map(|value| {
+                    let delta = *value - suffix_mean;
+                    delta * delta
+                })
+                .sum::<f32>()
+                .sqrt();
+            let mut best_offset = usize::MAX;
+            let mut best_similarity = f64::NEG_INFINITY;
+            let step = 2_205usize;
+            for offset in (0..full_samples.len().saturating_sub(suffix.len())).step_by(step) {
+                let window = &full_samples[offset..offset + suffix.len()];
+                let window_mean = window.iter().sum::<f32>() / window.len() as f32;
+                let mut dot = 0.0_f32;
+                let mut window_norm = 0.0_f32;
+                for (a, b) in suffix.iter().zip(window) {
+                    let a = a - suffix_mean;
+                    let b = b - window_mean;
+                    dot += a * b;
+                    window_norm += b * b;
+                }
+                let window_norm = window_norm.sqrt();
+                if window_norm <= f32::EPSILON {
+                    continue;
+                }
+                let similarity = f64::from(dot / (suffix_norm * window_norm));
+                if similarity > best_similarity {
+                    best_similarity = similarity;
+                    best_offset = offset;
+                }
+            }
+            let seconds = best_offset as f64 / (rate * channels);
+            eprintln!(
+                "target {target:?}: matched at ~{seconds:.2}s (similarity {best_similarity:.4})"
+            );
+        }
+    }
+
     fn base_url() -> Url {
         Url::parse("https://playback.media-streaming.soundcloud.cloud/path/playlist.m3u8?signature=redacted")
             .unwrap()

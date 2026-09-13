@@ -688,6 +688,7 @@ impl SoundCloudLibraryClient {
                     subtitle: route.subtitle,
                     artwork: route.artwork,
                     release_date: route.release_date,
+                    service_url: String::new(),
                 },
                 None,
                 Some(token),
@@ -876,6 +877,33 @@ impl SoundCloudLibraryClient {
     }
 }
 
+/// Album identity a SoundCloud album page stamps onto its tracks. Track
+/// payloads carry no album id, so the album page is the only source; giving
+/// each track the id and title lets menus away from the page (the player
+/// bar, the queue) resolve the album, matching Deezer tracks that always
+/// carry ALB_ID. Playlist pages leave track album data untouched.
+fn album_member(mut track: Track, route: &super::model::Route, playlist_title: &str) -> Track {
+    if route.action != "albumTracks" {
+        return track;
+    }
+    let album_id = route.id.trim();
+    if track.album_id.trim().is_empty()
+        && !album_id.is_empty()
+        && album_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        track.album_id = album_id.to_owned();
+    }
+    let album_title = [playlist_title, route.title.as_str()]
+        .into_iter()
+        .map(str::trim)
+        .find(|title| !title.is_empty())
+        .unwrap_or_default();
+    if track.album.trim().is_empty() && !album_title.is_empty() {
+        track.album = album_title.to_owned();
+    }
+    track
+}
+
 fn playlist_page(
     route: &super::model::Route,
     playlist: &Value,
@@ -883,8 +911,9 @@ fn playlist_page(
     authoritative_total: usize,
 ) -> Page {
     let description = value_string(playlist.get("description"));
+    let title = value_string(playlist.get("title"));
     Page {
-        title: value_string(playlist.get("title")),
+        title: title.clone(),
         subtitle: value_string(playlist.pointer("/user/username")),
         album_info: matches!(route.category, Category::Albums | Category::Playlists)
             .then(|| crate::search::soundcloud_album_info(playlist, &description)),
@@ -897,7 +926,11 @@ fn playlist_page(
         raw_loaded_count: authoritative_total,
         normalized_count: tracks.len(),
         platform: detail_platform(&route.action),
-        tracks: tracks.iter().map(track).collect(),
+        service_url: crate::search::soundcloud_service_url(playlist),
+        tracks: tracks
+            .iter()
+            .map(|value| album_member(track(value), route, &title))
+            .collect(),
         ..Page::default()
     }
 }
@@ -1993,6 +2026,7 @@ mod tests {
             subtitle: route.subtitle,
             artwork: route.artwork,
             release_date: route.release_date,
+            service_url: String::new(),
         };
         assert_eq!(
             crate::search::detail_metadata(&detail),
@@ -2016,6 +2050,7 @@ mod tests {
             "title": "Album",
             "description": "Description",
             "display_date": "2020-09-25T00:00:00Z",
+            "permalink_url": "https://soundcloud.com/artist/sets/album",
             "user": {"username": "Artist"}
         });
         let tracks = [json!({
@@ -2025,6 +2060,10 @@ mod tests {
             "user": {"username": "Artist"}
         })];
         let page = playlist_page(&album_route, &playlist, &tracks, 1);
+        // Album tracks inherit the album identity so menus away from the
+        // album page (the player bar, the queue) resolve the album.
+        assert_eq!(page.tracks[0].album_id, "11");
+        assert_eq!(page.tracks[0].album, "Album");
         let release_date = page
             .album_info
             .as_ref()
@@ -2042,6 +2081,7 @@ mod tests {
                 .as_ref()
                 .map(|info| info.release_date.clone())
                 .unwrap_or(album_route.release_date.clone()),
+            service_url: page.service_url.clone(),
         };
         assert_eq!(
             crate::search::detail_metadata(&detail),
@@ -2054,6 +2094,14 @@ mod tests {
             ..album_route
         };
         let playlist_detail = playlist_page(&playlist_route, &playlist, &tracks, 1);
+        // Playlist pages never stamp a collection identity onto tracks.
+        assert_eq!(playlist_detail.tracks[0].album_id, "");
+        // The page keeps the canonical permalink for the detail more menu.
+        assert_eq!(page.service_url, "https://soundcloud.com/artist/sets/album");
+        assert_eq!(
+            playlist_detail.service_url,
+            "https://soundcloud.com/artist/sets/album"
+        );
         assert_eq!(playlist_detail.description, "Description");
         assert_eq!(
             playlist_detail
