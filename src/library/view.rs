@@ -314,7 +314,6 @@ pub(crate) struct LibraryView {
     pub(super) similar_artists: super::deezer_similar::SimilarArtistsNavigation,
     pub(super) artist_section_expanded: Option<usize>,
     pub(super) flow_mode: FlowMode,
-    pub(super) flow_catalog_option: Option<String>,
     flow_detail_kind: DeezerFlowKind,
     discover_flow_return: Option<(Service, Category)>,
     pub(super) external_track_navigation:
@@ -741,7 +740,6 @@ impl LibraryView {
             similar_artists: super::deezer_similar::SimilarArtistsNavigation::default(),
             artist_section_expanded: None,
             flow_mode: FlowMode::Default,
-            flow_catalog_option: None,
             flow_detail_kind: DeezerFlowKind::Flow,
             discover_flow_return: None,
             external_track_navigation: None,
@@ -1640,11 +1638,6 @@ impl LibraryView {
         );
     }
 
-    pub(crate) fn select_flow_catalog_option(&mut self, option_id: String, cx: &mut Context<Self>) {
-        self.flow_catalog_option = Some(option_id);
-        cx.notify();
-    }
-
     pub(crate) fn extend_playback_queue(
         &mut self,
         playback: Entity<PlaybackModel>,
@@ -2181,7 +2174,6 @@ impl LibraryView {
         self.invalidate_playback_actions();
         self.similar_artists.reset();
         self.artist_section_expanded = None;
-        self.flow_catalog_option = None;
         if !preserve_visible_page {
             self.clear_track_list_states();
             self.reset_detail_scroll();
@@ -2388,7 +2380,6 @@ impl LibraryView {
         self.cancel_library_load();
         self.cancel_detail_load();
         self.invalidate_playback_actions();
-        self.flow_catalog_option = None;
         if route.action == "flowTracks" {
             self.flow_mode = FlowMode::Default;
             if self.discover_flow_return.is_none() {
@@ -2440,7 +2431,6 @@ impl LibraryView {
         self.category_motion = SegmentedSelectorMotion::default();
         self.similar_artists.reset();
         self.artist_section_expanded = None;
-        self.flow_catalog_option = None;
         self.flow_detail_kind = if smart_mix {
             DeezerFlowKind::SmartMix
         } else {
@@ -2465,7 +2455,6 @@ impl LibraryView {
 
     pub(crate) fn back(&mut self, cx: &mut Context<Self>) {
         self.invalidate_playback_actions();
-        self.flow_catalog_option = None;
         self.artist_section_expanded = None;
         self.clear_track_list_states();
         if self.discover_flow_returns_to_discover()

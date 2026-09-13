@@ -1,8 +1,6 @@
 use super::{
     client::{DeezerSession, LibraryClient, confirm_true, valid_deezer_id},
-    model::{
-        Card, Category, FlowCatalog, FlowCatalogMembership, FlowCatalogOption, Track, value_string,
-    },
+    model::{Card, Category, Track, value_string},
     normalize,
 };
 use crate::search::{DeezerArl, Provider};
@@ -484,58 +482,6 @@ fn parse_related_artists(results: &Value) -> DeezerRelatedArtists {
     }
 }
 
-pub(super) fn parse_flow_catalog(section: &Value) -> Option<FlowCatalog> {
-    let filter = section.get("filter")?;
-    let options = filter
-        .get("options")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|option| {
-            let id = value_string(option.get("id"));
-            (!id.is_empty()).then(|| FlowCatalogOption {
-                id,
-                label: value_string(option.get("label")),
-            })
-        })
-        .collect::<Vec<_>>();
-    if options.is_empty() {
-        return None;
-    }
-    let memberships = section
-        .get("items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("flow"))
-        .filter_map(|item| {
-            let config_id = value_string(item.pointer("/data/id"));
-            if config_id.is_empty() {
-                return None;
-            }
-            let option_ids = item
-                .get("filter_option_ids")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned)
-                .collect();
-            Some(FlowCatalogMembership {
-                config_id,
-                option_ids,
-            })
-        })
-        .collect();
-    Some(FlowCatalog {
-        default_option_id: value_string(filter.get("default_option_id")),
-        options,
-        memberships,
-    })
-}
-
 fn valid_flow_config_id(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty()
@@ -826,45 +772,5 @@ mod tests {
                 .contains("usable")
         );
         assert!(parse_smart_tracklist(&json!({}), "inspired-by-3").is_err());
-    }
-
-    #[test]
-    fn flow_catalog_preserves_filter_options_and_per_card_membership() {
-        let catalog = parse_flow_catalog(&json!({
-            "filter": {
-                "default_option_id": "flow_config_mood",
-                "options": [
-                    { "id": "flow_config_mood", "label": "Moods" },
-                    { "id": "flow_config_genre", "label": "Genres" }
-                ]
-            },
-            "items": [
-                {
-                    "type": "flow",
-                    "data": { "id": "default" },
-                    "filter_option_ids": ["flow_config_mood", "flow_config_genre"]
-                },
-                {
-                    "type": "flow",
-                    "data": { "id": "genre-rock" },
-                    "filter_option_ids": ["flow_config_genre"]
-                }
-            ]
-        }))
-        .unwrap();
-        assert_eq!(catalog.default_option_id, "flow_config_mood");
-        assert_eq!(catalog.options[0].label, "Moods");
-        assert_eq!(catalog.options[1].label, "Genres");
-        assert_eq!(
-            catalog.option_ids_for("default"),
-            ["flow_config_mood", "flow_config_genre"]
-        );
-        assert_eq!(catalog.option_ids_for("genre-rock"), ["flow_config_genre"]);
-    }
-
-    #[test]
-    fn flow_catalog_is_absent_when_server_options_are_missing() {
-        assert!(parse_flow_catalog(&json!({ "items": [] })).is_none());
-        assert!(parse_flow_catalog(&json!({ "filter": { "options": [] }, "items": [] })).is_none());
     }
 }

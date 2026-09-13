@@ -1,17 +1,15 @@
-use gpui::{AnyElement, Entity, FontWeight, KeyDownEvent, Window, div, prelude::*, px, rgb, rgba};
+use gpui::{AnyElement, Entity, div, prelude::*, px, rgb};
 use gpui_component::{Icon, Sizable, button::Button, button::ButtonVariants, menu::DropdownMenu};
 
 use crate::app_tooltip::AppTooltipExt;
-use crate::theme::{BORDER, FOREGROUND, MUTED, SURFACE_RAISED};
+use crate::theme::MUTED;
 
 use super::{
     deezer_radio::FlowMode,
-    model::{Category, FlowCatalog, FlowCatalogOption, Page, Service, is_detail_route},
+    model::{Category, Service, is_detail_route},
     view::LibraryView,
 };
 
-const SELECTED_BORDER: u32 = 0x818cf8;
-const SELECTED_BACKGROUND: u32 = 0x6366f1;
 const FLOW_MODE_SELECTOR_ID: &str = "library-flow-mode-selector";
 const FLOW_MODE_TOOLTIP_ID: &str = "library-flow-mode-tooltip";
 const QUEUE_FLOW_MODE_SELECTOR_ID: &str = "queue-flow-mode-selector";
@@ -25,7 +23,6 @@ enum FlowModeTarget {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FlowControlKind {
-    Catalog,
     Mode,
     None,
 }
@@ -39,9 +36,7 @@ pub(super) fn control_kind(
     if service != Service::Deezer || category != Category::Flow {
         return FlowControlKind::None;
     }
-    if !is_detail_route(route_depth) && action == "flow" {
-        FlowControlKind::Catalog
-    } else if is_detail_route(route_depth) && action == "flowTracks" {
+    if is_detail_route(route_depth) && action == "flowTracks" {
         FlowControlKind::Mode
     } else {
         FlowControlKind::None
@@ -74,35 +69,6 @@ fn hide_smart_mix_mode_control(
     }
 }
 
-pub(super) fn catalog_options(catalog: &FlowCatalog) -> Vec<&FlowCatalogOption> {
-    catalog
-        .options
-        .iter()
-        .filter(|option| matches!(option.label.as_str(), "Moods" | "Genres"))
-        .collect()
-}
-
-pub(super) fn selected_catalog_option_id<'a>(
-    catalog: &'a FlowCatalog,
-    selected: Option<&str>,
-) -> Option<&'a str> {
-    let options = catalog_options(catalog);
-    selected
-        .and_then(|selected| {
-            options
-                .iter()
-                .find(|option| option.id == selected)
-                .map(|option| option.id.as_str())
-        })
-        .or_else(|| {
-            options
-                .iter()
-                .find(|option| option.id == catalog.default_option_id)
-                .map(|option| option.id.as_str())
-        })
-        .or_else(|| options.first().map(|option| option.id.as_str()))
-}
-
 pub(super) fn flow_mode_options() -> [(FlowMode, &'static str); 2] {
     [
         (FlowMode::Default, "Default"),
@@ -127,35 +93,10 @@ pub(super) fn flow_mode_for_label(label: &str) -> Option<FlowMode> {
 
 pub(super) fn render_page_controls(
     view: &LibraryView,
-    page: &Page,
     host: &Entity<LibraryView>,
 ) -> Option<AnyElement> {
-    render_page_controls_snapshot(
-        flow_control_kind(view),
-        view.flow_mode,
-        view.flow_mode_context_label(),
-        view.flow_catalog_option.as_deref(),
-        page,
-        host,
-    )
-}
-
-pub(super) fn render_page_controls_snapshot(
-    kind: FlowControlKind,
-    flow_mode: FlowMode,
-    mode_label: &'static str,
-    flow_catalog_option: Option<&str>,
-    page: &Page,
-    host: &Entity<LibraryView>,
-) -> Option<AnyElement> {
-    match kind {
-        FlowControlKind::Catalog => page
-            .flow_catalog
-            .as_ref()
-            .and_then(|catalog| render_catalog_selector(flow_catalog_option, catalog, host)),
-        FlowControlKind::Mode => Some(render_mode_selector(flow_mode, host, mode_label)),
-        FlowControlKind::None => None,
-    }
+    (flow_control_kind(view) == FlowControlKind::Mode)
+        .then(|| render_mode_selector(view.flow_mode, host, view.flow_mode_context_label()))
 }
 
 pub(crate) fn render_mode_selector(
@@ -260,154 +201,9 @@ fn render_mode_selector_with_ids(
         .into_any_element()
 }
 
-fn render_catalog_selector(
-    flow_catalog_option: Option<&str>,
-    catalog: &FlowCatalog,
-    host: &Entity<LibraryView>,
-) -> Option<AnyElement> {
-    let selected = selected_catalog_option_id(catalog, flow_catalog_option)?;
-    let options = catalog_options(catalog)
-        .into_iter()
-        .map(|option| (option.id.clone(), option.label.clone()))
-        .collect::<Vec<_>>();
-    Some(render_segmented(
-        "library-flow-catalog-selector",
-        options,
-        Some(selected.to_owned()),
-        host,
-        |host, option_id, app| {
-            host.update(app, |this, cx| {
-                this.select_flow_catalog_option(option_id, cx)
-            });
-        },
-    ))
-}
-
-fn render_segmented<T, F>(
-    id: &'static str,
-    options: Vec<(T, String)>,
-    selected: Option<T>,
-    host: &Entity<LibraryView>,
-    on_select: F,
-) -> AnyElement
-where
-    T: Clone + Eq + 'static,
-    F: Fn(Entity<LibraryView>, T, &mut gpui::App) + Copy + 'static,
-{
-    div()
-        .id(id)
-        .w_full()
-        .flex()
-        .flex_wrap()
-        .gap(px(3.))
-        .p(px(3.))
-        .rounded(px(6.))
-        .border_1()
-        .border_color(rgb(BORDER))
-        .bg(rgb(SURFACE_RAISED))
-        .role(gpui::Role::TabList)
-        .aria_label(if id == "library-flow-mode-selector" {
-            "Flow mode"
-        } else {
-            "Flow catalog"
-        })
-        .children(options.into_iter().map(|(value, label)| {
-            let active = selected.as_ref() == Some(&value);
-            let click_value = value.clone();
-            let key_value = value.clone();
-            let click_host = host.clone();
-            let key_host = host.clone();
-            div()
-                .id(format!("{id}-{label}"))
-                .min_w_0()
-                .flex_1()
-                .h(px(30.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(4.))
-                .when(active, |this| this.rounded(px(6.)))
-                .border_1()
-                .border_color(if active {
-                    rgba((SELECTED_BORDER << 8) | 0xd9)
-                } else {
-                    rgba(0x00000000)
-                })
-                .bg(if active {
-                    rgba((SELECTED_BACKGROUND << 8) | 0x3d)
-                } else {
-                    rgba(0x00000000)
-                })
-                .text_color(rgb(if active { FOREGROUND } else { MUTED }))
-                .text_size(px(12.5))
-                .font_weight(FontWeight::MEDIUM)
-                .cursor_pointer()
-                .role(gpui::Role::Tab)
-                .aria_label(label.clone())
-                .aria_selected(active)
-                .focusable()
-                .tab_stop(true)
-                .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
-                .hover(|style| style.text_color(rgb(FOREGROUND)))
-                .on_click(move |_, _, app| on_select(click_host.clone(), click_value.clone(), app))
-                .on_key_down(move |event: &KeyDownEvent, window: &mut Window, app| {
-                    if crate::tab_keyboard::is_activation_key(event.keystroke.key.as_str()) {
-                        window.prevent_default();
-                        on_select(key_host.clone(), key_value.clone(), app);
-                    }
-                })
-        }))
-        .into_any_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::model::{FlowCatalogMembership, FlowCatalogOption};
-
-    fn catalog() -> FlowCatalog {
-        FlowCatalog {
-            default_option_id: "moods".into(),
-            options: vec![
-                FlowCatalogOption {
-                    id: "moods".into(),
-                    label: "Moods".into(),
-                },
-                FlowCatalogOption {
-                    id: "genres".into(),
-                    label: "Genres".into(),
-                },
-            ],
-            memberships: vec![FlowCatalogMembership {
-                config_id: "mix".into(),
-                option_ids: vec!["moods".into(), "genres".into()],
-            }],
-        }
-    }
-
-    #[test]
-    fn default_selection_uses_metadata_default_option() {
-        assert_eq!(selected_catalog_option_id(&catalog(), None), Some("moods"));
-    }
-
-    #[test]
-    fn invalid_selection_falls_back_to_metadata_default() {
-        assert_eq!(
-            selected_catalog_option_id(&catalog(), Some("missing")),
-            Some("moods")
-        );
-    }
-
-    #[test]
-    fn catalog_labels_are_exact_and_provider_order_is_preserved() {
-        let catalog = catalog();
-        let labels = catalog_options(&catalog)
-            .into_iter()
-            .map(|option| option.label.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(labels, ["Moods", "Genres"]);
-    }
 
     #[test]
     fn flow_mode_labels_map_to_the_exact_modes() {
@@ -447,7 +243,7 @@ mod tests {
         let trigger = source
             .split("fn render_mode_selector_with_ids")
             .nth(1)
-            .and_then(|source| source.split("fn render_catalog_selector").next())
+            .and_then(|source| source.split("#[cfg(test)]").next())
             .expect("mode selector render function");
         assert!(trigger.contains(".ghost()"));
         assert!(!trigger.contains(".hover("));
@@ -459,7 +255,7 @@ mod tests {
         let trigger = source
             .split("fn render_mode_selector_with_ids")
             .nth(1)
-            .and_then(|source| source.split("fn render_catalog_selector").next())
+            .and_then(|source| source.split("#[cfg(test)]").next())
             .expect("mode selector render function");
         assert!(trigger.contains(".app_tooltip(mode_label)"));
         assert!(trigger.contains(".aria_label(mode_label)"));
@@ -489,10 +285,10 @@ mod tests {
     }
 
     #[test]
-    fn catalog_and_mode_controls_are_visible_on_their_respective_routes() {
+    fn mode_control_is_visible_only_on_flow_detail_routes() {
         assert_eq!(
             control_kind(Service::Deezer, Category::Flow, "flow", 1),
-            FlowControlKind::Catalog
+            FlowControlKind::None
         );
         assert_eq!(
             control_kind(Service::Deezer, Category::Flow, "flowTracks", 2),
@@ -523,13 +319,6 @@ mod tests {
                 &crate::playback::DeezerFlowKind::Flow,
             ),
             FlowControlKind::Mode
-        );
-        assert_eq!(
-            hide_smart_mix_mode_control(
-                FlowControlKind::Catalog,
-                &crate::playback::DeezerFlowKind::SmartMix,
-            ),
-            FlowControlKind::Catalog
         );
     }
 }

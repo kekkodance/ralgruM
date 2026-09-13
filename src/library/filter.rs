@@ -1,34 +1,8 @@
-use super::{
-    flow_controls,
-    model::{Card, Page, Section, Track},
-};
+use super::model::{Card, Page, Section, Track};
 
 pub(crate) fn filtered_page(page: &Page, query: &str) -> Page {
-    filtered_page_with_catalog(page, query, None, false)
-}
-
-pub(crate) fn filtered_flow_page(
-    page: &Page,
-    query: &str,
-    selected_option_id: Option<&str>,
-) -> Page {
-    filtered_page_with_catalog(page, query, selected_option_id, true)
-}
-
-fn filtered_page_with_catalog(
-    page: &Page,
-    query: &str,
-    selected_option_id: Option<&str>,
-    apply_catalog: bool,
-) -> Page {
     let query = normalize(query);
-    let catalog_option_id = apply_catalog.then(|| {
-        page.flow_catalog.as_ref().and_then(|catalog| {
-            flow_controls::selected_catalog_option_id(catalog, selected_option_id)
-        })
-    });
-    let catalog_option_id = catalog_option_id.flatten();
-    if query.is_empty() && catalog_option_id.is_none() {
+    if query.is_empty() {
         return page.clone();
     }
 
@@ -36,19 +10,7 @@ fn filtered_page_with_catalog(
     let filter_cards = |cards: &[Card]| {
         cards
             .iter()
-            .filter(|card| {
-                catalog_option_id.is_none_or(|option_id| {
-                    page.flow_catalog.as_ref().is_some_and(|catalog| {
-                        catalog
-                            .option_ids_for(&card.id)
-                            .iter()
-                            .any(|candidate| candidate == option_id)
-                    })
-                })
-            })
-            .filter(|card| {
-                query.is_empty() || matches_fields(&terms, &[&card.title, &card.subtitle])
-            })
+            .filter(|card| matches_fields(&terms, &[&card.title, &card.subtitle]))
             .cloned()
             .collect()
     };
@@ -106,20 +68,11 @@ fn filtered_page_with_catalog(
         tracks,
         cards,
         sections,
-        flow_catalog: page.flow_catalog.clone(),
         next_flow_tuner: page.next_flow_tuner.clone(),
         resolved_smart_mix_title: page.resolved_smart_mix_title.clone(),
         clear_remaining_tracks: page.clear_remaining_tracks,
-        empty_title: if query.is_empty() {
-            "No mixes in this selection".into()
-        } else {
-            "No matches on this page".into()
-        },
-        empty_description: if query.is_empty() {
-            "No Flow mixes belong to the selected catalog option.".into()
-        } else {
-            "Nothing here matches your search query.".into()
-        },
+        empty_title: "No matches on this page".into(),
+        empty_description: "Nothing here matches your search query.".into(),
     };
     filtered.total = filtered.displayed_total();
     filtered
@@ -177,61 +130,6 @@ fn normalize(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::model::{FlowCatalog, FlowCatalogMembership, FlowCatalogOption};
-
-    fn flow_page() -> Page {
-        Page {
-            cards: vec![
-                Card {
-                    id: "mood-dance".into(),
-                    title: "Dance Flow".into(),
-                    subtitle: "Moods".into(),
-                    ..Card::default()
-                },
-                Card {
-                    id: "genre-rock".into(),
-                    title: "Rock Flow".into(),
-                    subtitle: "Genres".into(),
-                    ..Card::default()
-                },
-                Card {
-                    id: "genre-pop".into(),
-                    title: "Pop Flow".into(),
-                    subtitle: "Genres".into(),
-                    ..Card::default()
-                },
-            ],
-            flow_catalog: Some(FlowCatalog {
-                default_option_id: "moods".into(),
-                options: vec![
-                    FlowCatalogOption {
-                        id: "moods".into(),
-                        label: "Moods".into(),
-                    },
-                    FlowCatalogOption {
-                        id: "genres".into(),
-                        label: "Genres".into(),
-                    },
-                ],
-                memberships: vec![
-                    FlowCatalogMembership {
-                        config_id: "mood-dance".into(),
-                        option_ids: vec!["moods".into()],
-                    },
-                    FlowCatalogMembership {
-                        config_id: "genre-rock".into(),
-                        option_ids: vec!["genres".into()],
-                    },
-                    FlowCatalogMembership {
-                        config_id: "genre-pop".into(),
-                        option_ids: vec!["genres".into()],
-                    },
-                ],
-            }),
-            total: 3,
-            ..Page::default()
-        }
-    }
 
     #[test]
     fn filters_page_items_without_mutating_the_source() {
@@ -447,37 +345,5 @@ mod tests {
         assert!(filtered.sections[0].empty_message.is_empty());
         assert!(filtered.is_empty());
         assert_eq!(filtered.total, 0);
-    }
-
-    #[test]
-    fn flow_catalog_filter_uses_each_cards_provider_membership() {
-        let filtered = filtered_flow_page(&flow_page(), "", Some("genres"));
-
-        assert_eq!(
-            filtered
-                .cards
-                .iter()
-                .map(|card| card.id.as_str())
-                .collect::<Vec<_>>(),
-            ["genre-rock", "genre-pop"]
-        );
-        assert_eq!(filtered.total, 2);
-    }
-
-    #[test]
-    fn flow_catalog_and_text_filters_are_combined() {
-        let filtered = filtered_flow_page(&flow_page(), "rock", Some("genres"));
-
-        assert_eq!(filtered.cards.len(), 1);
-        assert_eq!(filtered.cards[0].id, "genre-rock");
-        assert_eq!(filtered.total, 1);
-    }
-
-    #[test]
-    fn invalid_flow_selection_falls_back_to_the_catalog_default_for_filtering() {
-        let filtered = filtered_flow_page(&flow_page(), "", Some("not-an-option"));
-
-        assert_eq!(filtered.cards.len(), 1);
-        assert_eq!(filtered.cards[0].id, "mood-dance");
     }
 }

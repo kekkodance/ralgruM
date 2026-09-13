@@ -326,7 +326,6 @@ pub(crate) struct Page {
     pub tracks: Vec<Track>,
     pub cards: Vec<Card>,
     pub sections: Vec<Section>,
-    pub flow_catalog: Option<FlowCatalog>,
     /// Continuation metadata returned by a Deezer radio request.
     pub next_flow_tuner: Option<super::deezer_radio::FlowTuner>,
     /// Title supplied by a Deezer SmartMix detail endpoint, if present.
@@ -334,35 +333,6 @@ pub(crate) struct Page {
     pub clear_remaining_tracks: bool,
     pub empty_title: String,
     pub empty_description: String,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct FlowCatalog {
-    pub(crate) default_option_id: String,
-    pub(crate) options: Vec<FlowCatalogOption>,
-    pub(crate) memberships: Vec<FlowCatalogMembership>,
-}
-
-impl FlowCatalog {
-    pub(crate) fn option_ids_for(&self, config_id: &str) -> &[String] {
-        self.memberships
-            .iter()
-            .find(|membership| membership.config_id == config_id)
-            .map(|membership| membership.option_ids.as_slice())
-            .unwrap_or_default()
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct FlowCatalogOption {
-    pub(crate) id: String,
-    pub(crate) label: String,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct FlowCatalogMembership {
-    pub(crate) config_id: String,
-    pub(crate) option_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]

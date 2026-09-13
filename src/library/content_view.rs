@@ -152,7 +152,7 @@ pub(super) fn render_content(
             let virtualized = page_uses_virtualized_scroll(page);
             if page.is_empty() {
                 let controls = (!promotes_flow_detail_to_main_header(view))
-                    .then(|| flow_controls::render_page_controls(view, page, &cx.entity()))
+                    .then(|| flow_controls::render_page_controls(view, &cx.entity()))
                     .flatten();
                 let empty = if is_provider_detail(view) {
                     render_collection_empty(view.state.route().category == Category::Playlists)
@@ -188,12 +188,7 @@ fn filtered_page_for_view<'a>(
     cx: &Context<LibraryView>,
 ) -> Cow<'a, Page> {
     let query = view.query(cx);
-    if flow_controls::flow_control_kind(view) == flow_controls::FlowControlKind::Catalog {
-        let selected = page.flow_catalog.as_ref().and_then(|catalog| {
-            flow_controls::selected_catalog_option_id(catalog, view.flow_catalog_option.as_deref())
-        });
-        Cow::Owned(super::filter::filtered_flow_page(page, &query, selected))
-    } else if query.trim().is_empty() {
+    if query.trim().is_empty() {
         Cow::Borrowed(page)
     } else {
         Cow::Owned(super::filter::filtered_page(page, &query))
@@ -202,7 +197,7 @@ fn filtered_page_for_view<'a>(
 
 fn render_empty_page(view: &LibraryView, page: &Page, cx: &mut Context<LibraryView>) -> AnyElement {
     let controls = (!promotes_flow_detail_to_main_header(view))
-        .then(|| flow_controls::render_page_controls(view, page, &cx.entity()))
+        .then(|| flow_controls::render_page_controls(view, &cx.entity()))
         .flatten();
     let empty = if is_provider_detail(view) {
         render_collection_empty(view.state.route().category == Category::Playlists)
@@ -386,11 +381,6 @@ fn render_page(
     narrow: bool,
     cx: &mut Context<LibraryView>,
 ) -> AnyElement {
-    let host = cx.entity();
-    let controls = (flow_controls::flow_control_kind(view)
-        == flow_controls::FlowControlKind::Catalog)
-        .then(|| flow_controls::render_page_controls(view, page, &host))
-        .flatten();
     let route = view.state.route();
     let removal = if route.is_local_playlist_detail() && page.playlist_removal_proven() {
         Some((route.id.clone(), true, true))
@@ -458,7 +448,6 @@ fn render_page(
         } else {
             14.
         }))
-        .when_some(controls, |this, controls| this.child(controls))
         .when_some(body, |this, body| this.child(body))
         .children(
             page.sections
@@ -1333,31 +1322,6 @@ fn render_section_page_list(
     let mut builders = Vec::<super::virtualization::PageItemBuilder>::new();
     let mut page_items = Vec::<super::virtualization::PageItem>::new();
     let mut item_identities = Vec::<String>::new();
-    if flow_controls::flow_control_kind(view) == flow_controls::FlowControlKind::Catalog {
-        let controls_page = Arc::new(page.clone());
-        let controls_host = host.clone();
-        let controls_kind = flow_controls::flow_control_kind(view);
-        let controls_mode = view.flow_mode;
-        let controls_mode_label = view.flow_mode_context_label();
-        let controls_catalog_option = view.flow_catalog_option.clone();
-        page_items.push(super::virtualization::PageItem::Header(builders.len()));
-        item_identities.push(format!(
-            "controls:{}:{}",
-            controls_mode as u8,
-            controls_catalog_option.as_deref().unwrap_or_default()
-        ));
-        builders.push(Rc::new(move |_, _app| {
-            flow_controls::render_page_controls_snapshot(
-                controls_kind,
-                controls_mode,
-                controls_mode_label,
-                controls_catalog_option.as_deref(),
-                &controls_page,
-                &controls_host,
-            )
-            .unwrap_or_else(|| div().into_any_element())
-        }));
-    }
 
     let removal = if route.is_local_playlist_detail() && page.playlist_removal_proven() {
         Some((route.id.clone(), true, true))
@@ -1392,16 +1356,7 @@ fn render_section_page_list(
             )
         }));
     }
-    let filter_identity =
-        if flow_controls::flow_control_kind(view) == flow_controls::FlowControlKind::Catalog {
-            format!(
-                "{}:{}",
-                view.query(cx),
-                view.flow_catalog_option.as_deref().unwrap_or_default()
-            )
-        } else {
-            view.query(cx)
-        };
+    let filter_identity = view.query(cx);
     let content_key =
         super::virtualization::content_identity(&route_key, &filter_identity, ordered_rows);
     let card_layout = super::virtualization::CardGridLayout::new_for_visual(

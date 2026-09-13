@@ -577,13 +577,11 @@ impl LibraryClient {
             .filter(|item| item.get("type").and_then(Value::as_str) == Some("flow"))
             .filter_map(flow_card)
             .collect::<Vec<_>>();
-        let flow_catalog = super::deezer_radio::parse_flow_catalog(section);
         Ok(Page {
             title: value_string(section.get("title")),
             description: root_copy(Service::Deezer, Category::Flow).1.into(),
             total: cards.len(),
             cards,
-            flow_catalog,
             count_noun: "mix".into(),
             show_count: false,
             empty_title: "Flow is unavailable".into(),
