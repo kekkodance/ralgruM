@@ -8,8 +8,8 @@ use crate::{
     assets::{LocalIcon, local_icon},
     browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
     collection_detail::{
-        DETAIL_CARD_GRID_ROW_HEIGHT_EXTRA_PX, collection_card_carousel_content,
-        collection_card_frame,
+        DETAIL_CARD_CAROUSEL_INSET_PX, DETAIL_CARD_GRID_ROW_HEIGHT_EXTRA_PX,
+        collection_card_carousel_content, collection_card_frame,
     },
     music_ui::{self, CardCarouselState},
     theme::{BORDER, DEEZER, FOREGROUND, MUTED, SOUNDCLOUD, SURFACE, SURFACE_RAISED},
@@ -23,10 +23,11 @@ use crate::search::{
 
 const DISCOVER_CARD_PREVIEW_LIMIT: usize = 24;
 const DISCOVER_SECTION_GAP_PX: f32 = 22.;
-const DISCOVER_SECTION_TITLE_HEIGHT_PX: f32 = 18.;
-const DISCOVER_SECTION_SUBTITLE_HEIGHT_PX: f32 = 14.;
+const DISCOVER_SECTION_TITLE_HEIGHT_PX: f32 = 20.;
+const DISCOVER_SECTION_SUBTITLE_HEIGHT_PX: f32 = 16.;
 const DISCOVER_SECTION_TEXT_GAP_PX: f32 = 2.;
 const DISCOVER_SECTION_HEADING_GAP_PX: f32 = 10.;
+const DISCOVER_SECTION_CAROUSEL_INSET_PX: f32 = DETAIL_CARD_CAROUSEL_INSET_PX;
 const DISCOVER_SECTION_CAROUSEL_RESERVE_PX: f32 = music_ui::CAROUSEL_CONTENT_BOTTOM_PADDING;
 const DISCOVER_PROVIDER_ICON_OPTICAL_OFFSET_PX: f32 = 0.;
 const DISCOVER_CHANNEL_HEADING_HEIGHT_PX: f32 = 42.;
@@ -76,21 +77,21 @@ struct DiscoverSectionGeometry {
     row_height: f32,
 }
 
-fn section_heading_height(has_subtitle: bool) -> f32 {
+/// Every section heading reserves the subtitle line, empty when absent, so
+/// subtitled and plain sections measure identical heading heights.
+fn section_heading_height() -> f32 {
     DISCOVER_SECTION_TITLE_HEIGHT_PX
-        + if has_subtitle {
-            DISCOVER_SECTION_TEXT_GAP_PX + DISCOVER_SECTION_SUBTITLE_HEIGHT_PX
-        } else {
-            0.
-        }
+        + DISCOVER_SECTION_TEXT_GAP_PX
+        + DISCOVER_SECTION_SUBTITLE_HEIGHT_PX
 }
 
-fn section_geometry(narrow: bool, has_subtitle: bool) -> DiscoverSectionGeometry {
+fn section_geometry(narrow: bool) -> DiscoverSectionGeometry {
     let (card_width, _) = music_ui::card_row_metrics(narrow);
     let card_row_height = card_width + DETAIL_CARD_GRID_ROW_HEIGHT_EXTRA_PX;
-    let heading_height = section_heading_height(has_subtitle);
+    let heading_height = section_heading_height();
     let visual_height = heading_height
         + DISCOVER_SECTION_HEADING_GAP_PX
+        + DISCOVER_SECTION_CAROUSEL_INSET_PX
         + card_row_height
         + DISCOVER_SECTION_CAROUSEL_RESERVE_PX;
     DiscoverSectionGeometry {
@@ -103,12 +104,8 @@ fn section_geometry(narrow: bool, has_subtitle: bool) -> DiscoverSectionGeometry
     }
 }
 
-fn source_uses_full_loading_geometry(source: Source) -> bool {
-    !matches!(source, Source::SoundCloud)
-}
-
-fn loading_row_count(available_height: f32, narrow: bool, has_subtitle: bool) -> usize {
-    let estimate = section_geometry(narrow, has_subtitle).row_height.max(1.);
+fn loading_row_count(available_height: f32, narrow: bool) -> usize {
+    let estimate = section_geometry(narrow).row_height.max(1.);
     let visible_rows = (available_height.max(estimate) / estimate).ceil() as usize;
     visible_rows.max(1) + DISCOVER_LOADING_OVERDRAW_ROWS
 }
@@ -134,8 +131,8 @@ pub(crate) fn render(
                 append_sections(view, &channel.sections, &mut entries, &mut content_identity);
             }
             DiscoverChannelStatus::Loading => {
-                entries.extend((0..loading_row_count(available_height, narrow, true)).map(
-                    |index| {
+                entries.extend(
+                    (0..loading_row_count(available_height, narrow)).map(|index| {
                         let scroll_id =
                             format!("discover-channel-loading:{}:{index}", channel.slug);
                         DiscoverFeedEntry::ChannelLoading {
@@ -143,8 +140,8 @@ pub(crate) fn render(
                             index,
                             carousel: view.card_scroll_handle(&scroll_id),
                         }
-                    },
-                ));
+                    }),
+                );
             }
             DiscoverChannelStatus::Failed(error) => {
                 entries.push(DiscoverFeedEntry::ChannelStatus {
@@ -224,12 +221,11 @@ fn render_feed(
     content_identity: String,
     cache_identity: String,
 ) -> AnyElement {
-    // Rows are pinned to the with-subtitle geometry so the uniform height
-    // hint matches what every row actually measures. Sections without a
-    // subtitle keep the extra room as bottom spacing, and the scrollbar
-    // never corrects mid-scroll because rendered heights cannot diverge
-    // from the estimate.
-    let row_height = section_geometry(narrow, true).row_height;
+    // Rows are pinned to the unified section geometry so the uniform height
+    // hint matches what every row actually measures. Headings and card
+    // captions reserve their subtitle lines, so section and loading rows fill
+    // the pinned height exactly and the scrollbar never corrects mid-scroll.
+    let row_height = section_geometry(narrow).row_height;
     let (state, browser_scroll) = view.discover_feed_state(
         &cache_identity,
         &content_identity,
@@ -290,11 +286,7 @@ fn append_loading_overdraw(
     if loading_providers.is_empty() {
         return;
     }
-    let target = loading_row_count(
-        available_height,
-        narrow,
-        source_uses_full_loading_geometry(source),
-    );
+    let target = loading_row_count(available_height, narrow);
     let current = entries
         .iter()
         .filter(|entry| matches!(entry, DiscoverFeedEntry::Loading { .. }))
@@ -449,7 +441,9 @@ fn render_entry(
     };
     let pins_height = matches!(
         entry,
-        DiscoverFeedEntry::Section { .. } | DiscoverFeedEntry::Loading { .. }
+        DiscoverFeedEntry::Section { .. }
+            | DiscoverFeedEntry::Loading { .. }
+            | DiscoverFeedEntry::ChannelLoading { .. }
     );
     gpui::div()
         .w_full()
@@ -492,7 +486,7 @@ fn render_section(
     available_width: f32,
     narrow: bool,
 ) -> AnyElement {
-    let geometry = section_geometry(narrow, !section.subtitle.trim().is_empty());
+    let geometry = section_geometry(narrow);
     let card_width = geometry.card_width;
     let (_, row_gap) = music_ui::card_row_metrics(narrow);
     let scroll_id = format!("discover-card-carousel-{}", section.id);
@@ -530,6 +524,9 @@ fn render_section(
 }
 
 fn section_heading(section: &DiscoverSection) -> AnyElement {
+    // The subtitle line is always reserved, empty when absent, so every
+    // section heading measures the same height inside its pinned row.
+    let has_subtitle = !section.subtitle.trim().is_empty();
     gpui::div()
         .flex()
         .items_center()
@@ -555,20 +552,21 @@ fn section_heading(section: &DiscoverSection) -> AnyElement {
                         .min_w_0()
                         .truncate()
                         .text_size(px(15.))
+                        .line_height(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(FOREGROUND))
                         .child(section.title.clone()),
                 )
-                .when(!section.subtitle.trim().is_empty(), |this| {
-                    this.child(
-                        gpui::div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .child(section.subtitle.clone()),
-                    )
-                }),
+                .child(
+                    gpui::div()
+                        .min_w_0()
+                        .truncate()
+                        .h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))
+                        .text_size(px(12.))
+                        .line_height(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))
+                        .text_color(rgb(MUTED))
+                        .when(has_subtitle, |this| this.child(section.subtitle.clone())),
+                ),
         )
         .into_any_element()
 }
@@ -590,8 +588,7 @@ fn render_loading(
     available_width: f32,
     carousel: CardCarouselState,
 ) -> AnyElement {
-    let has_subtitle = skeleton_heading_has_subtitle(provider);
-    let geometry = section_geometry(narrow, has_subtitle);
+    let geometry = section_geometry(narrow);
     let card_width = geometry.card_width;
     let (_, row_gap) = music_ui::card_row_metrics(narrow);
     let cards = (0..DISCOVER_CARD_PREVIEW_LIMIT).map(|card_index| {
@@ -620,20 +617,18 @@ fn render_loading(
                     .child(
                         gpui::div()
                             .w(px(88.))
-                            .h(px(16.))
+                            .h(px(music_ui::COLLECTION_CARD_TITLE_LINE_HEIGHT_PX))
                             .rounded(px(8.))
                             .bg(rgb(SURFACE_RAISED)),
                     )
-                    .when(skeleton_heading_has_subtitle(provider), |this| {
-                        this.child(
-                            gpui::div()
-                                .mt(px(2.))
-                                .w(px(70.))
-                                .h(px(16.))
-                                .rounded(px(8.))
-                                .bg(rgb(SURFACE_RAISED)),
-                        )
-                    }),
+                    .child(
+                        gpui::div()
+                            .mt(px(2.))
+                            .w(px(70.))
+                            .h(px(music_ui::COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))
+                            .rounded(px(8.))
+                            .bg(rgb(SURFACE_RAISED)),
+                    ),
             );
         collection_card_frame(true, narrow, body.into_any_element()).into_any_element()
     });
@@ -670,8 +665,7 @@ fn render_channel_loading(
     available_width: f32,
     carousel: CardCarouselState,
 ) -> AnyElement {
-    let has_subtitle = skeleton_heading_has_subtitle(provider);
-    let geometry = section_geometry(narrow, has_subtitle);
+    let geometry = section_geometry(narrow);
     let card_width = geometry.card_width;
     let (_, row_gap) = music_ui::card_row_metrics(narrow);
     const SKELETON_CARD_COUNT: usize = DISCOVER_CARD_PREVIEW_LIMIT;
@@ -701,26 +695,24 @@ fn render_channel_loading(
                     .child(
                         gpui::div()
                             .w(px(88.))
-                            .h(px(16.))
+                            .h(px(music_ui::COLLECTION_CARD_TITLE_LINE_HEIGHT_PX))
                             .rounded(px(8.))
                             .bg(rgb(SURFACE_RAISED)),
                     )
-                    .when(skeleton_heading_has_subtitle(provider), |this| {
-                        this.child(
-                            gpui::div()
-                                .mt(px(2.))
-                                .min_h(px(16.))
-                                .flex()
-                                .items_center()
-                                .child(
-                                    gpui::div()
-                                        .w(px(70.))
-                                        .h(px(11.))
-                                        .rounded(px(5.5))
-                                        .bg(rgb(SURFACE_RAISED)),
-                                ),
-                        )
-                    }),
+                    .child(
+                        gpui::div()
+                            .mt(px(2.))
+                            .h(px(music_ui::COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))
+                            .flex()
+                            .items_center()
+                            .child(
+                                gpui::div()
+                                    .w(px(70.))
+                                    .h(px(11.))
+                                    .rounded(px(5.5))
+                                    .bg(rgb(SURFACE_RAISED)),
+                            ),
+                    ),
             );
         collection_card_frame(true, narrow, body.into_any_element()).into_any_element()
     });
@@ -751,6 +743,8 @@ fn render_channel_loading(
 }
 
 fn skeleton_heading(provider: Provider) -> AnyElement {
+    // Both text slots are reserved for every provider so skeleton headings
+    // measure exactly the section heading height.
     gpui::div()
         .flex()
         .items_center()
@@ -771,26 +765,32 @@ fn skeleton_heading(provider: Provider) -> AnyElement {
                 .gap(px(DISCOVER_SECTION_TEXT_GAP_PX))
                 .child(
                     gpui::div()
-                        .w(px(104.))
-                        .h(px(15.))
-                        .rounded(px(7.5))
-                        .bg(rgb(SURFACE_RAISED)),
+                        .h(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))
+                        .flex()
+                        .items_center()
+                        .child(
+                            gpui::div()
+                                .w(px(104.))
+                                .h(px(15.))
+                                .rounded(px(7.5))
+                                .bg(rgb(SURFACE_RAISED)),
+                        ),
                 )
-                .when(skeleton_heading_has_subtitle(provider), |this| {
-                    this.child(
-                        gpui::div()
-                            .w(px(78.))
-                            .h(px(12.))
-                            .rounded(px(6.))
-                            .bg(rgb(SURFACE_RAISED)),
-                    )
-                }),
+                .child(
+                    gpui::div()
+                        .h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))
+                        .flex()
+                        .items_center()
+                        .child(
+                            gpui::div()
+                                .w(px(78.))
+                                .h(px(12.))
+                                .rounded(px(6.))
+                                .bg(rgb(SURFACE_RAISED)),
+                        ),
+                ),
         )
         .into_any_element()
-}
-
-const fn skeleton_heading_has_subtitle(provider: Provider) -> bool {
-    matches!(provider, Provider::Deezer)
 }
 
 fn discover_card_carousel(
@@ -1064,14 +1064,37 @@ mod tests {
     }
 
     #[test]
-    fn soundcloud_loading_headings_do_not_reserve_a_subtitle_line() {
-        assert!(skeleton_heading_has_subtitle(Provider::Deezer));
-        assert!(!skeleton_heading_has_subtitle(Provider::SoundCloud));
+    fn loading_headings_reserve_the_subtitle_line_for_every_provider() {
+        // Skeleton headings mirror the real heading geometry for both
+        // providers so loading rows measure the pinned row height exactly.
+        assert_eq!(section_heading_height(), 20. + 2. + 16.);
+        let production = include_str!("view.rs")
+            .split_once("#[cfg(test)]")
+            .map_or(include_str!("view.rs"), |(production, _)| production);
+        assert!(!production.contains("skeleton_heading_has_subtitle"));
+        let heading = production
+            .split("fn skeleton_heading")
+            .nth(1)
+            .and_then(|source| source.split("fn discover_card_carousel").next())
+            .expect("skeleton heading source");
+        assert!(heading.contains(".h(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))"));
+        assert!(heading.contains(".h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))"));
+    }
 
-        let deezer = section_geometry(false, skeleton_heading_has_subtitle(Provider::Deezer));
-        let soundcloud =
-            section_geometry(false, skeleton_heading_has_subtitle(Provider::SoundCloud));
-        assert!(deezer.heading_height > soundcloud.heading_height);
+    #[test]
+    fn section_headings_reserve_the_subtitle_line() {
+        let production = include_str!("view.rs")
+            .split_once("#[cfg(test)]")
+            .map_or(include_str!("view.rs"), |(production, _)| production);
+        let heading = production
+            .split("fn section_heading(section: &DiscoverSection)")
+            .nth(1)
+            .and_then(|source| source.split("fn provider_icon").next())
+            .expect("section heading source");
+        assert!(heading.contains(".line_height(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))"));
+        assert!(heading.contains(".h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))"));
+        assert!(heading.contains(".line_height(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))"));
+        assert!(!heading.contains(".when(!section.subtitle.trim().is_empty()"));
     }
 
     #[test]
@@ -1152,10 +1175,11 @@ mod tests {
         let implementation = include_str!("view.rs")
             .split_once("#[cfg(test)]")
             .map_or(include_str!("view.rs"), |(production, _)| production);
-        assert!(implementation.contains("fn section_heading_height(has_subtitle: bool)"));
-        assert!(implementation.contains("fn section_geometry(narrow: bool, has_subtitle: bool)"));
+        assert!(implementation.contains("fn section_heading_height()"));
+        assert!(implementation.contains("fn section_geometry(narrow: bool)"));
         assert!(implementation.contains("DETAIL_CARD_GRID_ROW_HEIGHT_EXTRA_PX"));
         assert!(implementation.contains("DISCOVER_SECTION_HEADING_GAP_PX: f32 = 10."));
+        assert!(implementation.contains("DISCOVER_SECTION_CAROUSEL_INSET_PX"));
         assert!(implementation.contains("fn discover_card_carousel("));
         assert!(implementation.contains("CAROUSEL_CONTENT_BOTTOM_PADDING"));
         assert!(implementation.contains(".when(!controls_available"));
@@ -1168,10 +1192,8 @@ mod tests {
 
     #[test]
     fn section_geometry_is_derived_from_card_metrics_for_both_layouts() {
-        let desktop = section_geometry(false, true);
-        let narrow = section_geometry(true, true);
-        let compact_desktop = section_geometry(false, false);
-        let compact_narrow = section_geometry(true, false);
+        let desktop = section_geometry(false);
+        let narrow = section_geometry(true);
 
         assert_eq!(desktop.card_width, 150.);
         assert_eq!(narrow.card_width, 126.);
@@ -1183,14 +1205,10 @@ mod tests {
             narrow.card_row_height,
             126. + DETAIL_CARD_GRID_ROW_HEIGHT_EXTRA_PX
         );
-        assert_eq!(desktop.row_height, 280.);
-        assert_eq!(narrow.row_height, 256.);
-        assert_eq!(compact_desktop.card_row_height, desktop.card_row_height);
-        assert_eq!(compact_narrow.card_row_height, narrow.card_row_height);
-        assert_eq!(compact_desktop.heading_height, 18.);
-        assert_eq!(compact_narrow.heading_height, 18.);
-        assert_eq!(compact_desktop.row_height, 264.);
-        assert_eq!(compact_narrow.row_height, 240.);
+        assert_eq!(desktop.heading_height, 38.);
+        assert_eq!(narrow.heading_height, 38.);
+        assert_eq!(desktop.row_height, 286.);
+        assert_eq!(narrow.row_height, 262.);
         assert_eq!(desktop.heading_gap, narrow.heading_gap);
         assert_eq!(
             desktop.carousel_reserve,
@@ -1199,39 +1217,29 @@ mod tests {
     }
 
     #[test]
-    fn section_heading_and_card_estimates_are_independent_of_card_subtitle_visibility() {
-        assert_eq!(section_heading_height(false), 18.);
-        assert_eq!(section_heading_height(true), 34.);
-        assert_eq!(section_geometry(false, false).card_row_height, 196.);
-        assert_eq!(section_geometry(false, true).card_row_height, 196.);
-        assert!(
-            section_geometry(false, true).row_height > section_geometry(false, false).row_height
-        );
-        assert_eq!(loading_row_count(0., false, true), 3);
-        assert!(loading_row_count(700., false, true) >= 4);
+    fn section_rows_measure_the_pinned_row_height_exactly() {
+        // The pinned row height is the sum of the rendered content parts:
+        // the heading (title line, text gap, reserved subtitle slot), the
+        // heading gap, the carousel inset, the card row, the carousel
+        // reserve, and the section gap padding.
+        for narrow in [false, true] {
+            let geometry = section_geometry(narrow);
+            let content_height = section_heading_height()
+                + geometry.heading_gap
+                + DISCOVER_SECTION_CAROUSEL_INSET_PX
+                + geometry.card_row_height
+                + geometry.carousel_reserve
+                + DISCOVER_SECTION_GAP_PX;
+            assert_eq!(geometry.row_height, content_height);
+        }
+        assert_eq!(section_heading_height(), 20. + 2. + 16.);
+        assert_eq!(section_geometry(false).card_row_height, 196.);
+        assert_eq!(loading_row_count(0., false), 3);
+        assert!(loading_row_count(700., false) >= 4);
     }
 
     #[test]
-    fn source_loading_geometry_keeps_all_mode_on_full_rows() {
-        assert!(source_uses_full_loading_geometry(Source::All));
-        assert!(source_uses_full_loading_geometry(Source::Deezer));
-        assert!(!source_uses_full_loading_geometry(Source::SoundCloud));
-
-        let full = section_geometry(false, true);
-        let soundcloud = section_geometry(false, false);
-        assert_eq!(full.card_row_height, soundcloud.card_row_height);
-        assert!(full.row_height > soundcloud.row_height);
-        assert!(
-            loading_row_count(540., false, false) > loading_row_count(540., false, true),
-            "shorter SoundCloud rows should fill the viewport with more loading entries"
-        );
-    }
-
-    #[test]
-    fn loading_card_captions_follow_provider_subtitle_visibility() {
-        assert!(skeleton_heading_has_subtitle(Provider::Deezer));
-        assert!(!skeleton_heading_has_subtitle(Provider::SoundCloud));
-
+    fn loading_card_captions_reserve_the_subtitle_line_for_every_provider() {
         let production = include_str!("view.rs")
             .split_once("#[cfg(test)]")
             .map_or(include_str!("view.rs"), |(production, _)| production);
@@ -1245,8 +1253,11 @@ mod tests {
             .nth(1)
             .and_then(|source| source.split("fn skeleton_heading").next())
             .expect("channel loading renderer source");
-        assert!(loading.contains(".when(skeleton_heading_has_subtitle(provider)"));
-        assert!(channel_loading.contains(".when(skeleton_heading_has_subtitle(provider)"));
+        for renderer in [loading, channel_loading] {
+            assert!(renderer.contains("COLLECTION_CARD_TITLE_LINE_HEIGHT_PX"));
+            assert!(renderer.contains("COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX"));
+            assert!(!renderer.contains("skeleton_heading_has_subtitle"));
+        }
     }
 
     #[test]
@@ -1293,6 +1304,6 @@ mod tests {
             &DiscoverStatus::Loading,
             &DiscoverStatus::Loading,
         ));
-        assert!(loading_row_count(700., false, true) >= 4);
+        assert!(loading_row_count(700., false) >= 4);
     }
 }

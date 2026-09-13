@@ -20,7 +20,7 @@ use rodio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::progressive::{ProgressiveReader, TimelineSeekSession};
+use super::progressive::{ProgressiveCompletion, ProgressiveReader, TimelineSeekSession};
 use super::ramped_gain::RampedGain;
 use super::resolver::{AudioFormat, ResolvedAudio, ResolvedProgressiveAudio};
 use super::standby::{PreparedSource, ProgressiveSeek, SinkProbe};
@@ -214,19 +214,37 @@ impl RodioEngine {
         Ok(SamplesBuffer::new(channels as u16, 48_000, samples))
     }
 
-    /// Decodes resolved audio into a source that can be appended to a sink
-    /// later without further work. The standby path runs this on a blocking
-    /// worker while the current track keeps playing.
+    /// Decodes fully resolved audio into a source that can be appended to a
+    /// sink later without further work. The standby path runs this on a
+    /// blocking worker while the current track keeps playing.
     pub(crate) fn decode(audio: ResolvedAudio) -> Result<PreparedSource, String> {
         if audio.format == AudioFormat::OggOpus {
             let decoded = Self::opus(&audio.path)?;
             let duration = decoded.total_duration().or(audio.duration);
-            Ok(PreparedSource::new(decoded, duration, audio.file))
-        } else {
-            let decoded = Self::decoder(&audio.path, audio.format)?;
-            let duration = decoded.total_duration().or(audio.duration);
-            Ok(PreparedSource::new(decoded, duration, audio.file))
+            return Ok(PreparedSource::new(decoded, duration, audio.file));
         }
+        let decoded = Self::decoder(&audio.path, audio.format)?;
+        let duration = decoded.total_duration().or(audio.duration);
+        // A resolved M4A buffer is a fragmented MP4 concatenation whose
+        // decoder reports a zero duration, so a sink seek clamps the target
+        // to zero and silently restarts the track. The download already
+        // finished before the source was prepared, so arming it with a
+        // completed-buffer reload keeps seeks on an auto-advanced track on
+        // the same discard path a finished progressive download uses.
+        if audio.format == AudioFormat::M4a {
+            let path = audio.path.clone();
+            return Ok(
+                PreparedSource::new(decoded, duration, audio.file).with_progressive_seek(
+                    ProgressiveSeek {
+                        path,
+                        format: audio.format,
+                        completion: ProgressiveCompletion::for_completed_buffer(audio.format),
+                        timeline_seek_session: None,
+                    },
+                ),
+            );
+        }
+        Ok(PreparedSource::new(decoded, duration, audio.file))
     }
 
     pub(crate) fn decode_progressive(
@@ -1347,5 +1365,131 @@ mod tests {
 
     fn sample_rms(samples: &[f32]) -> f32 {
         (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    /// Pins the standby handoff seek mechanism: a track armed through the
+    /// standby path is decoded by `decode` from a fully downloaded buffer,
+    /// and its M4A variant must carry a completed-buffer reload so an
+    /// in-track seek after the auto-advance defers through the discard
+    /// reload instead of falling back to the sink seek, which reports
+    /// success but silently restarts a fragmented MP4 from zero.
+    #[test]
+    fn standby_fragmented_m4a_source_seeks_through_the_completed_reload() {
+        let Some(file) = make_fragmented_aac_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping standby M4A seek test");
+            return;
+        };
+        let audio = ResolvedAudio {
+            path: file.path().to_owned(),
+            file,
+            duration: None,
+            format: AudioFormat::M4a,
+            declared_bitrate: Some(160),
+        };
+        let prepared = RodioEngine::decode(audio).unwrap();
+        let (_source, _file, progressive_seek) = prepared.into_parts();
+        let progressive_seek = progressive_seek
+            .expect("a standby fragmented M4A source must keep the reload seek path");
+        assert_eq!(progressive_seek.format, AudioFormat::M4a);
+        assert!(
+            progressive_seek.completion.is_complete(),
+            "the standby buffer finished downloading before it was armed"
+        );
+        assert!(progressive_seek.timeline_seek_session.is_none());
+
+        let mut seeked = RodioEngine::decoder_at(
+            &progressive_seek.path,
+            AudioFormat::M4a,
+            Duration::from_millis(800),
+        )
+        .unwrap();
+        let seeked_samples = seeked.by_ref().take(4_096).collect::<Vec<_>>();
+        let seeked_rms = sample_rms(&seeked_samples);
+        assert!(
+            seeked_rms > 0.2,
+            "the completed-buffer reload must land in the tone region, RMS was {seeked_rms}"
+        );
+
+        // The fallback this replaces: a direct sink seek on the same file
+        // claims success while the decoder restarts from the silent prefix,
+        // which is exactly the auto-advance seek bug.
+        let mut sink_seeking =
+            RodioEngine::decoder(&progressive_seek.path, AudioFormat::M4a).unwrap();
+        assert!(sink_seeking.try_seek(Duration::from_millis(800)).is_ok());
+        let sink_samples = sink_seeking.by_ref().take(4_096).collect::<Vec<_>>();
+        let sink_rms = sample_rms(&sink_samples);
+        assert!(
+            sink_rms < 0.05,
+            "a sink seek on fragmented MP4 must not be trusted, RMS was {sink_rms}"
+        );
+    }
+
+    /// The engine-level pin of the same mechanism: seeking a track that was
+    /// loaded through the standby construction must defer through the
+    /// completed-buffer reload and land at the target, never take the sink
+    /// seek branch that silently restarts a fragmented MP4.
+    #[test]
+    fn standby_m4a_track_seek_defers_through_the_reload_and_lands() {
+        let Some(file) = make_fragmented_aac_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping standby M4A engine seek test");
+            return;
+        };
+        let audio = ResolvedAudio {
+            path: file.path().to_owned(),
+            file,
+            duration: None,
+            format: AudioFormat::M4a,
+            declared_bitrate: Some(160),
+        };
+        let prepared = RodioEngine::decode(audio).unwrap();
+        let Ok(mut engine) = RodioEngine::new() else {
+            eprintln!("no audio device; skipping standby M4A engine seek test");
+            return;
+        };
+        engine.load(prepared, 1.0);
+
+        let outcome = engine.seek(Duration::from_millis(800)).unwrap();
+        assert_eq!(
+            outcome,
+            SeekOutcome::Deferred,
+            "a standby fragmented M4A source must seek through the reload, not the sink"
+        );
+
+        let mut applied = None;
+        for _ in 0..200 {
+            match engine.apply_deferred_seek().unwrap() {
+                SeekOutcome::Applied | SeekOutcome::AppliedStandbyDropped => {
+                    applied = Some(engine.position());
+                    break;
+                }
+                SeekOutcome::Deferred => std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+        let position = applied.expect("the standby seek must apply through the reload");
+        assert!(
+            position >= Duration::from_millis(700) && position < Duration::from_secs(2),
+            "the standby seek must land near the target, was {position:?}"
+        );
+    }
+
+    /// Formats whose complete local files seek correctly through the sink
+    /// keep the plain standby decode with no reload bookkeeping.
+    #[test]
+    fn standby_non_m4a_sources_keep_the_sink_seek() {
+        let file = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
+        std::fs::write(file.path(), STANDARD.decode(WAV).unwrap()).unwrap();
+        let audio = ResolvedAudio {
+            path: file.path().to_owned(),
+            file,
+            duration: None,
+            format: AudioFormat::Wav,
+            declared_bitrate: None,
+        };
+        let prepared = RodioEngine::decode(audio).unwrap();
+        let (_source, _file, progressive_seek) = prepared.into_parts();
+        assert!(
+            progressive_seek.is_none(),
+            "a WAV standby source seeks through the sink like before"
+        );
     }
 }

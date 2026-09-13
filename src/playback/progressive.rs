@@ -176,6 +176,16 @@ impl ProgressiveCompletion {
             .is_some_and(|state| matches!(state.terminal.as_ref(), Some(TerminalState::Complete)))
     }
 
+    /// Completion state for a buffer that finished downloading before the
+    /// engine took ownership of it, such as a standby source resolved in
+    /// the background. Seeks on it take the completed-buffer paths right
+    /// away instead of waiting on a writer that no longer exists.
+    pub(crate) fn for_completed_buffer(format: AudioFormat) -> Self {
+        let shared = Shared::new(format, None);
+        shared.complete();
+        Self { shared }
+    }
+
     pub(crate) fn request_seek(&self, position: Duration) {
         if let Ok(mut state) = self.shared.state.lock() {
             state.pending_seek = Some(position);

@@ -34,8 +34,8 @@ use crate::ui::music_ui::CollectionCardTitleAlignment;
 
 const CARD_GRID_GAP: f32 = crate::collection_detail::DETAIL_CARD_GRID_GAP_PX;
 const CARD_GRID_BORDER: f32 = 2.;
-const CARD_GRID_TITLE_HEIGHT: f32 = 16.;
-const CARD_GRID_SUBTITLE_HEIGHT: f32 = 16.;
+const CARD_GRID_TITLE_HEIGHT: f32 = crate::ui::music_ui::COLLECTION_CARD_TITLE_LINE_HEIGHT_PX;
+const CARD_GRID_SUBTITLE_HEIGHT: f32 = crate::ui::music_ui::COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX;
 const SEARCH_ALL_PREVIEW_CARD_LIMIT: usize = 24;
 
 #[allow(clippy::too_many_arguments)]
