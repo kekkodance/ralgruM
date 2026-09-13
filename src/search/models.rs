@@ -498,9 +498,11 @@ impl SearchState {
         true
     }
 
-    /// Applies one independently completed provider batch. Results become
-    /// visible immediately, while a cache snapshot is recorded only after the
-    /// final batch so a later navigation can never restore a partial search.
+    /// Applies one independently completed provider batch. Results collect
+    /// into the groups while the loading skeleton stays up, and the view
+    /// publishes them only after the final batch so the layout cannot shift
+    /// mid-load; a cache snapshot is likewise recorded only after the final
+    /// batch so a later navigation can never restore a partial search.
     pub(crate) fn complete_incremental_with_missing_accounts(
         &mut self,
         generation: u64,
@@ -529,7 +531,7 @@ impl SearchState {
         }
         let total = self.groups.count(self.result_type);
         self.warning = partial_warning(&self.incremental_failures, missing_accounts);
-        self.state = if total > 0 {
+        self.state = if total > 0 && final_batch {
             ResultState::Results
         } else if final_batch
             && !self.incremental_failures.is_empty()
@@ -847,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn incremental_batches_publish_early_without_caching_a_partial_snapshot() {
+    fn incremental_batches_hold_the_skeleton_until_the_final_batch() {
         let mut state = SearchState::default();
         let job = state.submit("query").unwrap();
         let deezer = job
@@ -867,7 +869,9 @@ mod tests {
             &[],
             false,
         ));
-        assert_eq!(state.state, ResultState::Results);
+        // The batch collects into the groups but the skeleton stays up so
+        // early sections cannot shift the layout when later ones arrive.
+        assert_eq!(state.state, ResultState::Loading);
         assert_eq!(state.groups.tracks.len(), 1);
         assert!(state.result_cache.is_empty());
 
@@ -888,6 +892,7 @@ mod tests {
             &[],
             true,
         ));
+        assert_eq!(state.state, ResultState::Results);
         assert_eq!(state.result_cache.len(), 1);
     }
 
