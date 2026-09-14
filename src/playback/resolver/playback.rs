@@ -113,21 +113,40 @@ impl StreamResolver {
         expected_cache_epoch: u64,
         priority: ResolvePriority,
     ) -> Result<ResolvedSource, String> {
-        let (flight, starts_work) = self.source_resolve_flights.begin(key.clone());
+        let (flight, starts_work) = self
+            .source_resolve_flights
+            .begin(key.clone(), priority == ResolvePriority::Interactive);
         if starts_work {
             let resolver = self.clone();
             let flights = self.source_resolve_flights.clone();
             let worker_flight = flight.clone();
             tokio::spawn(async move {
-                // The worker deliberately owns its cancellation token. The
-                // caller that happened to start a flight may skip away while
-                // another caller still needs this same source.
-                let worker_cancellation = CancellationToken::new();
+                // The shared worker survives one waiter leaving, but the final
+                // waiter cancels it. An interactive join also promotes a
+                // speculative background reservation before it spends budget.
+                let worker_cancellation = worker_flight.cancellation();
                 let result = std::panic::AssertUnwindSafe(async {
-                    resolver
-                        .limiter
-                        .reserve(priority, &worker_cancellation)
-                        .await?;
+                    loop {
+                        let promoted = worker_flight.priority_changed();
+                        if worker_flight.is_interactive() {
+                            resolver
+                                .limiter
+                                .reserve(ResolvePriority::Interactive, &worker_cancellation)
+                                .await?;
+                            break;
+                        }
+                        tokio::select! {
+                            biased;
+                            _ = promoted => continue,
+                            result = resolver.limiter.reserve(
+                                ResolvePriority::Background,
+                                &worker_cancellation,
+                            ) => {
+                                result?;
+                                break;
+                            }
+                        }
+                    }
                     if resolver.resolved_source_cache.epoch() != expected_cache_epoch {
                         return Err("Playback request cancelled".into());
                     }

@@ -563,10 +563,11 @@ fn parse_flac_stream_info(payload: &[u8]) -> FlacStreamInfo {
 fn parse_first_flac_frame(bytes: &[u8], info: &FlacStreamInfo, base: u64) -> Option<FlacFrame> {
     let mut index = 0;
     while index + 2 <= bytes.len() {
-        if bytes[index] == 0xff && (bytes[index + 1] & 0xfe) == 0xf8 {
-            if let Some(frame) = parse_flac_frame_header(bytes, index, info, base) {
-                return Some(frame);
-            }
+        if bytes[index] == 0xff
+            && (bytes[index + 1] & 0xfe) == 0xf8
+            && let Some(frame) = parse_flac_frame_header(bytes, index, info, base)
+        {
+            return Some(frame);
         }
         index += 1;
     }
@@ -579,13 +580,14 @@ fn parse_flac_frame_header(
     info: &FlacStreamInfo,
     base: u64,
 ) -> Option<FlacFrame> {
-    let sync = u16::from_be_bytes([bytes[index], bytes[index + 1]]);
+    let header = bytes.get(index..index.checked_add(4)?)?;
+    let sync = u16::from_be_bytes([header[0], header[1]]);
     let variable_blocks = sync & 0x01 != 0;
-    let block_size_code = u32::from(bytes[index + 2] >> 4);
-    let sample_rate_code = u32::from(bytes[index + 2] & 0x0f);
-    let channel_code = u32::from(bytes[index + 3] >> 4);
-    let sample_size_code = u32::from((bytes[index + 3] >> 1) & 0x07);
-    if bytes[index + 3] & 0x01 != 0
+    let block_size_code = u32::from(header[2] >> 4);
+    let sample_rate_code = u32::from(header[2] & 0x0f);
+    let channel_code = u32::from(header[3] >> 4);
+    let sample_size_code = u32::from((header[3] >> 1) & 0x07);
+    if header[3] & 0x01 != 0
         || block_size_code == 0
         || sample_rate_code == 0x0f
         || channel_code >= 0x0b
@@ -725,6 +727,25 @@ mod tests {
 
     use super::super::super::progressive::TimelineSeekSession;
     use super::*;
+
+    #[test]
+    fn truncated_flac_sync_at_probe_end_is_ignored() {
+        let info = FlacStreamInfo {
+            sample_rate: 44_100,
+            channels: 2,
+            bits_per_sample: 16,
+            block_len_min: 256,
+            block_len_max: 4_096,
+        };
+
+        for bytes in [
+            &[0xff, 0xf8][..],
+            &[0x00, 0xff, 0xf9][..],
+            &[0xff, 0xf8, 0x80][..],
+        ] {
+            assert!(parse_first_flac_frame(bytes, &info, 0).is_none());
+        }
+    }
 
     fn make_mp3_tone_fixture() -> Option<tempfile::NamedTempFile> {
         let file = tempfile::Builder::new().suffix(".mp3").tempfile().ok()?;
@@ -1484,14 +1505,11 @@ mod tests {
             "the completed-buffer seek must land at the target, was {position:?}"
         );
 
-        // Every superseded fetch must have observed its cancellation and
-        // no fetch may outlive its request.
+        // A worker can be cancelled before it enters the instrumented fetch,
+        // but every fetch that did start must have reached a terminal state.
         tokio::time::sleep(Duration::from_millis(150)).await;
         let log = log.lock().unwrap();
-        assert!(
-            log.cancelled >= 4,
-            "the superseded rapid seeks must cancel their fetches, log was {log:?}"
-        );
+        assert_eq!(log.completed, 5, "only landed seeks may complete: {log:?}");
         assert_eq!(
             log.started,
             log.cancelled + log.completed,

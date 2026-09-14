@@ -17,11 +17,12 @@ use gpui::{
 };
 use reqwest::Client;
 use sha2::{Digest, Sha256};
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, sync::Semaphore, task::AbortHandle};
 
 const ARTWORK_CACHE_DIR: &str = "artwork-v1";
 const ARTWORK_CACHE_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
 const ARTWORK_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const ARTWORK_DOWNLOAD_LIMIT: usize = 8;
 // Search can keep several 64-card carousels mounted at once. The cache must
 // retain every mounted cover so one section cannot evict another mid-frame.
 const ARTWORK_MEMORY_CACHE_LIMIT: usize = 512;
@@ -37,6 +38,7 @@ pub(crate) struct ArtworkCache {
     cache_dir: PathBuf,
     runtime: Arc<Runtime>,
     client: Client,
+    download_gate: Arc<Semaphore>,
     items: HashMap<Resource, ImageCacheItem>,
     access_order: LruOrder<Resource>,
 }
@@ -48,6 +50,7 @@ impl ArtworkCache {
             cache_dir,
             runtime,
             client,
+            download_gate: Arc::new(Semaphore::new(ARTWORK_DOWNLOAD_LIMIT)),
             items: HashMap::new(),
             access_order: LruOrder::default(),
         }
@@ -140,29 +143,17 @@ impl ArtworkCache {
         window: &mut Window,
         cx: &mut App,
     ) {
-        // Loading tasks own the only in-flight request for their URI. Retain
-        // them even while trimming so a cache limit cannot turn one image into
-        // several concurrent downloads.
-        let mut remaining_candidates = self.access_order.len();
-        while self.items.len() > ARTWORK_MEMORY_CACHE_LIMIT && remaining_candidates > 0 {
+        // Dropping a loading entry cancels its Tokio request through
+        // AbortOnDrop. This keeps both the cache and queued work bounded.
+        while self.items.len() > ARTWORK_MEMORY_CACHE_LIMIT {
             let Some(victim) = self.access_order.pop_oldest_except(protected) else {
                 break;
             };
-            let is_loading = self
-                .items
-                .get_mut(&victim)
-                .is_some_and(|item| item.get().is_none());
-            if is_loading {
-                self.access_order.touch(&victim);
-                remaining_candidates -= 1;
-                continue;
+            if let Some(mut item) = self.items.remove(&victim)
+                && let Some(Ok(image)) = item.get()
+            {
+                cx.drop_image(image, Some(window));
             }
-            if let Some(mut item) = self.items.remove(&victim) {
-                if let Some(Ok(image)) = item.get() {
-                    cx.drop_image(image, Some(window));
-                }
-            }
-            remaining_candidates = self.access_order.len();
         }
     }
 
@@ -178,6 +169,7 @@ impl ArtworkCache {
         let path_loader = AssetLogger::<ImageAssetLoader>::load(path_resource, cx);
         let runtime = self.runtime.clone();
         let client = self.client.clone();
+        let download_gate = self.download_gate.clone();
         let cache_dir = self.cache_dir.clone();
         let url = uri.to_owned();
         let probe_path = cache_path.clone();
@@ -201,7 +193,7 @@ impl ArtworkCache {
                 }
             }
 
-            let bytes = download_artwork(runtime.clone(), client, url).await?;
+            let bytes = download_artwork(runtime.clone(), client, download_gate, url).await?;
             let image = decode_artwork(runtime.clone(), svg_renderer, bytes.clone()).await?;
 
             // Persistence is deliberately detached from the render path. The
@@ -292,10 +284,6 @@ impl<K: Clone + Eq> LruOrder<K> {
     fn clear(&mut self) {
         self.entries.clear();
     }
-
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
 }
 
 fn cache_path(cache_dir: &Path, url: &str) -> PathBuf {
@@ -352,38 +340,54 @@ fn remove_if_unchanged(path: &Path, expected: Option<CacheFingerprint>) {
 async fn download_artwork(
     runtime: Arc<Runtime>,
     client: Client,
+    download_gate: Arc<Semaphore>,
     url: String,
 ) -> Result<Vec<u8>, ImageCacheError> {
-    runtime
-        .spawn(async move {
-            let response = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|error| error.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("artwork request returned {}", response.status()));
-            }
-            if response
-                .content_length()
-                .is_some_and(|length| length > ARTWORK_MAX_BYTES)
-            {
+    let task = runtime.spawn(async move {
+        let _permit = download_gate
+            .acquire_owned()
+            .await
+            .map_err(|_| "artwork download gate closed".to_owned())?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("artwork request returned {}", response.status()));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > ARTWORK_MAX_BYTES)
+        {
+            return Err("artwork response is too large".to_owned());
+        }
+
+        let mut response = response;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+            if bytes.len() as u64 + chunk.len() as u64 > ARTWORK_MAX_BYTES {
                 return Err("artwork response is too large".to_owned());
             }
-
-            let mut response = response;
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
-                if bytes.len() as u64 + chunk.len() as u64 > ARTWORK_MAX_BYTES {
-                    return Err("artwork response is too large".to_owned());
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            Ok(bytes)
-        })
-        .await
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    });
+    let _abort_on_drop = AbortOnDrop(task.abort_handle());
+    task.await
         .map_err(|_| image_error("artwork download stopped unexpectedly"))?
         .map_err(image_error)
+}
+
+/// Tokio detaches a spawned task when its JoinHandle is dropped. Tie the
+/// request lifetime to the GPUI loading future so cache eviction really stops
+/// queued or active network work.
+struct AbortOnDrop(AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 async fn decode_artwork(
@@ -729,11 +733,11 @@ mod tests {
             .build()
             .unwrap();
         let url = format!("http://{address}/cover.png");
+        let download_gate = Arc::new(Semaphore::new(ARTWORK_DOWNLOAD_LIMIT));
 
-        let downloaded =
-            futures::executor::block_on(
-                async move { download_artwork(runtime, client, url).await },
-            );
+        let downloaded = futures::executor::block_on(async move {
+            download_artwork(runtime, client, download_gate, url).await
+        });
 
         server.join().unwrap();
         assert_eq!(downloaded.unwrap(), png);

@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -35,8 +38,16 @@ pub(crate) struct SourceResolveFlights<T: Clone> {
 }
 
 pub(crate) struct SourceResolveFlight<T: Clone> {
-    result: Mutex<Option<Result<T, String>>>,
+    state: Mutex<SourceResolveFlightState<T>>,
     completed: Notify,
+    worker_cancellation: CancellationToken,
+    interactive: AtomicBool,
+    priority_changed: Notify,
+}
+
+struct SourceResolveFlightState<T: Clone> {
+    result: Option<Result<T, String>>,
+    waiters: usize,
 }
 
 impl<T: Clone> SourceResolveFlights<T> {
@@ -49,17 +60,36 @@ impl<T: Clone> SourceResolveFlights<T> {
     /// Returns the flight for `key` and whether this caller must start the
     /// shared work. Keys are bounded by the resolver cache key space and are
     /// removed as soon as their work completes.
-    pub(crate) fn begin(&self, key: String) -> (Arc<SourceResolveFlight<T>>, bool) {
+    pub(crate) fn begin(
+        &self,
+        key: String,
+        interactive: bool,
+    ) -> (Arc<SourceResolveFlight<T>>, bool) {
         let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(flight) = entries.get(&key) {
-            return (flight.clone(), false);
+            if !flight.worker_cancellation.is_cancelled() {
+                flight
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .waiters += 1;
+                flight.promote(interactive);
+                return (flight.clone(), false);
+            }
+            entries.remove(&key);
         }
         let flight = Arc::new(SourceResolveFlight {
-            result: Mutex::new(None),
+            state: Mutex::new(SourceResolveFlightState {
+                result: None,
+                waiters: 1,
+            }),
             completed: Notify::new(),
+            worker_cancellation: CancellationToken::new(),
+            interactive: AtomicBool::new(interactive),
+            priority_changed: Notify::new(),
         });
         entries.insert(key, flight.clone());
         (flight, true)
@@ -70,6 +100,7 @@ impl<T: Clone> SourceResolveFlights<T> {
         flight: &Arc<SourceResolveFlight<T>>,
         cancellation: &CancellationToken,
     ) -> Result<T, String> {
+        let _waiter = SourceResolveWaiter { flight };
         loop {
             if cancellation.is_cancelled() {
                 return Err("Playback request cancelled".into());
@@ -78,9 +109,10 @@ impl<T: Clone> SourceResolveFlights<T> {
             // check and select cannot strand this waiter.
             let notified = flight.completed.notified();
             if let Some(result) = flight
-                .result
+                .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .result
                 .clone()
             {
                 return result;
@@ -99,17 +131,15 @@ impl<T: Clone> SourceResolveFlights<T> {
         flight: &Arc<SourceResolveFlight<T>>,
         result: Result<T, String>,
     ) {
-        {
-            let mut stored = flight
-                .result
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *stored = Some(result);
-        }
         let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        flight
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .result = Some(result);
         if entries
             .get(key)
             .is_some_and(|current| Arc::ptr_eq(current, flight))
@@ -124,10 +154,16 @@ impl<T: Clone> SourceResolveFlights<T> {
     /// map entries lets requests in the new account/session start fresh work;
     /// old workers retain their own `Arc` and can still notify old waiters.
     pub(crate) fn clear(&self) {
-        self.entries
+        let flights = self
+            .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+            .drain()
+            .map(|(_, flight)| flight)
+            .collect::<Vec<_>>();
+        for flight in flights {
+            flight.worker_cancellation.cancel();
+        }
     }
 
     #[cfg(test)]
@@ -136,6 +172,47 @@ impl<T: Clone> SourceResolveFlights<T> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
+    }
+}
+
+impl<T: Clone> SourceResolveFlight<T> {
+    pub(crate) fn cancellation(&self) -> CancellationToken {
+        self.worker_cancellation.clone()
+    }
+
+    pub(crate) fn is_interactive(&self) -> bool {
+        self.interactive.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn priority_changed(&self) -> tokio::sync::futures::Notified<'_> {
+        self.priority_changed.notified()
+    }
+
+    fn promote(&self, interactive: bool) {
+        if interactive && !self.interactive.swap(true, Ordering::AcqRel) {
+            self.priority_changed.notify_waiters();
+        }
+    }
+}
+
+struct SourceResolveWaiter<'a, T: Clone> {
+    flight: &'a SourceResolveFlight<T>,
+}
+
+impl<T: Clone> Drop for SourceResolveWaiter<'_, T> {
+    fn drop(&mut self) {
+        let cancel_worker = {
+            let mut state = self
+                .flight
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.waiters = state.waiters.saturating_sub(1);
+            state.waiters == 0 && state.result.is_none()
+        };
+        if cancel_worker {
+            self.flight.worker_cancellation.cancel();
+        }
     }
 }
 
@@ -447,8 +524,8 @@ mod tests {
     #[tokio::test]
     async fn same_key_callers_share_one_flight_and_cleanup_after_completion() {
         let flights = SourceResolveFlights::<TestSource>::new();
-        let (first, first_starts_work) = flights.begin("track".into());
-        let (second, second_starts_work) = flights.begin("track".into());
+        let (first, first_starts_work) = flights.begin("track".into(), true);
+        let (second, second_starts_work) = flights.begin("track".into(), true);
 
         assert!(first_starts_work);
         assert!(!second_starts_work);
@@ -466,8 +543,8 @@ mod tests {
     #[tokio::test]
     async fn different_keys_start_independent_flights() {
         let flights = SourceResolveFlights::<TestSource>::new();
-        let (first, first_starts_work) = flights.begin("first".into());
-        let (second, second_starts_work) = flights.begin("second".into());
+        let (first, first_starts_work) = flights.begin("first".into(), true);
+        let (second, second_starts_work) = flights.begin("second".into(), true);
 
         assert!(first_starts_work);
         assert!(second_starts_work);
@@ -489,8 +566,12 @@ mod tests {
     #[tokio::test]
     async fn cancelling_one_waiter_does_not_cancel_the_shared_flight() {
         let flights = SourceResolveFlights::<TestSource>::new();
-        let (flight, starts_work) = flights.begin("track".into());
+        let (flight, starts_work) = flights.begin("track".into(), false);
         assert!(starts_work);
+        let (active_flight, starts_work) = flights.begin("track".into(), true);
+        assert!(!starts_work);
+        assert!(Arc::ptr_eq(&flight, &active_flight));
+        assert!(flight.is_interactive());
 
         let cancelled = CancellationToken::new();
         let cancelled_waiter = {
@@ -505,22 +586,45 @@ mod tests {
             cancelled_waiter.await.unwrap(),
             Err("Playback request cancelled".into())
         );
+        assert!(!flight.cancellation().is_cancelled());
 
         flights.finish("track", &flight, Ok(TestSource::Remote(9)));
         let active = CancellationToken::new();
         assert_eq!(
-            flights.wait(&flight, &active).await,
+            flights.wait(&active_flight, &active).await,
             Ok(TestSource::Remote(9))
         );
     }
 
     #[tokio::test]
+    async fn cancelling_the_last_waiter_retires_the_worker_and_next_flight() {
+        let flights = SourceResolveFlights::<TestSource>::new();
+        let (old, starts_work) = flights.begin("track".into(), false);
+        assert!(starts_work);
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        assert_eq!(
+            flights.wait(&old, &cancellation).await,
+            Err("Playback request cancelled".into())
+        );
+        assert!(old.cancellation().is_cancelled());
+
+        let (current, starts_work) = flights.begin("track".into(), true);
+        assert!(starts_work);
+        assert!(!Arc::ptr_eq(&old, &current));
+        assert!(!current.cancellation().is_cancelled());
+        assert!(current.is_interactive());
+    }
+
+    #[tokio::test]
     async fn failed_and_cleared_flights_do_not_retire_newer_work() {
         let flights = SourceResolveFlights::<TestSource>::new();
-        let (old, starts_work) = flights.begin("track".into());
+        let (old, starts_work) = flights.begin("track".into(), true);
         assert!(starts_work);
         flights.clear();
-        let (current, starts_work) = flights.begin("track".into());
+        assert!(old.cancellation().is_cancelled());
+        let (current, starts_work) = flights.begin("track".into(), true);
         assert!(starts_work);
         assert!(!Arc::ptr_eq(&old, &current));
 
