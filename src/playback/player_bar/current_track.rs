@@ -92,7 +92,10 @@ impl ArtworkHold {
     /// Build the player bar artwork source: the current track's cover once the
     /// artwork cache has it, and the remembered previous cover while it is
     /// still loading.
+    #[allow(clippy::arc_with_non_send_sync)]
     fn source(&self, url: String) -> ImageSource {
+        // ImageSource::Custom requires Arc even though GPUI invokes the
+        // closure only on its single-threaded application executor.
         let cache = self.cache.clone();
         let last_ready = self.last_ready.clone();
         let resource = artwork_resource(url);

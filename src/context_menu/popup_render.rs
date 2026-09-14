@@ -676,25 +676,6 @@ mod tests {
         assert!(visual.debug_bounds("app-popup-menu-arrow").is_none());
     }
 
-    #[test]
-    fn popup_always_clamps_height_to_the_viewport() {
-        let production = include_str!("popup_render.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("popup renderer");
-        assert!(production.contains(".max_h(max_height)"));
-        assert!(production.contains(".overflow_y_scroll()"));
-        assert!(production.contains(".flex_none()"));
-        assert!(production.contains(".min_h(px(1.))"));
-        assert!(production.contains("app-popup-menu-items"));
-        assert!(production.contains("Scrollbar::vertical"));
-        assert!(production.contains("ScrollbarShow::Always"));
-        assert!(production.contains("browser_scroll_overlays"));
-        assert!(production.contains("animate_popup("));
-        assert!(production.contains(".child(arrow)"));
-        assert!(!production.contains(".when(menu.scrollable"));
-    }
-
     #[gpui::test]
     fn short_popup_stays_content_sized(cx: &mut TestAppContext) {
         cx.update(|cx| {

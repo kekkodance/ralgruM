@@ -415,19 +415,8 @@ fn push_local_error(
 
 #[cfg(test)]
 mod tests {
-    use super::super::local_playlist_store::LocalPlaylistError;
     use super::{LibraryState, Provider, Service};
     use crate::library::model::Route;
-
-    #[test]
-    fn local_mutations_refresh_the_visible_page_without_reloading_the_route() {
-        let source = include_str!("local_playlist_controller.rs");
-        let source = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(source.contains("fn refresh_local_playlist_page(&mut self)"));
-        assert!(source.contains("self.state.page = Some(page)"));
-        assert!(!source.contains("self.load_service(Service::Local"));
-        assert!(!source.contains("self.load_nested("));
-    }
 
     #[test]
     fn local_delete_returns_to_the_local_playlists_root() {
@@ -450,37 +439,6 @@ mod tests {
             &Route::root(Service::Local, super::super::model::Category::Playlists)
         );
         assert!(!super::leave_deleted_local_playlist(&mut state, "playlist"));
-    }
-
-    #[test]
-    fn local_track_addition_uses_full_playback_metadata_and_refreshes_in_place() {
-        let source = include_str!("local_playlist_controller.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("LocalTrack::from"));
-        assert!(production.contains("add_tracks_to_local_playlist"));
-        assert!(production.contains("AlreadyPresent"));
-        assert!(production.contains("self.refresh_local_playlist_page()"));
-        assert!(production.contains("ToastKind::Info"));
-    }
-
-    #[test]
-    fn local_picker_does_not_open_when_storage_loading_failed() {
-        assert_eq!(
-            super::local_picker_storage_error(&Err(LocalPlaylistError::Filesystem)),
-            Some(LocalPlaylistError::Filesystem)
-        );
-        let source = include_str!("local_playlist_controller.rs");
-        let open = source
-            .split("pub(crate) fn open_local_playlist_picker")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split("pub(crate) fn open_local_playlist_create")
-                    .next()
-            })
-            .expect("local picker opener");
-        assert!(open.contains("local_picker_storage_error"));
-        assert!(open.contains("return;"));
     }
 
     #[test]

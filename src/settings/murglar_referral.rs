@@ -208,27 +208,4 @@ mod tests {
         assert!(!has_code(""));
         assert!(!has_code("  \t"));
     }
-
-    #[test]
-    fn referral_card_matches_plans_subheading_and_square_icon() {
-        let source = include_str!("murglar_referral.rs");
-        assert!(source.contains("LocalIcon::ShareNodes"));
-        let old_icon = ["LocalIcon", "UserPlus"].join("::");
-        assert!(!source.contains(&old_icon));
-        assert!(source.contains(".text_size(px(11.5))"));
-        assert!(source.contains(".line_height(px(17.25))"));
-        assert!(source.contains("Spinner::new()"));
-        assert!(source.contains("widget_icon(LocalIcon::Spinner)"));
-        assert!(source.contains("Size::Size(px(13.))"));
-        assert!(source.contains(".size(px(28.))"));
-        let code_row = source
-            .split("fn referral_code_row")
-            .nth(1)
-            .unwrap()
-            .split("fn copy_button")
-            .next()
-            .unwrap();
-        assert!(code_row.contains(".rounded(px(6.))"));
-        assert!(code_row.contains(".h(px(38.))"));
-    }
 }

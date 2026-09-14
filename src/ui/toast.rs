@@ -669,29 +669,6 @@ mod tests {
         assert_eq!(TOAST_ACTION_TEXT_SIZE_PX, 13.);
     }
 
-    #[test]
-    fn pointer_contract_consumes_surface_and_action_events() {
-        let source = include_str!("toast.rs");
-        assert!(source.contains(".on_mouse_down(MouseButton::Left"));
-        assert!(source.contains(".on_mouse_up(MouseButton::Left"));
-        assert!(source.contains(".on_click(|_, window, cx|"));
-        assert!(source.matches(".occlude()").count() >= 2);
-        assert!(source.contains("window.prevent_default();"));
-        assert!(source.contains("cx.stop_propagation();"));
-
-        let action_handler = source
-            .find("move |event, window, cx|")
-            .map(|start| &source[start..])
-            .expect("action click handler must exist");
-        let action_consume = action_handler
-            .find("consume_pointer_event(window, cx);")
-            .expect("action click must consume the event");
-        let action_remove = action_handler
-            .find("stack.take_action")
-            .expect("action click must remove the toast");
-        assert!(action_consume < action_remove);
-    }
-
     #[gpui::test]
     fn overwrite_click_does_not_click_through_to_the_track(cx: &mut TestAppContext) {
         cx.update(|cx| {

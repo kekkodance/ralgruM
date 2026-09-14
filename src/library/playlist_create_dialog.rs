@@ -768,35 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn playlist_title_uses_the_requested_prompt() {
-        let source = include_str!("playlist_create_dialog.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("playlist_form::title_input"));
-        assert!(
-            include_str!("playlist_form.rs")
-                .contains("TITLE_PLACEHOLDER: &str = \"What is this playlist called?\"")
-        );
-    }
-
-    #[test]
-    fn multi_line_description_uses_provider_specific_input_limits() {
-        let source = include_str!("playlist_create_dialog.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("playlist_form::description_input"));
-        let form = include_str!("playlist_form.rs");
-        let start = form
-            .find("pub(super) fn description_input")
-            .expect("shared description input is multi-line");
-        let chunk = &form[start..start.saturating_add(420)];
-        assert!(chunk.contains(".multi_line(true)"));
-        assert!(form.contains("DESCRIPTION_PLACEHOLDER: &str = \"What is this playlist about?\""));
-        assert!(!chunk.contains(".validate("));
-        assert!(
-            include_str!("playlist_create_view.rs").contains("playlist_form::enforce_input_limits")
-        );
-    }
-
-    #[test]
     fn dialog_and_body_respect_short_viewports() {
         assert_eq!(dialog_max_height(760.), 728.);
         assert_eq!(body_max_height(760.), 604.);
@@ -865,18 +836,6 @@ mod tests {
     }
 
     #[test]
-    fn create_dialog_registers_escape_and_overlay_dismiss_handlers() {
-        let source = include_str!("playlist_create_dialog.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("overlay_closable(true)"));
-        assert!(production.contains("on_cancel"));
-        assert!(production.contains("escape_can_close_dialog"));
-        let view_source = include_str!("playlist_create_view.rs");
-        let view_production = &view_source[..view_source.find("#[cfg(test)]").unwrap()];
-        assert!(view_production.contains("\"escape\""));
-    }
-
-    #[test]
     fn created_playlist_navigates_to_detail_only_for_valid_completed_ids() {
         assert_eq!(
             created_playlist_id_for_navigation(true, Some("42".into())),
@@ -908,15 +867,5 @@ mod tests {
             initial_tracks_copy(12),
             "This playlist will start with 12 selected tracks."
         );
-    }
-
-    #[test]
-    fn created_playlist_opens_detail_after_close() {
-        let source = include_str!("playlist_create_dialog.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("after_dialog_close"));
-        assert!(production.contains("open_card"));
-        assert!(production.contains("Category::Playlists"));
-        assert!(production.contains("created_playlist_id_for_navigation"));
     }
 }

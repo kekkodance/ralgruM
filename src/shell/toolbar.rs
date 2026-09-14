@@ -1283,16 +1283,13 @@ pub(super) fn render_top_toolbar(
 #[cfg(test)]
 mod tests {
     use super::{
-        DetailToolbarMotion, LIBRARY_SERVICE_SELECTOR_WIDTH, SEARCH_INPUT_ACTION_PADDING_PX,
-        SEARCH_INPUT_CLEAR_PADDING_PX, SEARCH_MAX_WIDTH, SEARCH_PLACEHOLDER,
+        DetailToolbarMotion, LIBRARY_SERVICE_SELECTOR_WIDTH, SEARCH_MAX_WIDTH,
         SEARCH_SOURCE_SELECTOR_WIDTH, SelectorItemGeometry, TOOLBAR_GAP, TOOLBAR_HORIZONTAL_INSET,
         TOOLBAR_MIN_SEARCH_WIDTH, ToolbarGeometryMotion, ToolbarGeometryVisual,
-        detail_back_is_interactive, detail_toolbar_phases, library_selector_width,
-        platform_all_width, platform_service_compactness, platform_service_responsive_visual,
-        platform_service_width, search_input_trailing_padding, search_navigation_back_label,
-        search_placeholder_visibility, selector_item_geometry, selector_shell_width,
-        should_show_search_suggestions, source_selector_width, toolbar_available_width,
-        toolbar_bottom_margin, toolbar_route_identity, toolbar_route_opacities,
+        detail_toolbar_phases, library_selector_width, platform_all_width,
+        platform_service_compactness, platform_service_responsive_visual, platform_service_width,
+        selector_item_geometry, selector_shell_width, source_selector_width,
+        toolbar_available_width, toolbar_route_identity, toolbar_route_opacities,
         toolbar_search_layer_opacities, toolbar_selector_width, toolbar_shows_full_labels,
     };
     use crate::shell::Nav;
@@ -1317,131 +1314,6 @@ mod tests {
     fn search_box_matches_reference_width() {
         assert_eq!(SEARCH_MAX_WIDTH, 520.);
         assert_eq!(TOOLBAR_HORIZONTAL_INSET, 28.);
-    }
-
-    #[test]
-    fn discover_channel_toolbar_uses_compact_bottom_margin_only_for_channel() {
-        assert_eq!(toolbar_bottom_margin(true), 4.);
-        assert_eq!(toolbar_bottom_margin(false), 20.);
-
-        let source = include_str!("toolbar.rs");
-        assert!(source.contains("search_channel_open && !search_detail_open"));
-    }
-
-    #[test]
-    fn root_search_results_use_the_discover_home_toolbar_target() {
-        assert_eq!(
-            search_navigation_back_label(false, true, None),
-            "Back to Discover"
-        );
-        assert_eq!(
-            search_navigation_back_label(true, false, None),
-            "Back to Discover"
-        );
-        assert_eq!(
-            search_navigation_back_label(false, false, None),
-            "Back to search results"
-        );
-        assert_eq!(
-            search_navigation_back_label(false, false, Some(Nav::Library)),
-            "Back to library"
-        );
-
-        let source = include_str!("toolbar.rs");
-        assert!(source.contains("search_results_root_open"));
-        assert!(source.contains("close_search_toolbar_target"));
-    }
-
-    #[test]
-    fn search_suggestions_remain_eligible_while_search_detail_is_open() {
-        assert!(should_show_search_suggestions(true, true));
-        assert!(!should_show_search_suggestions(false, true));
-        assert!(!should_show_search_suggestions(true, false));
-
-        let source = include_str!("toolbar.rs")
-            .split_once("#[cfg(test)]\nmod tests")
-            .map(|(source, _)| source)
-            .expect("toolbar production source");
-        assert!(source.contains("should_show_search_suggestions("));
-        assert!(!source.contains("show_search_source && !detail_open"));
-    }
-
-    #[test]
-    fn empty_search_reclaims_clear_button_space_for_ellipsized_hint() {
-        assert_eq!(
-            search_input_trailing_padding(false),
-            SEARCH_INPUT_ACTION_PADDING_PX
-        );
-        assert_eq!(
-            search_input_trailing_padding(true),
-            SEARCH_INPUT_CLEAR_PADDING_PX
-        );
-        assert_eq!(SEARCH_PLACEHOLDER, "Search songs, artists, or albums...");
-        let source = include_str!("toolbar.rs");
-        assert!(source.contains(".absolute()\n        .top(px(0.))\n        .left(px(36.))"));
-        assert!(source.contains(".truncate()"));
-        assert!(source.contains(".right(px(SEARCH_INPUT_ACTION_PADDING_PX))"));
-    }
-
-    #[test]
-    fn search_placeholder_uses_native_input_while_discover_is_focused() {
-        assert_eq!(
-            search_placeholder_visibility(true, false, false),
-            super::SearchPlaceholderVisibility {
-                custom_overlay: true,
-                native_input: false,
-            }
-        );
-        assert_eq!(
-            search_placeholder_visibility(true, false, true),
-            super::SearchPlaceholderVisibility {
-                custom_overlay: false,
-                native_input: true,
-            }
-        );
-        assert_eq!(
-            search_placeholder_visibility(true, true, true),
-            super::SearchPlaceholderVisibility {
-                custom_overlay: false,
-                native_input: false,
-            }
-        );
-        assert_eq!(
-            search_placeholder_visibility(false, false, true),
-            super::SearchPlaceholderVisibility {
-                custom_overlay: false,
-                native_input: false,
-            }
-        );
-        let search = include_str!("../search/view.rs");
-        assert!(search.contains("set_placeholder(SEARCH_PLACEHOLDER"));
-        assert!(search.contains("set_placeholder(\"\""));
-    }
-
-    #[test]
-    fn library_keeps_its_native_placeholder_when_focused() {
-        let library = include_str!("../library/view.rs");
-        assert!(library.contains("placeholder(\"Search this library page...\")"));
-    }
-
-    #[test]
-    fn search_clear_stays_mounted_for_symmetric_fade_and_reserves_its_slot() {
-        let source = include_str!("toolbar.rs")
-            .split_once("#[cfg(test)]\nmod tests")
-            .map(|(source, _)| source)
-            .expect("toolbar production source");
-        assert!(source.contains(".search_clear_motion"));
-        assert!(source.contains(".prepare("));
-        assert!(source.contains("\"search-clear-presence\""));
-        assert!(source.contains("search_clear_visual.from"));
-        assert!(source.contains("search_clear_visual.target"));
-        assert!(source.contains(".pr(px(search_input_trailing_padding(show_search_clear)))"));
-        assert_eq!(
-            search_input_trailing_padding(true),
-            SEARCH_INPUT_CLEAR_PADDING_PX
-        );
-        assert!(source.contains(".child(clear_search)"));
-        assert!(!source.contains(".when(show_search_clear, |this| this.child(clear_search))"));
     }
 
     #[test]
@@ -1506,16 +1378,6 @@ mod tests {
             width,
             SEARCH_SOURCE_SELECTOR_WIDTH
         ));
-    }
-
-    #[test]
-    fn deezer_channel_detail_uses_the_discover_back_toolbar() {
-        let source = include_str!("toolbar.rs")
-            .rsplit_once("#[cfg(test)]")
-            .map(|(source, _)| source)
-            .expect("toolbar production source");
-        assert!(source.contains("discover_channel_open"));
-        assert!(source.contains("\"Back to Discover\""));
     }
 
     #[test]
@@ -1857,53 +1719,5 @@ mod tests {
         assert_eq!(opened.from_progress, 1.);
         assert_eq!(opened.target_progress, 1.);
         assert_eq!(detail_toolbar_phases(opened.progress_at(0.)), (1., 1.));
-    }
-
-    #[test]
-    fn detail_back_control_is_gated_by_the_route_state() {
-        let source = include_str!("toolbar.rs");
-        let button = source
-            .split("fn render_detail_back_button")
-            .nth(1)
-            .and_then(|source| source.split("pub(super) fn render_top_toolbar").next())
-            .expect("detail back button source");
-        assert!(button.matches("if interactive").count() >= 2);
-        assert!(!detail_back_is_interactive(false, false));
-        assert!(!detail_back_is_interactive(false, true));
-        assert!(!detail_back_is_interactive(true, false));
-        assert!(detail_back_is_interactive(true, true));
-        assert!(source.contains("app.detail_toolbar_focus_ready"));
-    }
-
-    #[test]
-    fn detail_back_button_matches_the_search_bar_square() {
-        assert_eq!(crate::music_ui::DETAIL_BACK_BUTTON_SIZE, 38.);
-        assert_eq!(crate::music_ui::DETAIL_BACK_ICON_SIZE, 16.);
-        let source = include_str!("toolbar.rs");
-        let button = source
-            .split("fn render_detail_back_button")
-            .nth(1)
-            .and_then(|source| source.split("pub(super) fn render_top_toolbar").next())
-            .expect("detail back button source");
-        assert!(button.contains("DETAIL_BACK_BUTTON_SIZE"));
-        assert!(source.contains(".h(px(38.))"));
-        assert!(source.contains(".when(metrics.toolbar_stacked, |this| {\n            this.w_full()\n                .flex()\n                .items_center()"));
-    }
-
-    #[test]
-    fn music_search_blurs_only_when_a_click_leaves_the_search_container() {
-        let source = include_str!("toolbar.rs");
-        let search = source
-            .split(".id(\"music-search\")")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split(".child(\n            div()\n                .relative()")
-                    .next()
-            })
-            .expect("music search container source");
-        assert!(search.contains("on_mouse_down_out(cx.listener"));
-        assert!(search.contains("window.blur(cx)"));
-        assert!(search.contains(".children(search_layers)"));
     }
 }

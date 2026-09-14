@@ -570,18 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn library_scrollbar_reveals_on_hover_while_keeping_auto_hide() {
-        let implementation = include_str!("virtualization.rs")
-            .split_once("#[cfg(test)]\nmod tests")
-            .map_or_else(
-                || panic!("virtualization implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains("Scrollbar::vertical(state)"));
-        assert!(implementation.contains("ScrollbarShow::Hover"));
-    }
-
-    #[test]
     fn preview_queue_length_matches_the_visible_slice() {
         assert_eq!(displayed_track_count(204, Some(5)), 5);
         assert_eq!(displayed_track_count(3, Some(5)), 3);

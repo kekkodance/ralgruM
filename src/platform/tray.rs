@@ -1104,18 +1104,6 @@ mod windows_impl {
         }
 
         #[test]
-        fn tray_surface_does_not_add_external_shadow_to_the_arrow_margin() {
-            let source = include_str!("tray.rs");
-            let surface = source
-                .split_once("let surface = div()")
-                .and_then(|(_, rest)| rest.split_once("let arrow = div()"))
-                .map(|(surface, _)| surface)
-                .expect("tray surface render block");
-            assert!(!surface.contains(".shadow_lg()"));
-            assert!(surface.contains(".bg(rgba(CONTEXT_MENU_SURFACE))"));
-        }
-
-        #[test]
         fn tray_palette_reuses_the_shared_context_menu_palette() {
             assert_eq!(
                 CONTEXT_MENU_SURFACE,

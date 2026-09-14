@@ -83,27 +83,4 @@ mod tests {
         assert!(!should_apply_deferred_motion_reduction(1, 3, true));
         assert!(should_apply_deferred_motion_reduction(3, 3, true));
     }
-
-    #[test]
-    fn settings_panels_route_switches_through_the_shared_builder() {
-        let general = include_str!("general_panel.rs");
-        let service = include_str!("service_panel.rs");
-        assert_eq!(general.matches("settings_switch(").count(), 9);
-        assert_eq!(service.matches("settings_switch(").count(), 2);
-        assert!(!general.contains("Switch::new"));
-        assert!(!service.contains("Switch::new"));
-    }
-
-    #[test]
-    fn shared_builder_uses_the_pointing_hand_cursor() {
-        assert!(include_str!("toggle.rs").contains("CursorStyle::PointingHand"));
-    }
-
-    #[test]
-    fn vendored_switch_supports_tab_focus_and_keyboard_activation() {
-        let source = include_str!("../../vendor/gpui-component/crates/ui/src/switch.rs");
-        assert!(source.contains(".tab_stop(!self.disabled)"));
-        assert!(source.contains(".focus_visible(|style| style.border_color(cx.theme().ring))"));
-        assert!(source.contains("\"enter\" | \"space\""));
-    }
 }

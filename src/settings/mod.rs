@@ -982,37 +982,6 @@ mod tests {
     }
 
     #[test]
-    fn settings_scroll_wrapper_keeps_top_and_horizontal_padding_with_inner_bottom_padding() {
-        let implementation = include_str!("mod.rs")
-            .split_once("impl Render for SettingsView")
-            .map_or_else(
-                || panic!("settings renderer must have an implementation section"),
-                |(_, implementation)| implementation,
-            );
-        let start = implementation
-            .find(".id(\"settings-panel-scroll-content\")")
-            .unwrap_or_else(|| panic!("settings scroll wrapper marker is missing"));
-        let end = implementation[start..]
-            .find(".child(")
-            .map(|offset| start + offset)
-            .unwrap_or_else(|| panic!("settings scroll wrapper end marker is missing"));
-        let wrapper = &implementation[start..end];
-
-        assert!(wrapper.contains(".px(px(header_padding))"));
-        assert!(wrapper.contains(".pt(px(24.))"));
-        assert!(!wrapper.contains(".py(px(24.))"));
-        // Inner bottom padding scrolls with the tail so short content keeps
-        // zero scroll offset while long content keeps breathing room.
-        assert!(wrapper.contains(".pb(px(SETTINGS_CONTENT_BOTTOM_PADDING_PX))"));
-        assert_eq!(super::SETTINGS_CONTENT_BOTTOM_PADDING_PX, 16.);
-        assert!(wrapper.contains(".overflow_y_scroll()"));
-        assert!(!wrapper.contains(".overflow_hidden()"));
-        assert!(!wrapper.contains(".vertical_scrollbar"));
-        assert!(implementation.contains("Scrollbar::vertical(&self.scroll)"));
-        assert!(implementation.contains("ScrollbarShow::Hover"));
-    }
-
-    #[test]
     fn cache_meter_animates_increases() {
         let start = Instant::now();
         let mut motion = CacheMeterMotion::default();

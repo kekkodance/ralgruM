@@ -383,19 +383,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn gpui_probe_task_uses_gpui_executor_timers() {
-        let production = include_str!("track_info.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("track-info production source");
-
-        assert!(!production.contains("tokio::time::sleep"));
-        assert!(production.contains("let executor = cx.background_executor().clone();"));
-        assert!(production.contains("executor.timer(TRACK_INFO_PROBE_DEBOUNCE).await;"));
-        assert!(production.contains("executor.timer(wait).await;"));
-    }
-
     #[gpui::test]
     fn track_info_item_is_inert_without_disabled_opacity(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {

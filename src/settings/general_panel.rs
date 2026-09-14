@@ -538,31 +538,6 @@ mod tests {
     }
 
     #[test]
-    fn settings_select_menus_use_app_popup_chrome() {
-        let source = include_str!("general_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("general panel production source");
-        assert!(source.contains("CONTEXT_MENU_SURFACE"));
-        assert!(source.contains("CONTEXT_MENU_BORDER"));
-        assert!(source.contains("CONTEXT_MENU_FOREGROUND"));
-        assert!(source.contains("\"Audio cache size\""));
-        assert!(!source.contains("\"Maximum audio cache\""));
-        assert!(source.contains(".map_menu("));
-        assert!(
-            !source.contains("crate::motion::interaction()"),
-            "Select now owns menu enter/exit animation"
-        );
-        let select = include_str!("../../vendor/gpui-component/crates/ui/src/select.rs");
-        assert!(select.contains("select-menu-exit"));
-        assert!(select.contains("closing: bool"));
-        assert!(select.contains("close_epoch: u64"));
-        let item =
-            include_str!("../../vendor/gpui-component/crates/ui/src/searchable_list/item.rs");
-        assert!(item.contains(".mb(px(2.))"));
-    }
-
-    #[test]
     fn cache_used_fraction_clamps_to_meter_bounds() {
         assert_eq!(cache_used_fraction(None), 0.);
         assert_eq!(

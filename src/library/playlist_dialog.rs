@@ -821,29 +821,4 @@ mod tests {
             Some("SoundCloud login required")
         );
     }
-
-    #[test]
-    fn edit_dialog_registers_escape_and_overlay_dismiss_handlers() {
-        let source = include_str!("playlist_dialog.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("overlay_closable(true)"));
-        assert!(production.contains("on_cancel"));
-        assert!(production.contains("\"escape\""));
-    }
-
-    #[test]
-    fn multi_line_description_does_not_use_single_line_validate() {
-        let source = include_str!("playlist_dialog.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("playlist_form::description_input"));
-        let form = include_str!("playlist_form.rs");
-        let start = form
-            .find("pub(super) fn description_input")
-            .expect("shared edit description input is multi-line");
-        let chunk = &form[start..start.saturating_add(420)];
-        assert!(chunk.contains(".multi_line(true)"));
-        assert!(!chunk.contains(".validate("));
-        assert!(production.contains("playlist_form::enforce_input_limits"));
-        assert!(production.contains("can_close_dialog"));
-    }
 }

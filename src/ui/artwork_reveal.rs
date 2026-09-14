@@ -303,8 +303,6 @@ impl Styled for ArtworkReveal {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
 
     fn uri(value: &str) -> Resource {

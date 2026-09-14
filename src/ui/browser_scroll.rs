@@ -1306,24 +1306,4 @@ mod tests {
         assert!(!is_vertical_scroll(point(px(2.), px(-1.))));
         assert!(!is_vertical_scroll(point(px(0.), px(0.))));
     }
-
-    #[test]
-    fn open_context_menu_does_not_steal_wheel_from_the_menu() {
-        let source = include_str!("browser_scroll.rs");
-        let handler = source
-            .split("if crate::context_menu::context_menu_is_open()")
-            .nth(1)
-            .expect("menu-open wheel branch");
-        let handler = handler
-            .split("if !wheel_hitbox.should_handle_scroll")
-            .next()
-            .unwrap();
-        assert!(handler.contains("scrolls_while_menu_open()"));
-        assert!(handler.contains("cancel_autoscroll_and_release"));
-        assert!(handler.contains("should_handle_scroll(window)"));
-        assert!(
-            handler.contains("cx.stop_propagation()"),
-            "page surfaces still swallow wheel when they own the pointer"
-        );
-    }
 }

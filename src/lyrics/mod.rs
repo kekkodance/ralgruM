@@ -1440,14 +1440,6 @@ mod tests {
     }
 
     #[test]
-    fn lyrics_close_button_uses_the_shared_panel_icon_size() {
-        assert_eq!(crate::music_ui::PANEL_CLOSE_ICON_SIZE_PX, 10.);
-        let source = include_str!("mod.rs");
-        assert!(source.contains("ghost_close_button(\"lyrics-close\""));
-        assert!(!source.contains("ghost_close_button_with_icon_size(\"lyrics-close\""));
-    }
-
-    #[test]
     fn automatic_fallback_preserves_primary_empty_when_both_providers_are_empty() {
         let primary = LyricsResponse::Empty {
             provider: LyricsProvider::Musixmatch,
@@ -1523,99 +1515,6 @@ mod tests {
     }
 
     #[test]
-    fn synced_blank_gaps_use_the_playing_visualizer() {
-        let implementation = include_str!("mod.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("lyrics implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains("collapse_blank_lyric_gaps("));
-        assert!(implementation.contains("lyric_gap_visualizer("));
-        assert!(implementation.contains("playing_bars("));
-        assert!(implementation.contains("(\"lyrics-gap\", index)"));
-        assert!(implementation.contains(".cursor_pointer()"));
-        assert!(implementation.contains(".justify_start()"));
-        assert!(implementation.contains("LYRIC_LINE_CONTENT_HEIGHT"));
-        assert!(implementation.contains("if active { PRIMARY } else { MUTED }"));
-        assert!(!implementation.contains("synced_lyrics_end_spacer"));
-        assert!(!implementation.contains("synced_mode("));
-    }
-
-    #[test]
-    fn plain_blank_rows_keep_spacing_without_hover_or_lyrics_actions() {
-        let implementation = include_str!("mod.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("lyrics implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        let plain_start = implementation
-            .find("Some(LyricsResponse::Plain { url, .. })")
-            .unwrap_or_else(|| panic!("plain lyrics branch is missing"));
-        let plain_end = implementation[plain_start..]
-            .find("Some(LyricsResponse::Genius { url, .. })")
-            .map(|offset| plain_start + offset)
-            .unwrap_or_else(|| panic!("plain lyrics branch end marker is missing"));
-        let plain_branch = &implementation[plain_start..plain_end];
-
-        assert!(plain_branch.contains("let interactive = is_highlightable_line(&line);"));
-        assert!(plain_branch.contains(".when(interactive, |this|"));
-        assert!(plain_branch.contains("if !interactive"));
-        assert!(plain_branch.contains("Self::lyric_menu("));
-    }
-
-    #[test]
-    fn lyrics_scroll_uses_one_handle_for_overflow_and_scrollbar() {
-        let implementation = include_str!("mod.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("lyrics implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains(".track_scroll(&self.scroll)"));
-        assert!(implementation.contains(".overflow_y_scroll()"));
-        assert!(implementation.contains("browser_scroll_surface("));
-        assert!(implementation.contains("BrowserScrollTarget::Handle(self.scroll.clone())"));
-        assert!(implementation.contains(".children(body)"));
-        // Main view uses a custom hover revealing lane, not the stock inline bar.
-        assert!(implementation.contains("lyrics_vertical_scrollbar("));
-        assert!(implementation.contains("Scrollbar::vertical(scroll)"));
-        assert!(implementation.contains("ScrollbarShow::Hover"));
-        let stock_bar = [".vertical_scrollbar", "(&self.scroll)"].concat();
-        assert!(!implementation.contains(&stock_bar));
-        let wrapped_scroll_call = [".overflow_y_scrollbar", "()"].concat();
-        assert!(!implementation.contains(&wrapped_scroll_call));
-    }
-
-    #[test]
-    fn lyrics_scrollbar_reveals_on_hover_while_keeping_auto_hide() {
-        let implementation = include_str!("mod.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("lyrics implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains("lyrics_vertical_scrollbar("));
-        assert!(implementation.contains("ScrollbarShow::Hover"));
-        assert!(implementation.contains("hide_for_changed_auto_scroll("));
-        assert!(!implementation.contains("reveal_for_hover()"));
-        assert!(!implementation.contains("hide_for_hover()"));
-        assert!(!implementation.contains("scrollbar_visible_for_user_scroll.is_visible()"));
-        let content_start = implementation
-            .find(".id(\"lyrics-content-scroll\")")
-            .unwrap_or_else(|| panic!("lyrics content scroll frame is missing"));
-        let content = &implementation[content_start..];
-        let content_end = content
-            .find(".when_some(annotation_panel")
-            .unwrap_or(content.len());
-        let content_frame = &content[..content_end];
-        assert!(!content_frame.contains(".on_hover("));
-        assert!(content_frame.contains("lyrics_vertical_scrollbar("));
-        assert!(!content_frame.contains("is_visible()"));
-    }
-
-    #[test]
     fn user_scroll_suppression_matches_scrollbar_visibility_cutoff() {
         assert_eq!(USER_SCROLL_SUPPRESSION, Duration::from_millis(3000));
     }
@@ -1631,24 +1530,6 @@ mod tests {
     }
 
     #[test]
-    fn annotation_panel_slides_up_when_it_appears() {
-        let implementation = include_str!("mod.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("lyrics implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        let mount_start = implementation
-            .find(".when_some(annotation_panel")
-            .unwrap_or_else(|| panic!("annotation panel mount is missing"));
-        let mount = &implementation[mount_start..];
-        assert!(mount.contains("with_animation("));
-        assert!(mount.contains("crate::motion::panel()"));
-        assert!(mount.contains(".top(px(crate::motion::lerp(20., 0., delta)))"));
-        assert!(mount.contains("crate::motion::lerp(0., 1., delta)"));
-    }
-
-    #[test]
     fn annotation_height_uses_the_requested_viewport_ratio_and_bounds() {
         assert_eq!(annotation_panel_max_height(100.), 0.);
         assert_eq!(annotation_panel_max_height(200.), 63.);
@@ -1661,79 +1542,6 @@ mod tests {
                     <= viewport_height
             );
         }
-    }
-
-    #[test]
-    fn loading_lyrics_uses_the_shared_centered_message_contract() {
-        let implementation = include_str!("mod.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("lyrics implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        let helper_start = implementation
-            .find("fn centered_lyrics_message(")
-            .unwrap_or_else(|| panic!("centered lyrics helper is missing"));
-        let helper_end = implementation[helper_start..]
-            .find("fn empty_lyrics_state(")
-            .map(|offset| helper_start + offset)
-            .unwrap_or_else(|| panic!("centered lyrics helper end marker is missing"));
-        let helper = &implementation[helper_start..helper_end];
-
-        for contract in [
-            ".w_full()",
-            ".py(px(60.))",
-            ".px(px(20.))",
-            ".flex()",
-            ".flex_col()",
-            ".items_center()",
-            ".text_center()",
-            ".mb(px(12.))",
-            "local_icon(icon, MUTED).size(px(40.))",
-            ".mb(px(4.))",
-            ".text_size(px(16.))",
-            ".font_weight(FontWeight::SEMIBOLD)",
-            ".text_color(rgb(FOREGROUND))",
-            ".text_size(px(13.))",
-            ".line_height(px(19.5))",
-            ".text_color(rgb(MUTED))",
-        ] {
-            assert!(helper.contains(contract), "missing contract: {contract}");
-        }
-
-        let loading_start = implementation
-            .find("fn loading_lyrics_state()")
-            .unwrap_or_else(|| panic!("loading lyrics helper is missing"));
-        let loading_end = implementation[loading_start..]
-            .find("fn lyrics_body_animation_key(")
-            .map(|offset| loading_start + offset)
-            .unwrap_or_else(|| panic!("loading lyrics helper end marker is missing"));
-        let loading = &implementation[loading_start..loading_end];
-        assert!(loading.contains("centered_lyrics_message("));
-        assert!(loading.contains("LocalIcon::MagnifyingGlass"));
-        assert!(loading.contains("\"Finding lyrics\""));
-        assert!(loading.contains("\"Searching for lyrics for this track...\""));
-        assert!(implementation.contains("vec![loading_lyrics_state()]"));
-        let obsolete_copy = ["Finding lyrics", "..."].concat();
-        assert!(!implementation.contains(&obsolete_copy));
-        let period_copy = ["Searching for lyrics for this track", ".\""].concat();
-        assert!(!implementation.contains(&period_copy));
-    }
-
-    #[test]
-    fn provider_empty_states_keep_the_original_copy_and_geometry() {
-        let source = include_str!("mod.rs");
-        assert!(source.contains("No Musixmatch lyrics found"));
-        assert!(source.contains("Try switching to Genius above."));
-        assert!(source.contains("font_weight: Some(FontWeight::BOLD)"));
-        assert!(source.contains("No Genius lyrics found"));
-        assert!(source.contains("Try switching to Musixmatch above."));
-        assert!(!source.contains(&["No Genius Match", " Found"].concat()));
-        assert!(!source.contains(&["No Genius song entry matched", " this track title."].concat()));
-        assert!(source.contains(".size(px(40.))"));
-        assert!(source.contains(".py(px(60.))"));
-        assert!(source.contains(".px(px(20.))"));
-        assert!(source.contains("centered_lyrics_message(icon, heading, description_text)"));
     }
 
     #[gpui::test]

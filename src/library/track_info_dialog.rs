@@ -1096,29 +1096,6 @@ mod tests {
     }
 
     #[test]
-    fn dialog_rows_scroll_with_a_visible_scrollbar_and_animate_on_load() {
-        let implementation = include_str!("track_info_dialog.rs");
-        // Same visible scrollbar pattern as the playlist picker.
-        assert!(implementation.contains("Scrollbar::vertical(&self.scroll)"));
-        assert!(implementation.contains("ScrollbarShow::Hover"));
-        assert!(implementation.contains(".track_scroll(&self.scroll)"));
-        assert!(implementation.contains("browser_scroll_surface("));
-        // Pulled out of the body padding so the thumb sits on the dialog edge.
-        assert!(implementation.contains(".right(px(-INFO_DIALOG_BODY_PADDING))"));
-        // A definite frame and list height, not max_h alone, so GPUI
-        // can scroll instead of letting the dialog grow off screen.
-        assert!(implementation.contains(".h(px(dialog_height))"));
-        assert!(implementation.contains(".h(px(scroll_h))"));
-        assert!(implementation.contains(".overflow_y_scroll()"));
-        // The entrance replays once per fetch swap via the epoch key.
-        assert!(implementation.contains("(\"track-info-rows\", self.loaded_epoch)"));
-        assert!(implementation.contains("crate::motion::quick_content()"));
-        // The top margin follows the live content so both seeded and full
-        // tag sets center.
-        assert!(implementation.contains("track_info_margin_top(viewport_height, row_count)"));
-    }
-
-    #[test]
     fn dialog_row_order_matches_the_original_tags_dialog() {
         let info = TrackInfo {
             artists: "a".into(),

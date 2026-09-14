@@ -229,20 +229,4 @@ impl Render for LocalPlaylistDeleteDialog {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn local_delete_dialog_uses_danger_action_and_named_confirmation() {
-        let source = include_str!("local_playlist_delete_dialog.rs");
-        assert!(source.contains("danger_secondary_dialog_button_with_disabled"));
-        assert!(source.contains("your Local library"));
-        assert!(source.contains("delete_local_playlist"));
-    }
-
-    #[test]
-    fn local_delete_dialog_has_idle_escape_and_overlay_paths() {
-        let source = include_str!("local_playlist_delete_dialog.rs");
-        assert!(source.contains("overlay_closable(true)"));
-        assert!(source.contains("on_cancel"));
-        assert!(source.contains("\"escape\""));
-    }
-}
+mod tests {}

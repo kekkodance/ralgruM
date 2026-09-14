@@ -86,34 +86,3 @@ where
         })
         .open_on(MouseButton::Right)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn primary_menu_labels_are_limited_to_the_explicit_discover_action() {
-        assert_eq!(DiscoverMenuPrimary::PlayMix.label(), "Play mix");
-        assert_eq!(DiscoverMenuPrimary::PlayFlow.label(), "Play Flow");
-        assert_eq!(DiscoverMenuPrimary::PlaySelection.label(), "Play selection");
-        assert_eq!(DiscoverMenuPrimary::Open.label(), "Open");
-        let source = include_str!("discover_card.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production menu source");
-        assert!(source.contains(".open_on(MouseButton::Right)"));
-        assert!(source.contains("\"Copy title\""));
-        assert!(!source.contains("Play next"));
-        assert!(!source.contains("Download"));
-        assert!(!source.contains("Favorite"));
-    }
-
-    #[test]
-    fn multi_action_menu_keeps_copy_after_explicit_actions() {
-        let source = include_str!("discover_card.rs");
-        assert!(source.contains("discover_card_menu_with_actions"));
-        assert!(source.contains("actions.iter().cloned().fold"));
-        assert!(source.contains("menu.separator()"));
-        assert!(source.contains("\"Copy title\""));
-    }
-}

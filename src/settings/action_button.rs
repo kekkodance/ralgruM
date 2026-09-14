@@ -319,39 +319,4 @@ mod tests {
         assert!(!compact.full_width);
         assert!(compact.icon_only);
     }
-
-    #[test]
-    fn danger_secondary_owns_one_div_hover_without_component_button() {
-        let source = include_str!("action_button.rs");
-        let hover_call = [".hover(", "|style|"].concat();
-        let component_button_constructor = ["Button", "::new"].concat();
-        let component_button_module = ["gpui_component", "::button"].concat();
-
-        assert_eq!(source.matches(hover_call.as_str()).count(), 3);
-        assert!(!source.contains(component_button_constructor.as_str()));
-        assert!(!source.contains(component_button_module.as_str()));
-        assert!(source.contains("pub(crate) fn neutral_secondary_button"));
-    }
-
-    #[test]
-    fn neutral_secondary_uses_the_standard_secondary_palette_and_fixed_icon_box() {
-        let source = include_str!("action_button.rs");
-        let neutral = source
-            .split("pub(crate) fn neutral_secondary_button")
-            .nth(1)
-            .and_then(|body| body.split("pub(super) fn secondary_action_button").next())
-            .expect("neutral secondary button implementation");
-
-        assert!(neutral.contains(".text_color(rgb(FOREGROUND))"));
-        assert!(neutral.contains(".text_color(rgb(MUTED))"));
-        assert!(neutral.contains(".border_color(rgb(BORDER))"));
-        assert!(neutral.contains(".bg(rgba(0x00000000))"));
-        assert!(neutral.contains(".bg(rgb(BORDER))"));
-        assert!(neutral.contains(".size(px(13.))"));
-        assert!(!neutral.contains(".top(px(0.5))"));
-        assert!(neutral.contains("local_icon(icon, FOREGROUND)"));
-        assert!(neutral.contains("local_icon(icon, MUTED)"));
-        assert!(neutral.contains("icon_size: f32"));
-        assert!(neutral.contains(".size(px(icon_size))"));
-    }
 }

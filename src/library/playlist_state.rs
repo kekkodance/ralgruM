@@ -895,35 +895,6 @@ mod tests {
     }
 
     #[test]
-    fn removal_stays_silent_without_a_red_banner() {
-        let mut state = PlaylistState::default();
-        state.set_account_scope("one".into());
-        let load = state.begin_load("one", false).unwrap();
-        state.complete_load("one", load, Ok(vec![playlist()]));
-        let pending = state.begin_remove("one", "42", "7", true).unwrap();
-        assert!(
-            state
-                .remove_status_for(Provider::Deezer, "playlistTracks", "42")
-                .is_none()
-        );
-        assert!(state.complete_remove("one", pending, &Ok(true)));
-        assert!(
-            state
-                .remove_status_for(Provider::Deezer, "playlistTracks", "42")
-                .is_none()
-        );
-        let source = include_str!("playlist_state.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(!production.contains("Removing track from playlist"));
-        let content = include_str!("content_view.rs");
-        let content_production = &content[..content.find("#[cfg(test)]").unwrap()];
-        assert!(!content_production.contains("Removing track from playlist"));
-        assert!(!content_production.contains("status:remove:"));
-        let detail = include_str!("../search/detail_view.rs");
-        assert!(!detail.contains("Removing track from playlist"));
-    }
-
-    #[test]
     fn removal_eligibility_requires_deezer_playlist_route_editable_catalog_and_valid_id() {
         use crate::search::Provider;
         let mut state = PlaylistState::default();

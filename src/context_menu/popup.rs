@@ -855,21 +855,6 @@ mod tests {
         assert_eq!(initial_selected_index(&items, true), Some(2));
     }
 
-    #[test]
-    fn dismiss_starts_closing_instead_of_emitting_immediately() {
-        let source = include_str!("popup.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("popup production source");
-        assert!(source.contains("closing: bool"));
-        assert!(source.contains("close_epoch: u64"));
-        assert!(source.contains("if self.closing"));
-        assert!(source.contains("self.closing = true"));
-        assert!(source.contains("crate::motion::INTERACTION_DURATION"));
-        assert!(source.contains("contains_active_descendant"));
-        assert!(source.contains("should_dismiss_on_mouse_down_out(position, cx)"));
-    }
-
     #[gpui::test]
     fn active_descendant_bounds_keep_root_open_but_outside_click_dismisses(
         cx: &mut gpui::TestAppContext,

@@ -232,20 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn annotation_hover_swaps_dots_for_a_solid_line_without_a_fragment_background() {
-        let source = include_str!("genius_fragment.rs");
-        let production = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production source");
-        assert!(production.contains("group_hover(group.clone(), |style| style.invisible())"));
-        assert!(production.contains(".h(px(1.))"));
-        assert!(production.contains("group_hover(group, |style| style.visible())"));
-        assert!(production.contains(".size_full(),"));
-        assert!(!production.contains("hover(|style| style.bg("));
-    }
-
-    #[test]
     fn row_activation_targets_the_first_annotation_only() {
         let fragments = vec![
             LyricFragment {

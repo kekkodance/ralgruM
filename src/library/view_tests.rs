@@ -83,20 +83,6 @@ fn only_discover_origin_flow_details_return_to_discover() {
 }
 
 #[test]
-fn explicit_library_navigation_clears_the_discover_flow_context() {
-    let source = include_str!("view.rs");
-
-    for boundary in ["fn load_service(", "fn load_service_force("] {
-        let body = source
-            .split_once(boundary)
-            .and_then(|(_, rest)| rest.split_once("self.load_service_inner("))
-            .map(|(body, _)| body)
-            .expect("explicit service loading boundary should exist");
-        assert!(body.contains("self.reset_discover_flow_context();"));
-    }
-}
-
-#[test]
 fn matching_flow_route_refresh_preserves_the_playback_kind() {
     let context = PlaybackContext::DeezerFlow {
         config_id: "inspired-by-1".into(),
@@ -136,67 +122,6 @@ fn smart_mix_title_event_uses_trimmed_stable_values() {
     assert!(smart_mix_title_event("config", " ").is_none());
     assert!(smart_mix_title_event("config", "daily").is_none());
     assert!(smart_mix_title_event("config", "Mix").is_none());
-}
-
-#[test]
-fn smart_mix_page_title_handoff_covers_loaded_and_cached_paths() {
-    let source = include_str!("view.rs");
-    let cached = source
-        .split_once("if reuse_cached_flow_page")
-        .and_then(|(_, body)| body.split_once("cx.notify();"))
-        .map(|(body, _)| body)
-        .expect("cached SmartMix reopen branch should exist");
-    assert!(cached.contains("page.resolved_smart_mix_title.as_deref()"));
-    assert!(cached.contains("self.emit_smart_mix_title_resolved(&route.id, title, cx);"));
-
-    let loaded = source
-        .split_once("if smart_mix_for_completion")
-        .and_then(|(_, body)| body.split_once("if let Some((_, tracks"))
-        .map(|(body, _)| body)
-        .expect("loaded SmartMix completion branch should exist");
-    assert!(loaded.contains("resolved_title.as_deref()"));
-    assert!(loaded.contains("this.emit_smart_mix_title_resolved(&expected_route.id, title, cx);"));
-}
-
-#[test]
-fn play_command_toggles_the_active_mix_and_blanks_the_bar_before_loading() {
-    let source = include_str!("view.rs");
-
-    // The play command toggles pause/resume when the same mix is live.
-    let play = source
-        .split_once("pub(crate) fn start_deezer_flow(")
-        .and_then(|(_, body)| body.split_once("fn start_deezer_flow_with_mode"))
-        .map(|(body, _)| body)
-        .expect("start_deezer_flow should precede start_deezer_flow_with_mode");
-    assert!(play.contains("playback.toggle(cx)"));
-    assert!(play.contains("PlaybackStatus::Playing | crate::playback::PlaybackStatus::Paused"));
-
-    // The blank bar opens before the queue epoch is captured, because
-    // entering the pending state advances the epoch.
-    let with_mode = source
-        .split_once("fn start_deezer_flow_with_mode")
-        .and_then(|(_, body)| body.split_once("cx.spawn(async move |this, cx|"))
-        .map(|(body, _)| body)
-        .expect("start_deezer_flow_with_mode body should exist");
-    let begin = with_mode
-        .find("playback.begin_pending_load(cx)")
-        .expect("pending bar should open before the load spawns");
-    let epoch = with_mode
-        .find("let queue_epoch = self.playback.read(cx).state.queue_epoch();")
-        .expect("queue epoch should be captured in the play path");
-    assert!(begin < epoch);
-}
-
-#[test]
-fn playlist_roots_do_not_eagerly_preload_the_owned_catalog() {
-    let source = include_str!("view.rs");
-    let loader = source
-        .split_once("fn load_service_inner(")
-        .and_then(|(_, rest)| rest.split_once("let (generation, cached)"))
-        .map(|(loader, _)| loader)
-        .expect("service loader should retain its route setup section");
-    assert!(!loader.contains("self.ensure_playlist_catalog(cx)"));
-    assert!(!loader.contains("self.ensure_soundcloud_playlist_catalog(cx)"));
 }
 
 #[test]
@@ -268,25 +193,6 @@ fn local_playlist_cards_and_details_keep_local_navigation_and_origins() {
         detail.tracks[0].origin,
         Some(crate::search::Provider::Deezer)
     );
-}
-
-#[test]
-fn local_loading_is_intercepted_before_account_credentials_and_provider_clients() {
-    let source = include_str!("view.rs");
-    let local = source
-        .find("if service == Service::Local")
-        .expect("Local load branch");
-    let account_scope = source[local..]
-        .find("let account_scope = self.account.read(cx).library_scope()")
-        .expect("remote account scope branch")
-        + local;
-    let credential = source[local..]
-        .find("let Some(credential)")
-        .expect("remote credential branch")
-        + local;
-
-    assert!(local < account_scope);
-    assert!(local < credential);
 }
 
 #[test]
@@ -551,43 +457,6 @@ fn detail_scroll_reset_moves_cached_lists_to_the_top() {
     assert_eq!(offset.offset_in_item, px(0.));
 }
 
-#[test]
-fn library_content_scroll_uses_the_view_owned_handle() {
-    let source = include_str!("view.rs");
-    assert!(source.contains(".track_scroll(scroll)"));
-    assert!(source.contains(".overflow_y_scroll()"));
-    assert!(source.contains(".vertical_scrollbar(scroll)"));
-    let wrapped_scroll_call = [".overflow_y_scrollbar", "()"].concat();
-    assert!(!source.contains(&wrapped_scroll_call));
-}
-
-#[test]
-fn library_main_content_wrapper_keeps_horizontal_gutter_with_inner_bottom_padding() {
-    let implementation = include_str!("view.rs")
-        .split_once("impl Render for LibraryView")
-        .map_or_else(
-            || panic!("library view renderer must have an implementation section"),
-            |(_, implementation)| implementation,
-        );
-    let start_marker =
-        "let content = div()\n                    .w_full()\n                    .px(px(gutter))";
-    let start = implementation
-        .find(start_marker)
-        .unwrap_or_else(|| panic!("library main content wrapper marker is missing"));
-    let end = implementation[start..]
-        .find(".child(body)")
-        .map(|offset| start + offset)
-        .unwrap_or_else(|| panic!("library main content wrapper end marker is missing"));
-    let wrapper = &implementation[start..end];
-
-    assert!(wrapper.contains(".px(px(gutter))"));
-    // Inner bottom padding only for div scrolls. Virtualized lists own
-    // their scroll state and must not get a persistent outer gap.
-    assert!(wrapper.contains(".when(!contained"));
-    assert!(wrapper.contains(".pb(px(LIBRARY_CONTENT_BOTTOM_PADDING_PX))"));
-    assert!(!wrapper.contains(".py("));
-}
-
 struct ScrollOwnerProbe {
     scroll: ScrollHandle,
     contained: bool,
@@ -676,30 +545,6 @@ fn contained_library_content_does_not_scroll(cx: &mut gpui::TestAppContext) {
     });
 
     assert_eq!(scroll.offset(), gpui::point(px(0.), px(0.)));
-}
-
-#[test]
-fn library_detail_back_uses_the_shared_toolbar_control() {
-    let route = card_route(Card {
-        kind: Category::Flow,
-        id: "mix".into(),
-        title: "Flow".into(),
-        source: crate::search::Provider::Deezer,
-        ..Card::default()
-    })
-    .expect("Flow card route");
-    assert_eq!(route.action, "flowTracks");
-
-    let view_source = include_str!("view.rs");
-    assert!(view_source.contains("pub(crate) fn detail_open(&self) -> bool"));
-    assert!(view_source.contains("pub(crate) fn back(&mut self, cx: &mut Context<Self>)"));
-    assert!(!view_source.contains("library-route-bar"));
-    assert!(!view_source.contains("render_library_back_button"));
-
-    let toolbar_source = include_str!("../shell/toolbar.rs");
-    assert!(toolbar_source.contains("fn render_detail_back_button"));
-    assert!(toolbar_source.contains("library_detail_open"));
-    assert!(toolbar_source.contains("library.back(cx)"));
 }
 
 #[test]

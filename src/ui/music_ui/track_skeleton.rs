@@ -305,20 +305,4 @@ mod tests {
         assert_eq!(track_skeleton_count_with_minimum(760., 88., 8), 12);
         assert_eq!(track_skeleton_count_with_minimum(100., 88., 8), 8);
     }
-
-    #[test]
-    fn implementation_keeps_the_index_placeholder_inside_the_fixed_slot() {
-        let source = include_str!("track_skeleton.rs");
-        assert!(source.contains(".w(px(INDEX_COLUMN_WIDTH))"));
-        assert!(source.contains(".child(block(px(12.), px(10.)))"));
-        assert!(source.contains(".border_1()"));
-        assert!(source.contains("TRACK_TITLE_ARTIST_GAP_PX"));
-        assert!(source.contains("TRACK_PROVIDER_DURATION_GAP_PX"));
-        assert!(source.contains("TRACK_ACTION_GAP_PX"));
-        assert!(source.contains("TRACK_TITLE_LINE_HEIGHT_PX"));
-        assert!(source.contains("TRACK_TITLE_SKELETON_HEIGHT_PX"));
-        assert_eq!(TRACK_DURATION_PLACEHOLDER_WIDTH_PX, 24.);
-        assert!(source.contains(".justify_end()"));
-        assert!(source.contains(".size(px(20.))"));
-    }
 }

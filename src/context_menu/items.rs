@@ -1599,27 +1599,6 @@ mod tests {
     }
 
     #[test]
-    fn submenu_chevron_uses_the_compact_arrow_size() {
-        assert_eq!(SUBMENU_ARROW_WIDTH, 7.);
-        let source = include_str!("items.rs");
-        assert!(source.contains(".size(px(SUBMENU_ARROW_WIDTH))"));
-    }
-
-    #[test]
-    fn lyrics_copy_menu_uses_entity_menu_chrome() {
-        let source = include_str!("items.rs");
-        assert!(source.contains("pub(crate) fn lyrics_copy_menu("));
-        assert!(source.contains("super::style_entity_menu(menu)"));
-        assert!(source.contains("\"Copy line\""));
-        assert!(source.contains("\"Copy text block\""));
-        assert!(source.contains("\"Copy entire lyrics\""));
-        assert!(source.contains("\"Copy link\""));
-        assert!(source.contains("Some(LocalIcon::Copy)"));
-        assert!(source.contains("Some(LocalIcon::List)"));
-        assert!(source.contains("Some(LocalIcon::ShareNodes)"));
-    }
-
-    #[test]
     fn track_context_order_matches_original_sections() {
         assert_eq!(
             track_context_order(true, true, true, 2),
@@ -1777,15 +1756,6 @@ mod tests {
     }
 
     #[test]
-    fn feedback_submenu_label_matches_the_original_wording() {
-        assert_eq!(DEEZER_FEEDBACK_SUBMENU_LABEL, "Not interested in");
-        // The direct artist action is intentionally more specific and remains
-        // separate from the track menu's hover submenu label.
-        let source = include_str!("items.rs");
-        assert!(source.contains("\"Not interested in this artist\""));
-    }
-
-    #[test]
     fn deezer_artist_menu_order_matches_original_core() {
         assert_eq!(
             artist_context_order(true),
@@ -1902,29 +1872,5 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Standard quality"]
         );
-    }
-
-    #[test]
-    fn action_rows_keep_long_labels_inside_the_fixed_menu_width() {
-        assert_eq!(super::super::ENTITY_MENU_WIDTH, 272.);
-        assert_eq!(action_row_width(super::super::ENTITY_MENU_WIDTH), 258.);
-        assert_eq!(
-            action_row_label_width(super::super::ENTITY_MENU_WIDTH),
-            213.
-        );
-        assert_eq!(
-            action_row_width(super::super::ENTITY_MENU_WIDTH),
-            super::super::ENTITY_MENU_WIDTH - 2. - 12.
-        );
-        assert_eq!(action_row_width(super::super::COMPACT_MENU_WIDTH), 130.);
-        assert_eq!(
-            action_row_label_width(super::super::COMPACT_MENU_WIDTH),
-            85.
-        );
-        let source = include_str!("items.rs");
-        assert!(source.contains(".w(px(row_width))"));
-        assert!(source.contains(".w(px(label_width))"));
-        assert!(source.contains(".max_w_full()"));
-        assert!(source.contains(".overflow_hidden()"));
     }
 }

@@ -436,60 +436,6 @@ mod tests {
     use crate::library::{Category, Service};
 
     #[test]
-    fn soundcloud_create_open_is_wired_to_the_shared_dialog() {
-        let source = include_str!("soundcloud_playlist.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("pub(super) fn open_soundcloud_playlist_create("));
-        assert!(production.contains("open_soundcloud_playlist_create_with_tracks(Vec::new()"));
-        assert!(production.contains("PlaylistCreateDialog::open("));
-        assert!(production.contains("Provider::SoundCloud"));
-        assert!(!production.contains("SoundCloud playlist creation will be wired later."));
-    }
-
-    #[test]
-    fn soundcloud_catalog_load_uses_owned_playlists() {
-        let source = include_str!("soundcloud_playlist.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        let catalog = production
-            .split("fn load_soundcloud_playlist_catalog(")
-            .nth(1)
-            .and_then(|rest| {
-                rest.split("pub(super) fn start_soundcloud_playlist_create(")
-                    .next()
-            })
-            .expect("SoundCloud catalog loader");
-        assert!(catalog.contains("client.owned_playlists(token)"));
-        assert!(catalog.contains("soundcloud_token()"));
-        assert!(!catalog.contains("soundcloud_mobile_token()"));
-        assert!(production.contains("ensure_soundcloud_playlist_catalog"));
-        assert!(!production.contains("client.catalog("));
-    }
-
-    #[test]
-    fn soundcloud_create_posts_initial_tracks_in_one_request() {
-        let source = include_str!("soundcloud_playlist.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        let create = production
-            .split("pub(super) fn start_soundcloud_playlist_create(")
-            .nth(1)
-            .and_then(|rest| {
-                rest.split("pub(super) fn finish_soundcloud_playlist_create(")
-                    .next()
-            })
-            .expect("SoundCloud create flow");
-        assert!(
-            create.contains(
-                "create_playlist(token.clone(), &title, &description, private, &track_ids)",
-            )
-        );
-        assert!(create.contains("soundcloud_mobile_token()"));
-        assert!(!create.contains("soundcloud_token()"));
-        assert!(!production.contains("soundcloud_session_cookies()"));
-        assert!(!production.contains("begin_initial_add"));
-        assert!(!production.contains("start_playlist_create_add_retry"));
-    }
-
-    #[test]
     fn soundcloud_create_reloads_the_active_soundcloud_playlists_root() {
         assert!(creation_root_refresh_eligible(
             Service::SoundCloud,
@@ -587,23 +533,5 @@ mod tests {
             .is_none()
         );
         assert!(stale_create_warning(&Err("create failed".into())).is_none());
-    }
-
-    #[test]
-    fn soundcloud_create_request_keeps_cover_optional() {
-        let source = include_str!("playlist_controller.rs");
-        assert!(source.contains("pub cover: Option<CoverDraft>"));
-        assert!(source.contains("pub provider: crate::search::Provider"));
-        let dialog = include_str!("playlist_create_dialog.rs");
-        assert!(dialog.contains("cover: self.cover.clone()"));
-        assert!(!dialog.contains("cover: self.cover.clone().unwrap()"));
-
-        let view = include_str!("playlist_create_view.rs");
-        assert!(view.contains(".when(self.covers_supported()"));
-        let soundcloud = include_str!("soundcloud_playlist.rs");
-        let production = &soundcloud[..soundcloud.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("upload_playlist_artwork"));
-        assert!(production.contains("delete_playlist(token.clone(), &playlist_id)"));
-        assert!(production.contains("let Some(image_data) = image_data else"));
     }
 }

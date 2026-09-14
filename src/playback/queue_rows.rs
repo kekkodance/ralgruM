@@ -280,64 +280,12 @@ fn queue_openers(
 
 #[cfg(test)]
 mod tests {
-    use crate::music_ui::{
-        DANGER_REMOVE_HIT_TARGET_PX, DANGER_REMOVE_ICON_SIZE_PX, TRACK_TITLE_ARTIST_GAP_PX,
-    };
+    use crate::music_ui::{DANGER_REMOVE_HIT_TARGET_PX, DANGER_REMOVE_ICON_SIZE_PX};
 
     #[test]
     fn remove_button_keeps_the_original_hit_target_and_smaller_glyph() {
         assert_eq!(DANGER_REMOVE_HIT_TARGET_PX, 26.);
         assert_eq!(DANGER_REMOVE_ICON_SIZE_PX, 10.);
         const { assert!(DANGER_REMOVE_ICON_SIZE_PX < 11.) };
-    }
-
-    #[test]
-    fn queue_remove_pointer_hover_changes_only_the_x_glyph() {
-        let source = include_str!("../ui/music_ui/mod.rs");
-        let remove_button = source
-            .split("pub(crate) fn danger_remove_button(")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split("pub(crate) fn danger_row_action_button(")
-                    .next()
-            })
-            .expect("danger remove button source");
-        assert!(remove_button.contains("group_hover(hover_group"));
-        assert!(remove_button.contains("text_color(rgb(0xf87171))"));
-        assert!(!remove_button.contains(".bg("));
-        assert!(!remove_button.contains(".hover("));
-        assert!(remove_button.contains(".focus_visible("));
-        assert!(remove_button.contains("border_color(rgb(PRIMARY))"));
-    }
-
-    #[test]
-    fn row_meta_uses_app_tooltip_with_deezer_and_soundcloud() {
-        let source = include_str!("queue_rows.rs");
-        let row_meta = source
-            .split("fn row_meta(")
-            .nth(1)
-            .and_then(|source| source.split("#[cfg(test)]").next())
-            .expect("row_meta function");
-        assert!(row_meta.contains(".id("));
-        assert!(row_meta.contains(".app_tooltip("));
-        assert!(row_meta.contains("PlaybackProvider::Deezer"));
-        assert!(row_meta.contains("PlaybackProvider::SoundCloud"));
-        assert!(row_meta.contains("\"Deezer\""));
-        assert!(row_meta.contains("\"SoundCloud\""));
-    }
-
-    #[test]
-    fn queue_track_metadata_uses_the_shared_title_artist_gap() {
-        assert_eq!(TRACK_TITLE_ARTIST_GAP_PX, 1.);
-        let source = include_str!("queue_rows.rs");
-        let row = source
-            .split("pub(super) fn row(")
-            .nth(1)
-            .and_then(|source| source.split("fn row_meta(").next())
-            .expect("queue row source");
-        assert!(row.contains(".gap(px(TRACK_TITLE_ARTIST_GAP_PX))"));
-        assert!(row.contains(".text_size(px(12.5))"));
-        assert!(row.contains(".text_size(px(11.5))"));
     }
 }

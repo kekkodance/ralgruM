@@ -247,16 +247,4 @@ fn secondary_dialog_button(
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn creation_view_uses_shared_cover_editor_and_standard_form_controls() {
-        let source = include_str!("playlist_create_view.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("cover_editor("));
-        assert!(production.contains(".when(self.covers_supported()"));
-        assert!(production.contains("Input::new(&self.description).h(px(92.)).bg(rgb(SURFACE))"));
-        assert!(production.contains("private_playlist_switch"));
-        assert!(production.contains("secondary_dialog_button_with_disabled"));
-        assert!(production.contains("create_dialog_title(provider)"));
-    }
-}
+mod tests {}

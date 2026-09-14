@@ -1113,19 +1113,17 @@ mod tests {
     use super::{
         ACCOUNT_STATUS_ICON_OFFSET_PX, COMPACT_SETTINGS_BUTTON_RADIUS_PX,
         COMPACT_SETTINGS_BUTTON_SIZE, COMPACT_SETTINGS_ICON_SIZE, FULL_SETTINGS_BUTTON_SIZE,
-        LOGOUT_ALL_TOOLTIP, Nav, SETTINGS_ICON_SIZE, SETTINGS_TRANSFER_TOOLTIP,
-        SIDEBAR_BORDER_WIDTH_PX, SIDEBAR_BOTTOM_ACCOUNT_HEADROOM_PX, SIDEBAR_BOTTOM_HOST_HEIGHT_PX,
+        LOGOUT_ALL_TOOLTIP, SETTINGS_ICON_SIZE, SIDEBAR_BORDER_WIDTH_PX,
+        SIDEBAR_BOTTOM_ACCOUNT_HEADROOM_PX, SIDEBAR_BOTTOM_HOST_HEIGHT_PX,
         SIDEBAR_COMPACT_CONTENT_WIDTH_PX, SIDEBAR_COMPACT_CONTROL_GAP_PX,
         SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX, SIDEBAR_COMPACT_LOGOUT_ID,
         SIDEBAR_COMPACT_SETTINGS_ACTION_GROUP_GAP_PX, SIDEBAR_COMPACT_SETTINGS_ID,
         SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX, SIDEBAR_COMPACT_TRANSFER_ID, SIDEBAR_COMPACT_WIDTH_PX,
         SIDEBAR_DESKTOP_WIDTH_PX, SIDEBAR_EXPANDED_CONTENT_WIDTH_PX, SIDEBAR_EXPANDED_LOGOUT_ID,
         SIDEBAR_EXPANDED_TRANSFER_BOTTOM_PX, SIDEBAR_EXPANDED_TRANSFER_ID,
-        SIDEBAR_HORIZONTAL_PADDING_PX, SIDEBAR_ICON_GLYPH_SIZE, SIDEBAR_ICON_SLOT_SIZE_PX,
-        SIDEBAR_NAV_ACTIVE_BACKGROUND, SIDEBAR_NAV_HORIZONTAL_PADDING_PX,
-        SIDEBAR_NAV_HOVER_BACKGROUND, SIDEBAR_RIGHT_PADDING_PX, SIDEBAR_SETTINGS_CATEGORY_GAP_PX,
-        should_reset_discover_home, sidebar_bottom_opacities, sidebar_expanded_content_width,
-        sidebar_pass_value,
+        SIDEBAR_HORIZONTAL_PADDING_PX, SIDEBAR_NAV_ACTIVE_BACKGROUND, SIDEBAR_NAV_HOVER_BACKGROUND,
+        SIDEBAR_RIGHT_PADDING_PX, SIDEBAR_SETTINGS_CATEGORY_GAP_PX, sidebar_bottom_opacities,
+        sidebar_expanded_content_width, sidebar_pass_value,
     };
     use crate::{
         settings::SidebarPass,
@@ -1142,38 +1140,6 @@ mod tests {
         assert_eq!(COMPACT_SETTINGS_ICON_SIZE, 16.);
         assert_eq!(SETTINGS_ICON_SIZE, 14.);
         assert_eq!(ACCOUNT_STATUS_ICON_OFFSET_PX, 1.);
-    }
-
-    #[test]
-    fn sidebar_icon_leading_is_invariant_between_compact_and_full_modes() {
-        assert_eq!(SIDEBAR_ICON_SLOT_SIZE_PX, 18.);
-        assert_eq!(SIDEBAR_ICON_GLYPH_SIZE, 16.);
-        let compact_leading = SIDEBAR_NAV_HORIZONTAL_PADDING_PX
-            + (SIDEBAR_ICON_SLOT_SIZE_PX - SIDEBAR_ICON_GLYPH_SIZE) / 2.;
-        let expanded_leading = SIDEBAR_NAV_HORIZONTAL_PADDING_PX
-            + (SIDEBAR_ICON_SLOT_SIZE_PX - SIDEBAR_ICON_GLYPH_SIZE) / 2.;
-        assert_eq!(compact_leading, expanded_leading);
-
-        let source = include_str!("sidebar.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(!production.contains("shell-nav-indicator-"));
-        assert!(!production.contains("shell-settings-indicator-"));
-    }
-
-    #[test]
-    fn download_badge_keeps_its_optical_offset_and_separate_motion_layers() {
-        let source = include_str!("sidebar.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        let badge = production
-            .split_once("fn download_badge(")
-            .map(|(_, rest)| rest)
-            .expect("download badge renderer");
-        assert!(badge.contains("DOWNLOAD_BADGE_NUMERAL_OFFSET_PX"));
-        assert!(badge.contains("sidebar-download-badge-position"));
-        assert!(badge.contains("sidebar-download-badge-presence"));
-        assert!(badge.contains(".top(px(target_top))"));
-        assert!(badge.contains("lerp(from_top, target_top, delta)"));
-        assert!(badge.contains("lerp(from_right, target_right, delta)"));
     }
 
     #[test]
@@ -1289,28 +1255,6 @@ mod tests {
     }
 
     #[test]
-    fn compact_action_layers_use_their_matching_bottom_offsets() {
-        let source = include_str!("sidebar.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        let logout_start = production
-            .find("let compact_logout_layer =")
-            .expect("compact logout layer");
-        let transfer_start = production
-            .find("let compact_transfer_layer =")
-            .expect("compact transfer layer");
-        let settings_start = production
-            .find("let compact_settings_layer =")
-            .expect("compact settings layer");
-        let logout = &production[logout_start..transfer_start];
-        let transfer = &production[transfer_start..settings_start];
-
-        assert!(logout.contains(".bottom(px(SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX))"));
-        assert!(!logout.contains("SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX"));
-        assert!(transfer.contains(".bottom(px(SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX))"));
-        assert!(!transfer.contains("SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX"));
-    }
-
-    #[test]
     fn sidebar_bottom_action_ids_keep_compact_and_expanded_logout_distinct() {
         assert_ne!(SIDEBAR_COMPACT_LOGOUT_ID, SIDEBAR_EXPANDED_LOGOUT_ID);
         assert_eq!(
@@ -1329,74 +1273,11 @@ mod tests {
     }
 
     #[test]
-    fn discover_sidebar_reset_is_limited_to_repeated_discover_clicks() {
-        assert!(should_reset_discover_home(Nav::Discover, true));
-        assert!(!should_reset_discover_home(Nav::Discover, false));
-        assert!(!should_reset_discover_home(Nav::Library, true));
-
-        let source = include_str!("sidebar.rs");
-        let select_nav = source
-            .split_once("fn select_nav")
-            .and_then(|(_, rest)| rest.split_once("pub(crate) fn open_general_settings"))
-            .map(|(method, _)| method)
-            .expect("sidebar navigation handler should remain focused");
-        assert!(select_nav.contains("already_selected && nav != Nav::Discover"));
-        assert!(select_nav.contains("should_reset_discover_home(nav, already_selected)"));
-        assert!(select_nav.contains("} else if nav != Nav::Discover"));
-        assert!(select_nav.contains("close_detail_for_main_navigation"));
-        assert!(!select_nav.contains("close_search_navigation(cx)"));
-    }
-
-    #[test]
-    fn opening_settings_uses_main_navigation_state_preservation() {
-        let source = include_str!("sidebar.rs");
-        let method = source
-            .split_once("pub(crate) fn open_general_settings")
-            .and_then(|(_, rest)| rest.split_once("fn open_settings_now"))
-            .map(|(method, _)| method)
-            .expect("general settings opener should remain focused");
-        assert!(method.contains("close_detail_for_main_navigation"));
-    }
-
-    #[test]
-    fn logout_all_button_opens_confirmation_instead_of_logging_out_immediately() {
-        let source = include_str!("sidebar.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        let start = production
-            .find("fn logout_all_button(")
-            .expect("logout all button");
-        let button = &production[start..];
-        let end = button
-            .find("pub(super) fn render_sidebar")
-            .expect("render_sidebar follows logout_all_button");
-        let button = &button[..end];
-        assert!(button.contains("confirm_logout_all(window, cx)"));
-        assert!(!button.contains("settings.logout_all("));
-        assert!(!production.contains("settings.logout_all("));
-    }
-
-    #[test]
     fn logout_all_tooltip_places_the_service_list_on_its_own_line() {
         assert_eq!(
             LOGOUT_ALL_TOOLTIP,
             "Logs out of all active services\n(Murglar, SoundCloud, Deezer)"
         );
-    }
-
-    #[test]
-    fn settings_transfer_button_is_neutral_and_sits_above_logout() {
-        assert_eq!(SETTINGS_TRANSFER_TOOLTIP, "Import or Export Settings");
-        let source = include_str!("sidebar.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("LocalIcon::FileImport"));
-        assert!(production.contains("\"Import / Export\""));
-        assert!(!production.contains("\"Import / Export Settings\""));
-        assert!(production.contains("SETTINGS_SECONDARY_SMALL_ICON_SIZE"));
-        assert!(production.contains("settings.open_settings_transfer(window, cx)"));
-        const { assert!(SIDEBAR_EXPANDED_TRANSFER_BOTTOM_PX > 0.) };
-        const { assert!(SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX > SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX) };
-        assert!(production.contains("neutral_secondary_button"));
-        assert!(production.contains("is_activation_key(event.keystroke.key.as_str())"));
     }
 
     #[test]

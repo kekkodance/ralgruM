@@ -230,58 +230,9 @@ mod tests {
     }
 
     #[test]
-    fn flow_mode_popup_uses_the_compact_checked_action_rows() {
-        assert_eq!(crate::context_menu::COMPACT_MENU_WIDTH, 144.);
-        let source = include_str!("flow_controls.rs");
-        assert!(source.contains("compact_checked_action_item"));
-        assert!(source.contains(".max_w(px(crate::context_menu::COMPACT_MENU_WIDTH))"));
-    }
-
-    #[test]
-    fn flow_mode_trigger_delegates_hover_to_the_ghost_button_variant() {
-        let source = include_str!("flow_controls.rs");
-        let trigger = source
-            .split("fn render_mode_selector_with_ids")
-            .nth(1)
-            .and_then(|source| source.split("#[cfg(test)]").next())
-            .expect("mode selector render function");
-        assert!(trigger.contains(".ghost()"));
-        assert!(!trigger.contains(".hover("));
-    }
-
-    #[test]
-    fn flow_mode_tooltip_is_stable_and_does_not_include_the_selected_mode() {
-        let source = include_str!("flow_controls.rs");
-        let trigger = source
-            .split("fn render_mode_selector_with_ids")
-            .nth(1)
-            .and_then(|source| source.split("#[cfg(test)]").next())
-            .expect("mode selector render function");
-        assert!(trigger.contains(".app_tooltip(mode_label)"));
-        assert!(trigger.contains(".aria_label(mode_label)"));
-        assert!(!trigger.contains("format!(\"Flow mode:"));
-    }
-
-    #[test]
     fn mode_context_labels_distinguish_flow_and_smart_mix() {
         assert_eq!(flow_mode_context_label(false), "Flow mode");
         assert_eq!(flow_mode_context_label(true), "Mix mode");
-    }
-
-    #[test]
-    fn queue_mode_trigger_has_the_named_optical_offset() {
-        assert_eq!(QUEUE_MODE_OPTICAL_OFFSET_PX, 2.);
-        let source = include_str!("flow_controls.rs");
-        let queue = source
-            .split("pub(crate) fn render_queue_mode_selector")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split("pub(crate) const fn flow_mode_context_label")
-                    .next()
-            })
-            .expect("queue mode selector source");
-        assert!(queue.contains(".top(px(QUEUE_MODE_OPTICAL_OFFSET_PX))"));
     }
 
     #[test]

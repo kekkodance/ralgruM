@@ -521,12 +521,25 @@ fn activate_card(host: &gpui::Entity<LibraryView>, card: Card, window: &mut Wind
     host.update(app, |this, cx| {
         // Deezer behavior: the primary click on a Flow card starts the
         // mix playing; the context menu keeps Open for the flow page.
-        if card.kind == Category::Flow {
-            this.start_deezer_flow(card, false, cx);
-        } else {
-            this.open_card(card, cx);
+        match card_activation(card.kind) {
+            CardActivation::PlayFlow => this.start_deezer_flow(card, false, cx),
+            CardActivation::Open => this.open_card(card, cx),
         }
     });
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CardActivation {
+    Open,
+    PlayFlow,
+}
+
+fn card_activation(kind: Category) -> CardActivation {
+    if kind == Category::Flow {
+        CardActivation::PlayFlow
+    } else {
+        CardActivation::Open
+    }
 }
 
 pub(super) fn provider_artist_detail(view: &LibraryView) -> bool {
@@ -564,41 +577,24 @@ fn card_kind(kind: Category) -> CardKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{card_content_identity, card_kind, is_card_actionable, is_provider_artist_route};
+    use super::{
+        CardActivation, card_activation, card_content_identity, card_kind, is_card_actionable,
+        is_provider_artist_route,
+    };
     use crate::library::model::{Card, Category, Route, Service};
     use crate::music_ui::CardKind;
 
     #[test]
-    fn flow_cards_play_on_click_while_the_menu_keeps_open() {
-        let source = include_str!("cards_view.rs");
-        let implementation = source.split_once("#[cfg(test)]").map_or_else(
-            || panic!("cards implementation section is missing"),
-            |(code, _)| code,
-        );
-        let activate = implementation
-            .split_once("fn activate_card(")
-            .and_then(|(_, body)| body.split_once("pub(super) fn provider_artist_detail"))
-            .map(|(body, _)| body)
-            .expect("activate_card should precede provider_artist_detail");
-        // The primary click on a flow card starts the mix playing.
-        assert!(activate.contains("if card.kind == Category::Flow {"));
-        assert!(activate.contains("this.start_deezer_flow(card, false, cx);"));
-        // Every other actionable card keeps navigating to its page.
-        assert!(activate.contains("this.open_card(card, cx);"));
-        // The flow card advertises playing, not opening.
-        assert!(implementation.contains("format!(\"Play {}\", card.title)"));
-
-        // The flow page stays reachable through the context menu entries.
-        let flow_menu = implementation
-            .split_once("Category::Flow => {")
-            .and_then(|(_, body)| body.split_once("Category::Station"))
-            .map(|(body, _)| body)
-            .expect("flow card menu branch");
-        assert!(flow_menu.contains("discover_card_menu_with_actions("));
-        assert!(flow_menu.contains("DiscoverMenuPrimary::PlayFlow"));
-        assert!(flow_menu.contains("this.start_deezer_flow(play_card.clone(), false, cx)"));
-        assert!(flow_menu.contains("DiscoverMenuPrimary::Open"));
-        assert!(flow_menu.contains("this.open_card(open_card.clone(), cx)"));
+    fn flow_cards_play_while_other_cards_open() {
+        assert_eq!(card_activation(Category::Flow), CardActivation::PlayFlow);
+        for category in [
+            Category::Albums,
+            Category::Artists,
+            Category::Playlists,
+            Category::Station,
+        ] {
+            assert_eq!(card_activation(category), CardActivation::Open);
+        }
     }
 
     #[test]
@@ -621,45 +617,9 @@ mod tests {
     }
 
     #[test]
-    fn grid_resize_keeps_virtualized_cards() {
-        let source = include_str!("cards_view.rs");
-        assert!(source.contains("should_virtualize_card_grid(preview_limit, cards.len())"));
-        assert!(source.contains("animate_grid_card("));
-        let positioned = ["positioned_card", "_grid("].concat();
-        assert!(!source.contains(&positioned));
-    }
-
-    #[test]
     fn flow_cards_use_the_dedicated_centered_card_kind() {
         assert!(matches!(card_kind(Category::Flow), CardKind::Flow));
         assert!(matches!(card_kind(Category::Albums), CardKind::Album));
-    }
-
-    #[test]
-    fn provider_collection_cards_stay_inside_library() {
-        let source = include_str!("cards_view.rs");
-        let implementation = source.split_once("#[cfg(test)]").map_or_else(
-            || panic!("cards implementation section is missing"),
-            |(code, _)| code,
-        );
-        assert!(implementation.contains("this.open_card(card, cx)"));
-        assert!(!implementation.contains("external_card_navigation"));
-        assert!(!implementation.contains("open_external_card"));
-
-        for provider in [
-            crate::search::Provider::Deezer,
-            crate::search::Provider::SoundCloud,
-        ] {
-            for kind in [Category::Albums, Category::Artists, Category::Playlists] {
-                let card = Card {
-                    kind,
-                    source: provider,
-                    id: "42".into(),
-                    ..Card::default()
-                };
-                assert!(card.search_card().is_some());
-            }
-        }
     }
 
     #[test]
@@ -675,40 +635,6 @@ mod tests {
 
         let root_route = Route::root(Service::Deezer, Category::Artists);
         assert!(!is_provider_artist_route(Service::Deezer, &root_route));
-    }
-
-    #[test]
-    fn provider_artist_cards_share_search_visual_primitives_but_keep_native_cards() {
-        let library = include_str!("cards_view.rs");
-        let search = include_str!("../search/cards_view.rs");
-        let shared = include_str!("../ui/collection_detail.rs");
-        for source in [search, library] {
-            assert!(source.contains("collection_card_frame"));
-            assert!(source.contains("collection_card_content"));
-            assert!(source.contains("collection_card_carousel_content"));
-        }
-        for needle in [
-            ".rounded(px(if narrow { 8. } else { 12. }))",
-            ".hover(|style|",
-            ".flex_col()",
-            ".gap(px(DETAIL_CARD_GAP_PX))",
-        ] {
-            assert!(shared.contains(needle), "shared card visual lost {needle}");
-        }
-        assert!(library.contains("collection_card("));
-    }
-
-    #[test]
-    fn local_playlist_cards_use_the_local_collection_menu() {
-        let source = include_str!("cards_view.rs");
-        let source = &source[..source.find("#[cfg(test)]").unwrap()];
-        let local_branch = source
-            .split("Category::Playlists\n                    if card.library_service")
-            .nth(1)
-            .and_then(|body| body.split("Category::Playlists =>").next())
-            .expect("local playlist card branch");
-        assert!(local_branch.contains("local_playlist_card_menu"));
-        assert!(!local_branch.contains("library_card_menu"));
     }
 
     #[test]

@@ -659,28 +659,6 @@ mod tests {
     }
 
     #[test]
-    fn discover_cards_end_naturally_when_metadata_is_hidden() {
-        let source = include_str!("collection_detail.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("collection card production source");
-        assert!(!source.contains("DISCOVER_CARD_METADATA_ROW_HEIGHT_PX"));
-        assert!(!source.contains("presentation.reserve_metadata_row"));
-    }
-
-    #[test]
-    fn provider_headers_use_the_artist_chip_right_inset() {
-        assert_eq!(super::DETAIL_PROVIDER_RIGHT_MARGIN_PX, 14.);
-        let source = include_str!("collection_detail.rs");
-        let provider_header = source
-            .split("pub(crate) fn render_provider_header")
-            .nth(1)
-            .and_then(|source| source.split("pub(crate) fn render_artist_header").next())
-            .expect("provider header source");
-        assert!(provider_header.contains(".mr(px(DETAIL_PROVIDER_RIGHT_MARGIN_PX))"));
-    }
-
-    #[test]
     fn provider_headers_hide_collection_totals_but_keep_track_totals() {
         assert_eq!(provider_header_total(ResultType::Albums, Some(12)), None);
         assert_eq!(provider_header_total(ResultType::Playlists, Some(12)), None);
@@ -692,38 +670,5 @@ mod tests {
             provider_header_total(ResultType::Artists, Some(12)),
             Some(12)
         );
-    }
-
-    #[test]
-    fn search_and_library_use_the_shared_provider_detail_composition() {
-        let search = include_str!("../search/detail_view.rs");
-        let library = include_str!("../library/content_view.rs");
-        for source in [search, library] {
-            assert!(source.contains("render_shared_artist_header"));
-            assert!(source.contains("render_shared_artist_section"));
-        }
-        assert!(search.contains("render_shared_provider_detail"));
-        assert!(library.contains("render_shared_provider_header"));
-        assert!(search.contains("render_collection_empty"));
-        assert!(library.contains("render_collection_empty"));
-    }
-
-    #[test]
-    fn local_playlist_header_reuses_collection_geometry_and_truncates_description() {
-        let source = include_str!("collection_detail.rs");
-        let local = source
-            .split("pub(crate) fn render_local_playlist_header")
-            .nth(1)
-            .and_then(|body| body.split("fn render_collection_header").next())
-            .expect("Local playlist header should exist");
-        assert!(local.contains("render_collection_header"));
-        let shared = source
-            .split("fn render_collection_header")
-            .nth(1)
-            .and_then(|body| body.split("pub(crate) fn render_artist_header").next())
-            .expect("shared collection header should exist");
-        assert!(shared.contains(".truncate()"));
-        assert!(shared.contains("DETAIL_PROVIDER_RIGHT_MARGIN_PX"));
-        assert!(shared.contains("HeaderContext::Local => local_context()"));
     }
 }

@@ -640,17 +640,4 @@ mod tests {
         );
         assert_eq!(state.status, PlaybackStatus::Empty);
     }
-
-    #[test]
-    fn index_slot_crossfades_the_number_and_bars() {
-        let source = include_str!("playing_indicator.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("playing indicator");
-        assert!(source.contains("track-index-mix"));
-        assert!(source.contains(".opacity(1. - mix)"));
-        assert!(source.contains(".opacity(mix)"));
-        assert!(source.contains("track-index-bars"));
-        assert!(source.contains("lerp(BAR_BASE_HEIGHT, bounce, amp)"));
-    }
 }

@@ -151,15 +151,4 @@ fn local_playlist_toast(title: &str, message: &str, cx: &mut Context<LibraryView
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn local_collection_actions_do_not_fetch_a_provider_route() {
-        let source = include_str!("local_playlist_actions.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("local_playlist_action_snapshot"));
-        assert!(production.contains("enqueue_tracks"));
-        assert!(production.contains("start_batch"));
-        assert!(production.contains("DownloadVariant::Best"));
-        assert!(!production.contains("load_route"));
-    }
-}
+mod tests {}

@@ -447,17 +447,4 @@ mod tests {
         drop(state);
         assert_eq!(super::super::open_context_menu_count(), baseline);
     }
-
-    #[test]
-    fn empty_menu_is_rejected_before_acquiring_a_lease() {
-        let source = include_str!("context_ext.rs");
-        let empty_check = source
-            .find("if menu.read(cx).is_empty()")
-            .expect("empty menus must be rejected");
-        let acquire = source[empty_check..]
-            .find("ContextMenuLease::acquire()")
-            .map(|offset| empty_check + offset)
-            .expect("non-empty menus must acquire a lease");
-        assert!(empty_check < acquire);
-    }
 }

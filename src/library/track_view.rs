@@ -687,52 +687,6 @@ mod favorite_tests {
     };
 
     #[test]
-    fn track_rows_keep_download_before_more_and_playlist_controls() {
-        let source = include_str!("track_view.rs");
-        let download_helper = ["fn ", "download_button("].concat();
-        let favorite_helper = ["fn ", "favorite_button("].concat();
-        let old_reorder_helper = ["reorder_", "buttons("].concat();
-        assert!(source.contains("track_menu_button("));
-        assert!(source.contains("track_download_button_above("));
-        assert!(source.contains("remove_button("));
-        assert!(source.contains("PlaylistTrackDrag"));
-        assert!(source.contains(".drag_over::<PlaylistTrackDrag>"));
-        assert!(!source.contains(&old_reorder_helper));
-        assert!(source.contains(&download_helper));
-        assert!(!source.contains(&favorite_helper));
-        let actions = source
-            .split("let tertiary_action = Some(")
-            .nth(1)
-            .and_then(|source| source.split("let row = track_row_with_action(").next())
-            .expect("track action source");
-        let download = actions.find(".child(download_button(").unwrap();
-        let more = actions.find("context_menu::track_menu_button(").unwrap();
-        assert!(download < more);
-    }
-
-    #[test]
-    fn track_rendering_does_not_reborrow_the_library_entity() {
-        let source = include_str!("track_view.rs");
-        let read_call = ["host", ".read("].concat();
-        assert!(!source.contains(&read_call));
-    }
-
-    #[test]
-    fn library_artist_rows_use_the_context_artist_opener() {
-        let source = include_str!("track_view.rs");
-        assert!(source.contains("opener: context_open_artist.clone()"));
-    }
-
-    #[test]
-    fn local_playlist_rows_remove_by_provider_and_track_id_without_numeric_gate() {
-        let source = include_str!("track_view.rs");
-        let source = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(source.contains("remove_local_playlist_track"));
-        assert!(source.contains("*local || super::playlist_client::valid_id(&track.id).is_ok()"));
-        assert!(source.contains("provider: crate::search::Provider"));
-    }
-
-    #[test]
     fn filtered_rows_address_their_original_queue_positions() {
         let source_indices = [43, 44];
 

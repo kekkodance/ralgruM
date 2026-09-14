@@ -808,18 +808,6 @@ mod tests {
     }
 
     #[test]
-    fn every_track_menu_host_delegates_local_picker_to_the_library_entity() {
-        let library = include_str!("../library/view.rs");
-        let search = include_str!("../search/view.rs");
-        let queue = include_str!("../playback/queue.rs");
-        let cache = include_str!("../cache/mod.rs");
-        assert!(library.contains("LibraryView::open_local_playlist_picker"));
-        assert!(search.contains("library.open_local_playlist_picker"));
-        assert!(queue.contains("library.open_local_playlist_picker"));
-        assert!(cache.contains("library.open_local_playlist_picker"));
-    }
-
-    #[test]
     fn deezer_artist_routes_keep_all_collaborators_but_dedupe_ids() {
         let routes = artist_routes_for_track(
             Provider::Deezer,

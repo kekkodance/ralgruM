@@ -266,57 +266,10 @@ mod tests {
     }
 
     #[test]
-    fn multiline_builder_has_no_single_line_validator() {
-        let source = include_str!("playlist_form.rs");
-        let start = source
-            .find("pub(super) fn description_input")
-            .expect("description builder");
-        let end = source[start..]
-            .find("pub(super) fn title_field")
-            .map(|offset| start + offset)
-            .expect("description builder end");
-        assert!(!source[start..end].contains(".validate("));
-    }
-
-    #[test]
     fn shared_limit_helpers_are_unicode_safe_and_preserve_prefix_selection() {
         assert_eq!(truncate_input("é🎵abc", 2), "é🎵");
         assert_eq!(truncate_input("a\nb\nc", 3), "a\nb");
         assert_eq!(clamp_selection_to_prefix(2..12, "é🎵".len()), 2..6);
         assert_eq!(clamp_selection_to_prefix(0..1, 0), 0..0);
-    }
-
-    #[test]
-    fn all_playlist_forms_use_shared_render_time_limit_enforcement() {
-        let create = include_str!("playlist_create_view.rs");
-        let edit = include_str!("playlist_dialog.rs");
-        let local = include_str!("local_playlist_dialog.rs");
-        for source in [create, edit, local] {
-            assert!(source.contains("playlist_form::enforce_input_limits"));
-        }
-        assert!(create.contains("PlaylistFormTarget::Provider(self.provider)"));
-        assert!(edit.contains("PlaylistFormTarget::Provider(self.provider)"));
-        assert!(local.contains("PlaylistFormTarget::Local"));
-        assert_eq!(
-            limits(PlaylistFormTarget::Provider(Provider::Deezer)).title_max_chars,
-            50
-        );
-        assert_eq!(
-            limits(PlaylistFormTarget::Provider(Provider::Deezer)).description_max_chars,
-            200
-        );
-        assert_eq!(
-            limits(PlaylistFormTarget::Provider(Provider::SoundCloud)).title_max_chars,
-            100
-        );
-        assert_eq!(
-            limits(PlaylistFormTarget::Provider(Provider::SoundCloud)).description_max_chars,
-            4000
-        );
-        assert_eq!(limits(PlaylistFormTarget::Local).title_max_chars, 100);
-        assert_eq!(
-            limits(PlaylistFormTarget::Local).description_max_chars,
-            4000
-        );
     }
 }

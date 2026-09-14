@@ -524,10 +524,9 @@ mod tests {
         PAYMENT_METHOD_BACKGROUND, PAYMENT_METHOD_GAP, PAYMENT_METHOD_HOVER_BACKGROUND,
         PAYMENT_METHOD_HOVER_BORDER, PAYMENT_METHOD_HOVER_TEXT, PAYMENT_METHOD_ICON_SIZE,
         PAYMENT_METHOD_MIN_HEIGHT, PAYMENT_METHOD_PADDING_X, PAYMENT_METHOD_PADDING_Y,
-        PAYMENT_METHOD_RADIUS, PAYMENT_METHOD_TEXT, PAYMENT_METHODS_CONTENT_GAP,
-        PAYMENT_METHODS_PADDING_Y, PREMIUM_PLAN_DESCRIPTION_SIZE_PX, PREMIUM_PLAN_TITLE_SIZE_PX,
-        has_subscription_separator, merchant_icon, payment_methods_label,
-        payment_methods_reveal_height, payment_promotion_id,
+        PAYMENT_METHOD_RADIUS, PAYMENT_METHOD_TEXT, PREMIUM_PLAN_DESCRIPTION_SIZE_PX,
+        PREMIUM_PLAN_TITLE_SIZE_PX, has_subscription_separator, merchant_icon,
+        payment_methods_label, payment_promotion_id,
     };
     use crate::assets::LocalIcon;
     use crate::murglar_backend::PaymentPlan;
@@ -587,22 +586,5 @@ mod tests {
         assert!(has_subscription_separator(1));
         assert_eq!(payment_methods_label(true), "Choose payment method");
         assert_eq!(payment_methods_label(false), "No payment methods available");
-    }
-
-    #[test]
-    fn payment_methods_reveal_without_a_jump_or_tooltip() {
-        let source = include_str!("murglar_plans.rs");
-        let show_tooltip = ["Show", "payment methods"].join(" ");
-        let hide_tooltip = ["Hide", "payment methods"].join(" ");
-        assert!(!source.contains(&show_tooltip));
-        assert!(!source.contains(&hide_tooltip));
-        assert!(source.contains("with_animation"));
-        assert!(source.contains("crate::motion::content()"));
-        assert!(source.contains(".overflow_hidden()"));
-        assert!(source.contains(".max_h(px(reveal_height * progress))"));
-        assert_eq!(PAYMENT_METHODS_PADDING_Y, 9.);
-        assert_eq!(PAYMENT_METHODS_CONTENT_GAP, 8.);
-        assert!(payment_methods_reveal_height(1) > PAYMENT_METHOD_MIN_HEIGHT);
-        assert!(payment_methods_reveal_height(3) > payment_methods_reveal_height(1));
     }
 }

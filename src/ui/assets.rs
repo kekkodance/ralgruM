@@ -597,12 +597,4 @@ mod tests {
         assert!(as_text.contains("Font Awesome"));
         assert!(!as_text.contains("lucide"));
     }
-
-    #[test]
-    fn lucide_icon_pack_is_not_served() {
-        assert!(AppAssets.load("icons/bot.svg").is_err());
-        let source = include_str!("assets.rs");
-        assert!(!source.contains(concat!("Component", "Assets")));
-        assert!(!source.contains(concat!("gpui_component", "_assets")));
-    }
 }

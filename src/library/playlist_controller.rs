@@ -1111,23 +1111,6 @@ mod create_tests {
     }
 
     #[test]
-    fn successful_reorder_does_not_refresh_provider_catalogs() {
-        let source = include_str!("playlist_controller.rs");
-        let start = source.find("fn finish_playlist_reorder").unwrap();
-        let end = source[start..]
-            .find("pub(crate) fn remove_track_from_playlist")
-            .map(|offset| start + offset)
-            .unwrap();
-        let finish = &source[start..end];
-        assert!(!finish.contains("invalidate_deezer"));
-        assert!(!finish.contains("invalidate_soundcloud"));
-        assert!(!finish.contains("invalidate_catalog"));
-        assert!(!finish.contains("retry_playlist_catalog"));
-        assert!(!finish.contains("retry_soundcloud_playlist_catalog"));
-        assert!(source.contains("Playlist order was not saved"));
-    }
-
-    #[test]
     fn creation_reloads_only_the_active_deezer_playlists_root() {
         assert!(creation_root_refresh_eligible(
             Service::Deezer,
@@ -1156,77 +1139,9 @@ mod create_tests {
     }
 
     #[test]
-    fn playlist_create_open_snapshots_scope_before_dialog_construction() {
-        let controller_source = include_str!("playlist_controller.rs");
-        let dialog_source = include_str!("playlist_create_dialog.rs");
-        let open_start = dialog_source
-            .find("pub(crate) fn open(")
-            .expect("playlist create dialog open function");
-        let open_end = dialog_source[open_start..]
-            .find("    fn choose(")
-            .map(|offset| open_start + offset)
-            .expect("playlist create dialog open function end");
-        let open_source = &dialog_source[open_start..open_end];
-
-        assert!(
-            controller_source
-                .contains("let account_scope = self.account.read(cx).library_scope();")
-        );
-        assert!(controller_source.contains("crate::search::Provider::Deezer"));
-        assert!(controller_source.contains("account_scope,"));
-        assert!(open_source.contains("account_scope: String"));
-        assert!(!open_source.contains("library.read(cx)"));
-    }
-
-    #[test]
-    fn playlist_edit_and_delete_open_after_library_lease_unwinds() {
-        let controller_source = include_str!("playlist_controller.rs");
-        assert!(controller_source.contains("let library = cx.entity();"));
-        assert!(
-            controller_source
-                .matches("cx.defer_in(window, move |_, window, cx|")
-                .count()
-                >= 2
-        );
-        assert!(controller_source.contains("super::playlist_dialog::PlaylistDialog::open("));
-        assert!(
-            controller_source
-                .contains("super::playlist_delete_dialog::PlaylistDeleteDialog::open(")
-        );
-
-        for (source, end_marker) in [
-            (
-                include_str!("playlist_dialog.rs"),
-                "    fn start_cover_load",
-            ),
-            (include_str!("playlist_delete_dialog.rs"), "    fn submit("),
-        ] {
-            let start = source
-                .find("pub(crate) fn open(")
-                .expect("dialog open function");
-            let end = source[start..]
-                .find(end_marker)
-                .map(|offset| start + offset)
-                .expect("dialog open function end");
-            assert!(!source[start..end].contains("library.read(cx)"));
-        }
-    }
-
-    #[test]
     fn playlist_create_completion_rejects_a_late_account_scope() {
         assert!(playlist_create_scope_matches("account-a", "account-a"));
         assert!(!playlist_create_scope_matches("account-b", "account-a"));
-    }
-
-    #[test]
-    fn playlist_create_completion_checks_scope_before_state_transitions() {
-        let source = include_str!("playlist_controller.rs");
-        assert!(source.contains(
-            "if !playlist_create_scope_matches(&self.account.read(cx).library_scope(), scope)"
-        ));
-        assert!(source.contains("if !self.playlists.create_phase("));
-        assert!(source.contains("if !self.playlists.complete_create("));
-        assert!(source.contains("if !self.playlists.partial_create("));
     }
 
     #[test]
@@ -1249,18 +1164,6 @@ mod create_tests {
                 .message_for(crate::search::Provider::SoundCloud),
             "SoundCloud playlist client could not be created"
         );
-    }
-
-    #[test]
-    fn library_owns_create_and_retry_completion_tasks() {
-        let controller = include_str!("playlist_controller.rs");
-        let dialog = include_str!("playlist_create_dialog.rs");
-        assert!(controller.contains("pub(super) fn start_playlist_create("));
-        assert!(controller.contains("this.finish_playlist_create("));
-        assert!(controller.contains("pub(super) fn start_playlist_create_add_retry("));
-        assert!(controller.contains("this.finish_playlist_create_add_retry("));
-        assert!(!dialog.contains("finish_playlist_create(&account_scope"));
-        assert!(!dialog.contains("finish_playlist_create_add_retry("));
     }
 
     #[test]

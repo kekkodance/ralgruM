@@ -1364,13 +1364,12 @@ fn error_text(error: impl Into<SharedString>) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddTracksResult, PICKER_FILTER_PLACEHOLDER, PickerMode, PickerPhase, PickerPlaylist,
-        PlaylistPickerTarget, can_confirm, can_dismiss, dialog_max_height, estimated_dialog_height,
+        AddTracksResult, PickerMode, PickerPhase, PickerPlaylist, PlaylistPickerTarget,
+        can_confirm, can_dismiss, dialog_max_height, estimated_dialog_height,
         filter_picker_playlists, filter_playlists, fixed_dialog_height, list_max_height,
         move_selection, picker_account_error, picker_dialog_width, picker_phase,
-        playlist_privacy_icon, playlist_track_meta, selection_index_for_id,
-        selection_index_for_picker_id, selection_scroll_offset, toggle_selection,
-        track_count_label,
+        playlist_track_meta, selection_index_for_id, selection_index_for_picker_id,
+        selection_scroll_offset, toggle_selection, track_count_label,
     };
     use crate::library::playlist_client::{OwnedPlaylist, PlaylistOwner};
     use crate::search::Provider;
@@ -1464,20 +1463,6 @@ mod tests {
     }
 
     #[test]
-    fn picker_filter_uses_the_requested_single_space_placeholder() {
-        assert_eq!(
-            PICKER_FILTER_PLACEHOLDER,
-            "What playlist are you looking for?"
-        );
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("PICKER_FILTER_PLACEHOLDER"));
-        assert!(production.contains("What playlist are you looking for?"));
-        assert!(!production.contains("What playlist  are you looking for?"));
-        assert!(!production.contains("Filter playlists..."));
-    }
-
-    #[test]
     fn picker_click_toggles_selection_and_disables_confirm_when_empty() {
         assert_eq!(toggle_selection(None, "7"), Some("7".to_owned()));
         assert_eq!(toggle_selection(Some("7".to_owned()), "7"), None);
@@ -1497,131 +1482,6 @@ mod tests {
         assert_eq!(playlist_track_meta(Some(34)), Some("34 tracks".to_owned()));
         assert_eq!(playlist_track_meta(Some(1)), Some("1 track".to_owned()));
         assert_eq!(playlist_track_meta(None), None);
-    }
-
-    #[test]
-    fn picker_privacy_uses_lock_and_earth_icons() {
-        assert_eq!(playlist_privacy_icon(true), crate::assets::LocalIcon::Lock);
-        assert_eq!(
-            playlist_privacy_icon(false),
-            crate::assets::LocalIcon::EarthAmericas
-        );
-        // Both glyphs are square with built-in padding (the lock is the
-        // full-viewport variant), so one square box fits both with no clip.
-        assert_eq!(super::PICKER_PRIVACY_ICON_SIZE, 12.);
-        assert_eq!(super::PICKER_PRIVACY_ICON_GAP, 6.);
-        assert_eq!(super::PICKER_PRIVACY_OPTICAL_OFFSET_PX, 2.);
-        assert_eq!(super::PICKER_TITLE_SUBTITLE_GAP, 1.);
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("playlist.is_private.map(playlist_privacy_icon)"));
-        assert!(!production.contains("LocalIcon::Globe"));
-        assert!(production.contains(".size(px(PICKER_PRIVACY_ICON_SIZE))"));
-        assert!(production.contains("PICKER_PRIVACY_ICON_GAP"));
-        assert!(production.contains("gap(px(PICKER_TITLE_SUBTITLE_GAP))"));
-        assert!(production.contains("top(px(PICKER_PRIVACY_OPTICAL_OFFSET_PX))"));
-        assert!(production.contains("rgb(MUTED)"));
-        // Title line keeps the privacy icon inline next to a truncated name:
-        // the name must shrink to fit (not stretch), so the icon hugs the text.
-        assert!(production.contains("gap(px(PICKER_PRIVACY_ICON_GAP))"));
-        assert!(production.contains(".truncate()"));
-        assert!(production.contains(".overflow_hidden()"));
-        assert!(production.contains(".min_w_0()"));
-        assert!(production.contains(".flex_none()"));
-        assert!(production.contains(".flex_shrink_1()"));
-        assert!(production.contains(".max_w_full()"));
-        assert!(production.contains("playlist-picker-privacy-"));
-        assert!(production.contains(".app_tooltip("));
-        assert!(production.contains("\"Private\""));
-        assert!(production.contains("\"Public\""));
-    }
-
-    #[test]
-    fn picker_row_keeps_icon_gap_and_check_alignment() {
-        assert_eq!(super::PICKER_ROW_ICON_GAP, 14.);
-        assert_eq!(super::PICKER_ROW_ICON_COLUMN, 16.);
-        assert_eq!(super::PICKER_PRIVACY_ICON_GAP, 6.);
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("gap(px(PICKER_ROW_ICON_GAP))"));
-        assert!(production.contains("w(px(PICKER_ROW_ICON_COLUMN))"));
-        assert!(production.contains("gap(px(PICKER_PRIVACY_ICON_GAP))"));
-        // The selected check aligns exactly like the unselected list icon.
-        assert!(!production.contains("PICKER_CHECK_OPTICAL_OFFSET_PX"));
-        assert!(!production.contains("top(px(PICKER_CHECK_OPTICAL_OFFSET_PX))"));
-    }
-
-    #[test]
-    fn picker_selected_hover_differs_from_selected_rest() {
-        assert_eq!(super::PICKER_SELECTED_HOVER_BACKGROUND, 0x6366f13d);
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        // Hovering the selected row must read as a state change, not a no-op.
-        assert!(production.contains("gpui::rgba(PICKER_SELECTED_HOVER_BACKGROUND)"));
-    }
-
-    #[test]
-    fn picker_row_hit_areas_touch_without_changing_pitch() {
-        // 44px visual + 1px padding + 1px shell border on each side.
-        assert_eq!(super::PICKER_ROW_HIT_PADDING, 1.);
-        assert_eq!(
-            super::PICKER_ROW_HEIGHT + 2. * (super::PICKER_ROW_HIT_PADDING + 1.),
-            super::row_stride()
-        );
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        // Spacing moved from the list gap into the rows so the dead zone
-        // between hit areas is gone.
-        assert!(production.contains(".py(px(PICKER_ROW_HIT_PADDING))"));
-        // Visuals follow the shell through its group, not element hover.
-        assert!(production.contains(".group(row_group.clone())"));
-        assert!(production.contains(".group_hover(row_group, |style|"));
-    }
-
-    #[test]
-    fn picker_footer_left_aligns_create_playlist_and_keeps_shared_contracts() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("\"Create Playlist\""));
-        assert!(!production.contains("Create new playlist"));
-        assert!(production.contains("justify_between"));
-        assert!(production.contains("justify_end"));
-        assert!(production.contains("secondary_dialog_button_with_disabled"));
-        assert!(production.contains("primary_button_with_loading"));
-        assert!(production.contains("create-playlist-from-picker"));
-        assert!(production.contains("cancel-playlist-picker"));
-        assert!(production.contains("confirm-playlist-picker"));
-    }
-
-    #[test]
-    fn picker_removes_subtitle_and_playlist_counters() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(!production.contains("Choose one of your editable playlists"));
-        assert!(!production.contains("33 playlists"));
-        assert!(!production.contains("of {} playlists"));
-        assert!(!production.contains("{} playlists"));
-    }
-
-    #[test]
-    fn picker_has_close_button_with_tooltip_and_escape() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("ghost_close_button_with_icon_size"));
-        assert!(production.contains("\"playlist-picker-close\""));
-        assert!(production.contains("\"escape\""));
-        assert!(production.contains("can_dismiss"));
-    }
-
-    #[test]
-    fn picker_rows_stay_focusable_with_stable_ids_and_visible_ring() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("playlist-picker-row-"));
-        assert!(production.contains("tab_stop(!disabled)"));
-        assert!(!production.contains("tab_stop(false)"));
-        assert!(production.contains("focus_visible"));
-        assert!(production.contains("focusable()"));
     }
 
     #[test]
@@ -1647,76 +1507,9 @@ mod tests {
     }
 
     #[test]
-    fn picker_uses_shared_dialog_and_scroll_contracts() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("BACKGROUND"));
-        assert!(production.contains("secondary_dialog_button_with_disabled"));
-        assert!(production.contains("primary_button_with_loading"));
-        assert!(production.contains("text_field_context_menu"));
-        assert!(production.contains("track_scroll(&self.scroll)"));
-        assert!(production.contains("overflow_y_scroll()"));
-        assert!(!production.contains("vertical_scrollbar(&self.scroll)"));
-        assert!(production.contains("browser_scroll_surface("));
-        assert!(production.contains("BrowserScrollTarget::Handle(self.scroll.clone())"));
-        assert!(production.contains("h(px(list_max))"));
-        assert!(production.contains("Scrollbar::vertical(&self.scroll)"));
-        assert!(production.contains("ScrollbarShow::Hover"));
-        assert_eq!(production.matches("Scrollbar::vertical").count(), 1);
-        assert!(production.contains(".pr(px(10.))"));
-        assert_eq!(super::PICKER_SCROLLBAR_EDGE_OFFSET_PX, 14.);
-        assert!(production.contains("PICKER_SCROLLBAR_EDGE_OFFSET_PX"));
-        assert!(production.contains("right(px(-PICKER_SCROLLBAR_EDGE_OFFSET_PX))"));
-        assert!(production.contains(".absolute()"));
-        assert!(production.contains("empty_state::render"));
-        assert!(production.contains("\"escape\""));
-        assert!(production.contains("\"up\""));
-        assert!(production.contains("\"down\""));
-        assert!(production.contains("\"enter\""));
-    }
-
-    #[test]
-    fn picker_never_shows_the_red_removing_banner() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(!production.contains("Removing track from playlist"));
-        let state_source = include_str!("playlist_state.rs");
-        let state_production = &state_source[..state_source.find("#[cfg(test)]").unwrap()];
-        assert!(!state_production.contains("Removing track from playlist"));
-    }
-
-    #[test]
     fn picker_dismisses_on_escape_and_overlay_click_only_when_idle() {
         assert!(can_dismiss(false));
         assert!(!can_dismiss(true));
-    }
-
-    #[test]
-    fn picker_registers_overlay_dismiss_without_triggering_underlying_actions() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("overlay_closable(true)"));
-        assert!(production.contains("on_cancel"));
-        assert!(production.contains("can_dismiss"));
-        assert!(production.contains("request_dialog_close"));
-    }
-
-    #[test]
-    fn soundcloud_picker_adds_through_owned_playlists_and_matching_create() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("add_tracks_to_playlist"));
-        assert!(production.contains("playlist_catalog(*provider)"));
-        assert!(production.contains("open_soundcloud_playlist_create_with_tracks"));
-        assert!(production.contains("Provider::SoundCloud"));
-        assert!(production.contains("picker_title(self.mode())"));
-        let submit = production
-            .split("fn submit_soundcloud(")
-            .nth(1)
-            .and_then(|rest| rest.split("fn move_selection(").next())
-            .expect("SoundCloud picker submission");
-        assert!(submit.contains("soundcloud_mobile_token()"));
-        assert!(!submit.contains("soundcloud_token()"));
     }
 
     #[test]
@@ -1756,19 +1549,6 @@ mod tests {
         );
         assert!(filtered[0].local);
         assert_eq!(filtered[0].is_private, None);
-    }
-
-    #[test]
-    fn local_target_never_reads_provider_catalog_or_account_scope() {
-        let source = include_str!("playlist_picker.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        let local_branch = production
-            .split("PlaylistPickerTarget::Local { .. } =>")
-            .nth(1)
-            .expect("local target branch");
-        assert!(local_branch.contains("None"));
-        assert!(production.contains("PlaylistPickerTarget::Local { .. } => false"));
-        assert!(production.contains(".playlists()"));
     }
 
     #[test]

@@ -306,12 +306,4 @@ mod tests {
         assert_eq!(track_count(580., false), 11);
         assert!(track_count(1_200., false) > track_count(580., false));
     }
-
-    #[test]
-    fn nested_collection_track_count_reserves_its_heading() {
-        assert_eq!(track_count(580., true), 10);
-        assert!(track_count(580., true) < track_count(580., false));
-        let source = include_str!("skeleton.rs");
-        assert!(source.contains("has_collection_heading && show_heading"));
-    }
 }

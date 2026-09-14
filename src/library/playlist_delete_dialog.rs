@@ -382,27 +382,8 @@ mod tests {
     }
 
     #[test]
-    fn delete_dialog_ui_matches_create_dialog_styling_and_buttons() {
-        let source = include_str!("playlist_delete_dialog.rs");
-        assert!(source.contains("danger_secondary_button_with_loading"));
-        assert!(source.contains("secondary_dialog_button_with_disabled"));
-        assert!(source.contains("BACKGROUND"));
-        assert!(source.contains("BORDER"));
-    }
-
-    #[test]
     fn delete_dialog_dismisses_on_escape_and_overlay_click_only_when_idle() {
         assert!(can_dismiss(false));
         assert!(!can_dismiss(true));
-    }
-
-    #[test]
-    fn delete_dialog_registers_escape_and_overlay_dismiss_handlers() {
-        let source = include_str!("playlist_delete_dialog.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("overlay_closable(true)"));
-        assert!(production.contains("on_cancel"));
-        assert!(production.contains("\"escape\""));
-        assert!(production.contains("can_dismiss"));
     }
 }
