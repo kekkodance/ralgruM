@@ -118,9 +118,11 @@ pub enum EmptyLyricsReason {
 pub enum LyricsResponse {
     Synced {
         text: String,
+        url: Option<String>,
     },
     Plain {
         text: String,
+        url: Option<String>,
     },
     Genius {
         text: String,

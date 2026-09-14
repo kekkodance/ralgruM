@@ -1,18 +1,26 @@
 use super::models::{append_annotation_ids, group_lyric_annotations};
 use super::{EmptyLyricsReason, LyricAnnotation, LyricsProvider, LyricsResponse};
 use serde_json::Value;
+use url::Url;
 
 pub fn extract_musixmatch_lyrics(value: &Value) -> Vec<LyricsResponse> {
     let subtitles = value.pointer("/message/body/macro_calls/track.subtitles.get/message/body/subtitle_list/0/subtitle/subtitle_body").and_then(Value::as_str);
     let plain = value
         .pointer("/message/body/macro_calls/track.lyrics.get/message/body/lyrics/lyrics_body")
         .and_then(Value::as_str);
+    let url = musixmatch_share_url(value);
     let mut result = Vec::new();
     if let Some(text) = subtitles.filter(|text| !text.is_empty()) {
-        result.push(LyricsResponse::Synced { text: text.into() });
+        result.push(LyricsResponse::Synced {
+            text: text.into(),
+            url: url.clone(),
+        });
     }
     if let Some(text) = plain.filter(|text| !text.is_empty()) {
-        result.push(LyricsResponse::Plain { text: text.into() });
+        result.push(LyricsResponse::Plain {
+            text: text.into(),
+            url,
+        });
     }
     if result.is_empty() {
         result.push(LyricsResponse::Empty {
@@ -21,6 +29,37 @@ pub fn extract_musixmatch_lyrics(value: &Value) -> Vec<LyricsResponse> {
         });
     }
     result
+}
+
+/// The macro response embeds the shareable lyrics page twice: the matched
+/// track exposes `track_share_url` and the plain lyrics carry a matching
+/// `backlink_url`. Both ship with tracking query parameters, so only the
+/// clean page address reaches the copy menu.
+fn musixmatch_share_url(value: &Value) -> Option<String> {
+    [
+        "/message/body/macro_calls/matcher.track.get/message/body/track/track_share_url",
+        "/message/body/macro_calls/track.lyrics.get/message/body/lyrics/backlink_url",
+    ]
+    .into_iter()
+    .find_map(|path| value.pointer(path).and_then(Value::as_str))
+    .and_then(musixmatch_page_url)
+}
+
+/// Keep only https musixmatch lyrics pages, stripped of query and fragment.
+fn musixmatch_page_url(raw: &str) -> Option<String> {
+    let mut url = Url::parse(raw.trim()).ok()?;
+    if url.scheme() != "https"
+        || !matches!(
+            url.host_str(),
+            Some("musixmatch.com" | "www.musixmatch.com")
+        )
+        || !url.path().starts_with("/lyrics/")
+    {
+        return None;
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string())
 }
 
 #[cfg(test)]
@@ -159,6 +198,89 @@ mod tests {
             extract_musixmatch_lyrics(&json!({}))[0],
             LyricsResponse::Empty { .. }
         ));
+    }
+
+    #[test]
+    fn extracts_musixmatch_share_url_stripped_of_tracking() {
+        let value = json!({
+            "message": {
+                "body": {
+                    "macro_calls": {
+                        "track.subtitles.get": {"message": {"body": {"subtitle_list": [{"subtitle": {"subtitle_body": "[00:01.00] hi"}}]}}},
+                        "track.lyrics.get": {"message": {"body": {"lyrics": {
+                            "lyrics_body": "plain",
+                            "backlink_url": "https://www.musixmatch.com/lyrics/Artist/Title?utm_source=application&utm_campaign=api"
+                        }}}},
+                        "matcher.track.get": {"message": {"body": {"track": {
+                            "track_share_url": "https://www.musixmatch.com/lyrics/Matched-Artist/Matched-Title?utm_source=application"
+                        }}}}
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            extract_musixmatch_lyrics(&value),
+            vec![
+                LyricsResponse::Synced {
+                    text: "[00:01.00] hi".into(),
+                    url: Some(
+                        "https://www.musixmatch.com/lyrics/Matched-Artist/Matched-Title".into()
+                    ),
+                },
+                LyricsResponse::Plain {
+                    text: "plain".into(),
+                    url: Some(
+                        "https://www.musixmatch.com/lyrics/Matched-Artist/Matched-Title".into()
+                    ),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn musixmatch_share_url_falls_back_to_backlink_and_rejects_foreign_pages() {
+        let backlink_only = json!({
+            "message": {
+                "body": {
+                    "macro_calls": {
+                        "track.lyrics.get": {"message": {"body": {"lyrics": {
+                            "lyrics_body": "plain",
+                            "backlink_url": " https://www.musixmatch.com/lyrics/Artist/Title?utm_medium=phone "
+                        }}}}
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            extract_musixmatch_lyrics(&backlink_only),
+            vec![LyricsResponse::Plain {
+                text: "plain".into(),
+                url: Some("https://www.musixmatch.com/lyrics/Artist/Title".into()),
+            }]
+        );
+
+        let tracking_only = json!({
+            "message": {
+                "body": {
+                    "macro_calls": {
+                        "track.lyrics.get": {"message": {"body": {"lyrics": {
+                            "lyrics_body": "plain",
+                            "backlink_url": "https://tracking.musixmatch.com/t1.0/m_img/track"
+                        }}}},
+                        "matcher.track.get": {"message": {"body": {"track": {
+                            "track_share_url": "http://www.musixmatch.com/lyrics/Insecure/Title"
+                        }}}}
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            extract_musixmatch_lyrics(&tracking_only),
+            vec![LyricsResponse::Plain {
+                text: "plain".into(),
+                url: None,
+            }]
+        );
     }
     #[test]
     fn extracts_both_genius_hit_shapes_and_valid_referents() {

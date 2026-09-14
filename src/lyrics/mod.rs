@@ -696,14 +696,16 @@ impl LyricsPanel {
         }
         self.provider = provider;
         self.lines = match &response {
-            LyricsResponse::Synced { text } => collapse_blank_lyric_gaps(parse_synced_lyrics(text)),
+            LyricsResponse::Synced { text, .. } => {
+                collapse_blank_lyric_gaps(parse_synced_lyrics(text))
+            }
             _ => Vec::new(),
         };
         self.full_lines = match &response {
             LyricsResponse::Synced { .. } => {
                 self.lines.iter().map(|line| line.text.clone()).collect()
             }
-            LyricsResponse::Plain { text } | LyricsResponse::Genius { text, .. } => {
+            LyricsResponse::Plain { text, .. } | LyricsResponse::Genius { text, .. } => {
                 text.split('\n').map(str::to_owned).collect()
             }
             _ => Vec::new(),
@@ -1048,7 +1050,7 @@ impl Render for LyricsPanel {
         let playing = self.playback.read(cx).state.status == PlaybackStatus::Playing;
         let reduce_motion = cx.reduce_motion();
         let body: Vec<gpui::AnyElement> = match self.response.as_ref() {
-            Some(LyricsResponse::Synced { .. }) => self
+            Some(LyricsResponse::Synced { url, .. }) => self
                 .lines
                 .iter()
                 .enumerate()
@@ -1082,11 +1084,11 @@ impl Render for LyricsPanel {
                         line_text,
                         lyric_block_text(&self.full_lines, index),
                         full_text.clone(),
-                        None,
+                        url.clone(),
                     )
                 })
                 .collect(),
-            Some(LyricsResponse::Plain { .. }) => self
+            Some(LyricsResponse::Plain { url, .. }) => self
                 .full_lines
                 .iter()
                 .enumerate()
@@ -1113,7 +1115,7 @@ impl Render for LyricsPanel {
                             trimmed,
                             lyric_block_text(&self.full_lines, index),
                             full_text.clone(),
-                            None,
+                            url.clone(),
                         )
                     }
                 })
@@ -1470,6 +1472,7 @@ mod tests {
     fn automatic_fallback_switches_only_when_the_alternate_has_lyrics() {
         let alternate = LyricsResponse::Plain {
             text: "lyrics".into(),
+            url: None,
         };
         let selected = automatic_fallback_selection(
             LyricsProvider::Musixmatch,
@@ -1548,7 +1551,7 @@ mod tests {
                 |(implementation, _)| implementation,
             );
         let plain_start = implementation
-            .find("Some(LyricsResponse::Plain { .. })")
+            .find("Some(LyricsResponse::Plain { url, .. })")
             .unwrap_or_else(|| panic!("plain lyrics branch is missing"));
         let plain_end = implementation[plain_start..]
             .find("Some(LyricsResponse::Genius { url, .. })")

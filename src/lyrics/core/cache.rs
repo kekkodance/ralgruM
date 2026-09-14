@@ -65,7 +65,10 @@ mod tests {
         let mut cache = LyricsCache::default();
         cache.set(
             LyricsCacheKey::new(LyricsProvider::Genius, &track),
-            LyricsResponse::Plain { text: "x".into() },
+            LyricsResponse::Plain {
+                text: "x".into(),
+                url: None,
+            },
         );
         assert!(
             cache
@@ -141,6 +144,7 @@ mod tests {
                 LyricsCacheKey::new(LyricsProvider::Genius, &track),
                 LyricsResponse::Plain {
                     text: format!("{index}"),
+                    url: None,
                 },
             );
         }
@@ -165,11 +169,17 @@ mod tests {
         );
         assert_eq!(
             cache.get(&LyricsCacheKey::new(LyricsProvider::Genius, &second)),
-            Some(&LyricsResponse::Plain { text: "1".into() })
+            Some(&LyricsResponse::Plain {
+                text: "1".into(),
+                url: None
+            })
         );
         assert_eq!(
             cache.get(&LyricsCacheKey::new(LyricsProvider::Genius, &last)),
-            Some(&LyricsResponse::Plain { text: "80".into() })
+            Some(&LyricsResponse::Plain {
+                text: "80".into(),
+                url: None
+            })
         );
     }
 
@@ -191,27 +201,38 @@ mod tests {
 
         cache.set(
             LyricsCacheKey::new(LyricsProvider::Genius, &track1),
-            LyricsResponse::Plain { text: "1".into() },
+            LyricsResponse::Plain {
+                text: "1".into(),
+                url: None,
+            },
         );
         cache.set(
             LyricsCacheKey::new(LyricsProvider::Genius, &track2),
-            LyricsResponse::Plain { text: "2".into() },
+            LyricsResponse::Plain {
+                text: "2".into(),
+                url: None,
+            },
         );
         cache.set(
             LyricsCacheKey::new(LyricsProvider::Genius, &track1),
             LyricsResponse::Plain {
                 text: "1-updated".into(),
+                url: None,
             },
         );
         cache.set(
             LyricsCacheKey::new(LyricsProvider::Genius, &track3),
-            LyricsResponse::Plain { text: "3".into() },
+            LyricsResponse::Plain {
+                text: "3".into(),
+                url: None,
+            },
         );
 
         assert_eq!(
             cache.get(&LyricsCacheKey::new(LyricsProvider::Genius, &track1)),
             Some(&LyricsResponse::Plain {
-                text: "1-updated".into()
+                text: "1-updated".into(),
+                url: None
             })
         );
         assert!(
@@ -221,7 +242,10 @@ mod tests {
         );
         assert_eq!(
             cache.get(&LyricsCacheKey::new(LyricsProvider::Genius, &track3)),
-            Some(&LyricsResponse::Plain { text: "3".into() })
+            Some(&LyricsResponse::Plain {
+                text: "3".into(),
+                url: None
+            })
         );
     }
 
@@ -243,18 +267,27 @@ mod tests {
 
         cache.set(
             LyricsCacheKey::new(LyricsProvider::Genius, &track1),
-            LyricsResponse::Plain { text: "1".into() },
+            LyricsResponse::Plain {
+                text: "1".into(),
+                url: None,
+            },
         );
         cache.set(
             LyricsCacheKey::new(LyricsProvider::Genius, &track2),
-            LyricsResponse::Plain { text: "2".into() },
+            LyricsResponse::Plain {
+                text: "2".into(),
+                url: None,
+            },
         );
 
         let _ = cache.get(&LyricsCacheKey::new(LyricsProvider::Genius, &track1));
 
         cache.set(
             LyricsCacheKey::new(LyricsProvider::Genius, &track3),
-            LyricsResponse::Plain { text: "3".into() },
+            LyricsResponse::Plain {
+                text: "3".into(),
+                url: None,
+            },
         );
 
         assert!(
@@ -264,11 +297,17 @@ mod tests {
         );
         assert_eq!(
             cache.get(&LyricsCacheKey::new(LyricsProvider::Genius, &track2)),
-            Some(&LyricsResponse::Plain { text: "2".into() })
+            Some(&LyricsResponse::Plain {
+                text: "2".into(),
+                url: None
+            })
         );
         assert_eq!(
             cache.get(&LyricsCacheKey::new(LyricsProvider::Genius, &track3)),
-            Some(&LyricsResponse::Plain { text: "3".into() })
+            Some(&LyricsResponse::Plain {
+                text: "3".into(),
+                url: None
+            })
         );
     }
 }
