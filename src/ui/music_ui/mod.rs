@@ -588,8 +588,10 @@ pub(crate) fn carousel_drag_offset(start_offset: f32, pointer_delta: f32, max_of
 /// one unit: they fade in together when the row starts overflowing, fade
 /// out together when it stops, and while it keeps overflowing they show
 /// on scroll activity and idle-fade out like the app's vertical
-/// scrollbars. The caller owns the handle so it survives view updates
-/// and can be shared by the scrollbar and arrows.
+/// scrollbars. The controls anchor to the card row itself, so fading
+/// only ever changes their opacity, never their position. The caller
+/// owns the handle so it survives view updates and can be shared by the
+/// scrollbar and arrows.
 pub(crate) fn card_carousel(
     id: impl Into<String>,
     state: CardCarouselState,
@@ -601,6 +603,13 @@ pub(crate) fn card_carousel(
     let id = id.into();
     let viewport_id = format!("{id}-viewport");
     let pitch = card_width + row_gap;
+    // The caller's overflow estimate also decides where the control
+    // strip's reserve lives: inside the scroll viewport when the row is
+    // expected to overflow, or in the space below the carousel when it
+    // is not, which keeps stacked sections a stable height. The scrollbar
+    // and both arrows anchor to the card row either way, so the reserve
+    // moving never moves the fading controls.
+    let strip_reserved = controls_available;
     // Both arrows sample the same shared fade the scrollbar drives, so the
     // whole unit appears and disappears together.
     let controls_opacity = state
@@ -613,6 +622,7 @@ pub(crate) fn card_carousel(
         state.clone(),
         pitch,
         controls_opacity,
+        strip_reserved,
     );
     let next = carousel_arrow(
         format!("{id}-next"),
@@ -620,6 +630,7 @@ pub(crate) fn card_carousel(
         state.clone(),
         pitch,
         controls_opacity,
+        strip_reserved,
     );
     div()
         .id(id)
@@ -635,7 +646,7 @@ pub(crate) fn card_carousel(
                 .track_scroll(&state.scroll_handle)
                 .overflow_x_scroll()
                 .restrict_scroll_to_axis()
-                .when(controls_available, |this| {
+                .when(strip_reserved, |this| {
                     this.pb(px(CAROUSEL_CONTENT_BOTTOM_PADDING))
                 })
                 .child(content),
@@ -644,7 +655,7 @@ pub(crate) fn card_carousel(
         .child(card_scrollbar::card_scrollbar(
             state.clone(),
             pitch,
-            controls_available,
+            strip_reserved,
         ))
         .child(previous)
         .child(next)
@@ -657,10 +668,20 @@ fn carousel_arrow(
     state: CardCarouselState,
     card_pitch: f32,
     opacity: f32,
+    strip_reserved: bool,
 ) -> AnyElement {
     let base = div()
         .absolute()
-        .bottom(px(0.))
+        // The arrows ride the same anchored strip as the scrollbar: with
+        // the reserve inside the viewport they pin to the canvas bottom,
+        // and without it they drop below the carousel into the space the
+        // caller reserved, so they never slide up into the cards while
+        // fading out.
+        .bottom(px(if strip_reserved {
+            0.
+        } else {
+            -CAROUSEL_CONTENT_BOTTOM_PADDING
+        }))
         .when(direction == CarouselDirection::Previous, |this| {
             this.left(px(0.))
         })

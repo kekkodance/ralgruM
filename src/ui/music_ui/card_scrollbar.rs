@@ -11,9 +11,9 @@ use std::{
 };
 
 use super::{
-    CAROUSEL_CONTROL_HEIGHT, CAROUSEL_THUMB_HEIGHT, CAROUSEL_TRACK_INSET, CardCarouselState,
-    CarouselDrag, CarouselDragMode, carousel_drag_offset, carousel_motion, carousel_snap_offset,
-    should_consume_horizontal_scroll,
+    CAROUSEL_CARD_ROW_BOTTOM_GAP, CAROUSEL_CONTENT_BOTTOM_PADDING, CAROUSEL_CONTROL_HEIGHT,
+    CAROUSEL_THUMB_HEIGHT, CAROUSEL_TRACK_INSET, CardCarouselState, CarouselDrag, CarouselDragMode,
+    carousel_drag_offset, carousel_motion, carousel_snap_offset, should_consume_horizontal_scroll,
 };
 use crate::drag_cursor::{
     DragCursorOwner, DragCursorState, grabbing_cursor, set_drag_cursor_owned,
@@ -299,7 +299,7 @@ struct CardScrollbarPaintState {
 pub(crate) fn card_scrollbar(
     state: CardCarouselState,
     card_pitch: f32,
-    controls_available: bool,
+    strip_reserved: bool,
 ) -> impl IntoElement {
     let prepaint_state = state.clone();
     let event_state = state.clone();
@@ -312,22 +312,22 @@ pub(crate) fn card_scrollbar(
     canvas(
         move |bounds, window, _cx| {
             let viewport_bounds = viewport_bounds(&prepaint_state.scroll_handle);
-            let track_bounds = track_bounds(bounds);
+            let track_bounds = track_bounds(bounds, strip_reserved);
             let geometry = scrollbar_geometry(
                 track_bounds,
                 viewport_bounds.size.width,
                 &prepaint_state.scroll_handle,
             );
-            // The track hitbox exists only while the shared controls are
-            // shown, so a hidden scrollbar cannot catch hovers, clicks, or
-            // drags. The viewport hitbox stays for the whole overflowing
-            // row: middle-button drags and wheel consumption belong to
-            // the row itself, not to the visible controls.
-            let track_hitbox = (prepaint_state
-                .controls_fade
-                .get()
-                .render_opacity(Instant::now(), controls_available)
-                > 0.)
+            // The track hitbox exists whenever the row can scroll, even
+            // while the shared controls are faded to zero opacity:
+            // gating it on visibility would stop the faded strip from
+            // ever catching the hover that brings the controls back. A
+            // row with nothing to scroll keeps no hitbox, so its strip
+            // stays non-interactive. The viewport hitbox stays for the
+            // whole overflowing row: middle-button drags and wheel
+            // consumption belong to the row itself, not to the visible
+            // controls.
+            let track_hitbox = scrollbar_is_available(geometry.max_extent)
                 .then(|| window.insert_hitbox(track_bounds, HitboxBehavior::Normal));
             CardScrollbarPaintState {
                 viewport_hitbox: window.insert_hitbox(viewport_bounds, HitboxBehavior::Normal),
@@ -362,6 +362,7 @@ pub(crate) fn card_scrollbar(
             if opacity > 0. {
                 paint_scrollbar(
                     bounds,
+                    strip_reserved,
                     paint_data.thumb_bounds,
                     hovered,
                     dragging,
@@ -424,12 +425,24 @@ fn viewport_bounds(scroll_handle: &ScrollHandle) -> Bounds<Pixels> {
     bounds
 }
 
-fn track_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+/// The track lane for the carousel scrollbar. The lane belongs to the card
+/// row, `CAROUSEL_CARD_ROW_BOTTOM_GAP` below its bottom edge, no matter
+/// where the caller reserved the strip's space: inside the scroll viewport
+/// when it overflows, or below the carousel when it does not. Anchoring to
+/// the card row keeps the thumb at one fixed position while the shared
+/// controls fade, so the fade only ever changes opacity, never geometry.
+fn track_bounds(bounds: Bounds<Pixels>, strip_reserved: bool) -> Bounds<Pixels> {
     let track_width = (bounds.size.width - px(CAROUSEL_TRACK_INSET * 2.)).max(px(0.));
+    let content_bottom = bounds.origin.y + bounds.size.height
+        - px(if strip_reserved {
+            CAROUSEL_CONTENT_BOTTOM_PADDING
+        } else {
+            0.
+        });
     Bounds {
         origin: point(
             bounds.origin.x + px(CAROUSEL_TRACK_INSET),
-            bounds.origin.y + bounds.size.height - px(CAROUSEL_CONTROL_HEIGHT),
+            content_bottom + px(CAROUSEL_CARD_ROW_BOTTOM_GAP),
         ),
         size: size(track_width, px(CAROUSEL_CONTROL_HEIGHT)),
     }
@@ -473,6 +486,7 @@ fn scrollbar_geometry(
 
 fn paint_scrollbar(
     bounds: Bounds<Pixels>,
+    strip_reserved: bool,
     thumb_bounds: Bounds<Pixels>,
     hovered: bool,
     dragging: bool,
@@ -480,7 +494,7 @@ fn paint_scrollbar(
     window: &mut Window,
     cx: &App,
 ) {
-    let track = track_bounds(bounds);
+    let track = track_bounds(bounds, strip_reserved);
     if track.size.width <= px(0.) || bounds.size.height < px(CAROUSEL_CONTROL_HEIGHT) {
         return;
     }
@@ -538,8 +552,9 @@ fn register_handlers(
         }
         match event.button {
             MouseButton::Left => {
-                // The track only exists while the shared controls are
-                // shown; a hidden scrollbar ignores clicks on its lane.
+                // The track exists whenever the row can scroll, so a click
+                // lands even on a faded scrollbar; the drag it starts is
+                // activity, which revives the whole unit.
                 let Some(track) = down_track.as_ref().filter(|track| track.is_hovered(window))
                 else {
                     return;
@@ -757,8 +772,8 @@ mod tests {
     use super::{
         CARD_SCROLLBAR_FADE_OUT_DELAY, CARD_SCROLLBAR_FADE_OUT_DURATION, CardScrollbarShowState,
         CarouselControlsFade, ScrollbarThumbState, active_carousel_cursor_state,
-        scrollbar_activity, scrollbar_fade_opacity, scrollbar_is_available, scrollbar_thumb_color,
-        update_scrollbar_hover,
+        scrollbar_activity, scrollbar_fade_opacity, scrollbar_geometry, scrollbar_is_available,
+        scrollbar_thumb_color, track_bounds, update_scrollbar_hover,
     };
     use crate::motion::CAROUSEL_CONTROLS_FADE_DURATION;
     use gpui::{TestAppContext, prelude::*};
@@ -976,6 +991,76 @@ mod tests {
         assert!(CAROUSEL_CONTROLS_FADE_DURATION <= Duration::from_millis(250));
     }
 
+    #[test]
+    fn controls_fade_revives_from_fully_hidden_on_activity() {
+        let now = Instant::now();
+        let mut fade = CarouselControlsFade::default();
+        fade.update(true, false, now, false);
+        assert_eq!(fade.opacity_at(now), 1.);
+
+        // Idling past the hold window and the whole fade tail hides the
+        // unit while the row keeps overflowing.
+        let hidden = now + Duration::from_secs_f32(CARD_SCROLLBAR_FADE_OUT_DURATION + 0.5);
+        fade.update(true, false, hidden, false);
+        assert_eq!(fade.opacity_at(hidden), 0.);
+
+        // A hover or scroll on the still-overflowing row refreshes the
+        // activity window and brings the whole unit back.
+        fade.update(true, true, hidden, false);
+        assert_eq!(fade.opacity_at(hidden), 1.);
+        assert!(!fade.is_animating(hidden));
+
+        // A row with nothing to scroll stays hidden no matter how active
+        // the pointer is over its strip.
+        let mut inert = CarouselControlsFade::default();
+        inert.update(false, false, now, false);
+        inert.update(false, true, now, false);
+        assert_eq!(inert.opacity_at(now), 0.);
+        assert!(!inert.is_animating(now));
+    }
+
+    #[test]
+    fn scrollbar_track_stays_under_the_cards_across_reserve_locations() {
+        // The strip's reserve can sit inside the scroll viewport or below
+        // the carousel, but the track belongs to the card row: it must
+        // land at the same place either way, so the fading thumb never
+        // moves when the reserve flips.
+        let reserved_canvas = gpui::Bounds {
+            origin: gpui::point(gpui::px(24.), gpui::px(96.)),
+            size: gpui::size(gpui::px(400.), gpui::px(214.)),
+        };
+        let unreserved_canvas = gpui::Bounds {
+            origin: gpui::point(gpui::px(24.), gpui::px(96.)),
+            size: gpui::size(gpui::px(400.), gpui::px(196.)),
+        };
+        let reserved = track_bounds(reserved_canvas, true);
+        let unreserved = track_bounds(unreserved_canvas, false);
+        assert_eq!(reserved.origin.y, unreserved.origin.y);
+        assert_eq!(reserved.size, unreserved.size);
+        // With the reserve inside the viewport, the track is the bottom
+        // control lane of the canvas, matching the pinned layout.
+        assert_eq!(
+            f32::from(reserved.origin.y),
+            96. + 214. - super::CAROUSEL_CONTROL_HEIGHT
+        );
+        assert_eq!(
+            f32::from(reserved.size.height),
+            super::CAROUSEL_CONTROL_HEIGHT
+        );
+
+        let handle = gpui::ScrollHandle::new();
+        let geometry = scrollbar_geometry(reserved, gpui::px(376.), &handle);
+        let thumb_centering = (super::CAROUSEL_CONTROL_HEIGHT - super::CAROUSEL_THUMB_HEIGHT) * 0.5;
+        assert_eq!(
+            f32::from(geometry.thumb_bounds.origin.y),
+            96. + 214. - super::CAROUSEL_CONTROL_HEIGHT + thumb_centering
+        );
+        assert_eq!(
+            f32::from(geometry.thumb_bounds.size.height),
+            super::CAROUSEL_THUMB_HEIGHT
+        );
+    }
+
     #[gpui::test]
     fn scrollbar_show_window_follows_the_rendered_scroll_activity(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -1144,5 +1229,245 @@ mod tests {
         state.pending_target.set(None);
         click_next_arrow(cx, 1600.);
         assert_eq!(state.pending_target.get(), None);
+    }
+
+    #[gpui::test]
+    fn hovering_the_faded_strip_revives_the_carousel_controls(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::configure_component_theme(cx);
+        });
+
+        struct CarouselHost(super::CardCarouselState);
+        impl gpui::Render for CarouselHost {
+            fn render(
+                &mut self,
+                window: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                let width = f32::from(window.viewport_size().width);
+                crate::music_ui::card_carousel(
+                    "scrollbar-hover-revival",
+                    self.0.clone(),
+                    150.,
+                    12.,
+                    crate::music_ui::card_carousel_has_overflow(8, 150., 12., width, 0.),
+                    gpui::div()
+                        .flex()
+                        .flex_none()
+                        .children((0..8).map(|_| gpui::div().w(gpui::px(150.)).h(gpui::px(196.))))
+                        .into_any_element(),
+                )
+            }
+        }
+
+        let state = super::CardCarouselState::new();
+        let window = cx.add_window({
+            let state = state.clone();
+            move |_, _| CarouselHost(state)
+        });
+        let cx = &mut gpui::VisualTestContext::from_window(gpui::AnyWindowHandle::from(window), cx);
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+        };
+        let fade_opacity =
+            |state: &super::CardCarouselState| state.controls_fade.get().opacity_at(Instant::now());
+
+        cx.simulate_resize(gpui::size(gpui::px(400.), gpui::px(300.)));
+        cx.run_until_parked();
+        std::thread::sleep(CAROUSEL_CONTROLS_FADE_DURATION + Duration::from_millis(50));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        draw(cx);
+        assert_eq!(fade_opacity(&state), 1.);
+
+        // Waiting out the hold window and the whole fade tail hides the
+        // controls while the row keeps overflowing.
+        std::thread::sleep(Duration::from_secs_f32(
+            CARD_SCROLLBAR_FADE_OUT_DURATION + 0.5,
+        ));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        draw(cx);
+        assert_eq!(fade_opacity(&state), 0.);
+
+        // Hovering the faded scrollbar strip must bring the whole unit
+        // back: the strip still hit-tests while invisible.
+        cx.simulate_mouse_move(
+            gpui::point(
+                gpui::px(200.),
+                gpui::px(300. - super::CAROUSEL_CONTROL_HEIGHT * 0.5),
+            ),
+            None,
+            gpui::Modifiers::default(),
+        );
+        draw(cx);
+        assert_eq!(fade_opacity(&state), 1.);
+    }
+
+    #[gpui::test]
+    fn hovering_the_strip_cannot_revive_controls_without_overflow(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::configure_component_theme(cx);
+        });
+
+        struct CarouselHost(super::CardCarouselState);
+        impl gpui::Render for CarouselHost {
+            fn render(
+                &mut self,
+                window: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                let width = f32::from(window.viewport_size().width);
+                crate::music_ui::card_carousel(
+                    "scrollbar-no-overflow-hover",
+                    self.0.clone(),
+                    150.,
+                    12.,
+                    crate::music_ui::card_carousel_has_overflow(2, 150., 12., width, 0.),
+                    gpui::div()
+                        .flex()
+                        .flex_none()
+                        .children((0..2).map(|_| gpui::div().w(gpui::px(150.)).h(gpui::px(196.))))
+                        .into_any_element(),
+                )
+            }
+        }
+
+        let state = super::CardCarouselState::new();
+        let window = cx.add_window({
+            let state = state.clone();
+            move |_, _| CarouselHost(state)
+        });
+        let cx = &mut gpui::VisualTestContext::from_window(gpui::AnyWindowHandle::from(window), cx);
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+        };
+        let fade_opacity =
+            |state: &super::CardCarouselState| state.controls_fade.get().opacity_at(Instant::now());
+
+        // Two cards fit: the controls stay hidden no matter what hovers
+        // over the strip lane.
+        cx.simulate_resize(gpui::size(gpui::px(400.), gpui::px(300.)));
+        cx.run_until_parked();
+        draw(cx);
+        assert_eq!(fade_opacity(&state), 0.);
+        assert!(state.controls_fade.get().is_initialized());
+
+        cx.simulate_mouse_move(
+            gpui::point(
+                gpui::px(200.),
+                gpui::px(300. - super::CAROUSEL_CONTROL_HEIGHT * 0.5),
+            ),
+            None,
+            gpui::Modifiers::default(),
+        );
+        draw(cx);
+        assert_eq!(fade_opacity(&state), 0.);
+    }
+
+    #[gpui::test]
+    fn the_control_strip_stays_below_the_cards_when_the_reserve_sits_outside(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::configure_component_theme(cx);
+        });
+
+        // The wrapper shrink-wraps the carousel so its height is the card
+        // row plus the reserve, exactly like the stacked sections that
+        // host carousels in the app. The caller's estimate says the strip
+        // is not reserved inside the viewport, so the strip must anchor to
+        // the card row and land in the space below the carousel rather
+        // than sliding up into the cards.
+        struct CarouselHost(super::CardCarouselState);
+        impl gpui::Render for CarouselHost {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div().flex().flex_col().child(
+                    gpui::div()
+                        .flex_none()
+                        .child(crate::music_ui::card_carousel(
+                            "anchored-strip",
+                            self.0.clone(),
+                            150.,
+                            12.,
+                            false,
+                            gpui::div()
+                                .flex()
+                                .flex_none()
+                                .children(
+                                    (0..8).map(|_| gpui::div().w(gpui::px(150.)).h(gpui::px(196.))),
+                                )
+                                .into_any_element(),
+                        )),
+                )
+            }
+        }
+
+        let state = super::CardCarouselState::new();
+        let window = cx.add_window({
+            let state = state.clone();
+            move |_, _| CarouselHost(state)
+        });
+        let cx = &mut gpui::VisualTestContext::from_window(gpui::AnyWindowHandle::from(window), cx);
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+        };
+        let fade_opacity =
+            |state: &super::CardCarouselState| state.controls_fade.get().opacity_at(Instant::now());
+        let card_row_bottom = 196.;
+        let old_lane_y = card_row_bottom - super::CAROUSEL_CONTROL_HEIGHT;
+        let anchored_lane_y = card_row_bottom + super::CAROUSEL_CARD_ROW_BOTTOM_GAP;
+
+        cx.simulate_resize(gpui::size(gpui::px(400.), gpui::px(300.)));
+        cx.run_until_parked();
+        std::thread::sleep(CAROUSEL_CONTROLS_FADE_DURATION + Duration::from_millis(50));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        draw(cx);
+        assert_eq!(fade_opacity(&state), 1.);
+
+        // Hovering where a bottom-anchored track would sit, up inside the
+        // cards, must not hold the controls: the strip no longer lives
+        // there once the reserve is not inside the viewport.
+        cx.simulate_mouse_move(
+            gpui::point(gpui::px(200.), gpui::px(old_lane_y + 5.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        std::thread::sleep(Duration::from_secs_f32(
+            CARD_SCROLLBAR_FADE_OUT_DURATION + 0.5,
+        ));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        draw(cx);
+        assert_eq!(
+            fade_opacity(&state),
+            0.,
+            "the strip must not sit inside the cards"
+        );
+
+        // Hovering the lane below the card row brings the controls back,
+        // proving the strip anchors to the card row across reserve
+        // locations.
+        cx.simulate_mouse_move(
+            gpui::point(gpui::px(200.), gpui::px(anchored_lane_y + 5.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        draw(cx);
+        assert_eq!(
+            fade_opacity(&state),
+            1.,
+            "the strip must sit below the card row"
+        );
     }
 }
