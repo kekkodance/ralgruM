@@ -926,21 +926,34 @@ async fn backend_range_sessions_skip_timelines_and_unknown_sizes() {
                 &progressive,
                 Some(1_000),
                 Some(Duration::from_secs(4)),
-                &cancellation
+                &cancellation,
+                DownloadPauseGate::new()
             )
             .is_some()
     );
     let (timeline, _) = offline_backend(0, true, AudioFormat::Flac);
     assert!(
         resolver
-            .backend_range_seek_session(&timeline, None, None, &cancellation)
+            .backend_range_seek_session(
+                &timeline,
+                None,
+                None,
+                &cancellation,
+                DownloadPauseGate::new()
+            )
             .is_none(),
         "timeline sources keep their own seek sessions"
     );
     let (unknown, _) = offline_backend(0, false, AudioFormat::Mp3);
     assert!(
         resolver
-            .backend_range_seek_session(&unknown, None, Some(Duration::from_secs(4)), &cancellation)
+            .backend_range_seek_session(
+                &unknown,
+                None,
+                Some(Duration::from_secs(4)),
+                &cancellation,
+                DownloadPauseGate::new()
+            )
             .is_none(),
         "unknown sizes stay on the deferred path"
     );
@@ -968,6 +981,7 @@ async fn direct_deezer_progressive_sources_attach_range_seek_sessions() {
             Some(262_144),
             Some(Duration::from_secs(4)),
             &cancellation,
+            DownloadPauseGate::new(),
         )
     };
     assert!(

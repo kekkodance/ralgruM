@@ -3,7 +3,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     pin::Pin,
     sync::{Arc, Condvar, Mutex, mpsc},
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
     time::Duration,
 };
 
@@ -43,6 +43,123 @@ pub(crate) struct TimelineSeekRequest {
 /// any timeline position.
 pub(crate) trait TimelineSeekSession: Send + Sync {
     fn request(&self, position: Duration) -> Result<TimelineSeekRequest, String>;
+
+    /// Live state of the latest suffix this session fetched, so the
+    /// buffering indicator can track what will actually play while a seek
+    /// is landing. Sessions whose suffix cannot be tracked report nothing
+    /// and the indicator falls back to the front download.
+    fn suffix_state(&self) -> Option<TimelineSuffixState> {
+        None
+    }
+}
+
+/// Live progress of a timeline seek suffix, mapped onto the track timeline.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TimelineSuffixState {
+    /// Whether the suffix is still waiting to land in the engine. While it
+    /// is, the front download is no longer what plays next.
+    pub(crate) pending: bool,
+    /// Timeline position the suffix starts at.
+    pub(crate) base: Duration,
+    /// Suffix bytes already staged in the seek buffer.
+    pub(crate) written: u64,
+    /// Total bytes the suffix will span.
+    pub(crate) total: u64,
+}
+
+/// Pauses a track's front download while a timeline seek suffix is fetched.
+///
+/// A fresh track keeps downloading its front buffer while the user seeks.
+/// The suffix fetch and that download share the same connection, so the
+/// bulk stream starves the small range requests the seek needs and playback
+/// resumes only after the front buffer completes. Holding this gate makes
+/// the front writer stall between chunks, giving the suffix the whole
+/// connection until its fetch task ends.
+#[derive(Clone)]
+pub(crate) struct DownloadPauseGate {
+    core: Arc<PauseCore>,
+}
+
+struct PauseCore {
+    state: std::sync::Mutex<PauseState>,
+}
+
+struct PauseState {
+    holders: usize,
+    wakers: Vec<Waker>,
+}
+
+impl PauseCore {
+    /// Parks a write while the gate is held, registering the caller's
+    /// waker so the final release can resume it.
+    fn park_write(&self, waker: Waker) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.holders == 0 {
+            return false;
+        }
+        if !state
+            .wakers
+            .iter()
+            .any(|registered| registered.will_wake(&waker))
+        {
+            state.wakers.push(waker);
+        }
+        true
+    }
+
+    fn release(&self) {
+        let wakers = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.holders = state.holders.saturating_sub(1);
+            if state.holders == 0 {
+                std::mem::take(&mut state.wakers)
+            } else {
+                Vec::new()
+            }
+        };
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+}
+
+impl DownloadPauseGate {
+    pub(crate) fn new() -> Self {
+        Self {
+            core: Arc::new(PauseCore {
+                state: std::sync::Mutex::new(PauseState {
+                    holders: 0,
+                    wakers: Vec::new(),
+                }),
+            }),
+        }
+    }
+
+    /// Holds the gate until the returned guard is dropped. Seek workers
+    /// keep one alive for the whole suffix fetch, so cancellation and
+    /// failure release the front download through the normal drop path.
+    pub(crate) fn hold(&self) -> DownloadPauseGuard {
+        let mut state = self
+            .core
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.holders += 1;
+        drop(state);
+        DownloadPauseGuard {
+            core: self.core.clone(),
+        }
+    }
+}
+
+pub(crate) struct DownloadPauseGuard {
+    core: Arc<PauseCore>,
+}
+
+impl Drop for DownloadPauseGuard {
+    fn drop(&mut self) {
+        self.core.release();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -222,11 +339,10 @@ impl ProgressiveCompletion {
     }
 }
 
-/// A temporary file whose reader blocks at the downloaded frontier instead
-/// of returning bytes that have not been written yet.
 pub(crate) struct ProgressiveFile {
     file: tempfile::NamedTempFile,
     shared: Arc<Shared>,
+    pause: Option<DownloadPauseGate>,
 }
 
 impl ProgressiveFile {
@@ -238,7 +354,15 @@ impl ProgressiveFile {
         Ok(Self {
             file,
             shared: Shared::new(format, total),
+            pause: None,
         })
+    }
+
+    /// Attaches a pause gate to the writer this file produces. While the
+    /// gate is held by a timeline seek, the front download stalls between
+    /// chunks so the seek suffix gets the whole connection.
+    pub(crate) fn set_pause_gate(&mut self, pause: DownloadPauseGate) {
+        self.pause = Some(pause);
     }
 
     pub(crate) fn reader(&self) -> io::Result<ProgressiveReader> {
@@ -254,6 +378,7 @@ impl ProgressiveFile {
             file: TokioFile::from_std(self.file.reopen()?),
             shared: self.shared.clone(),
             pending: 0,
+            pause: self.pause.clone(),
         })
     }
 
@@ -297,6 +422,10 @@ pub(crate) struct ProgressiveWriter {
     file: TokioFile,
     shared: Arc<Shared>,
     pending: u64,
+    /// While the attached pause gate is held, writes stall here instead of
+    /// reaching the file, throttling the front download while a timeline
+    /// seek fetches its suffix.
+    pause: Option<DownloadPauseGate>,
 }
 
 impl ProgressiveWriter {
@@ -369,6 +498,14 @@ impl AsyncWrite for ProgressiveWriter {
         cx: &mut Context<'_>,
         buffer: &[u8],
     ) -> Poll<io::Result<usize>> {
+        if let Some(pause) = self.pause.as_ref()
+            && pause.core.park_write(cx.waker().clone())
+        {
+            // A held gate parks the write without touching the file, so
+            // the caller's next chunk is not even requested until the
+            // seek suffix finishes with the connection.
+            return Poll::Pending;
+        }
         let result = Pin::new(&mut self.file).poll_write(cx, buffer);
         if let Poll::Ready(Ok(written)) = result {
             self.pending = self.pending.saturating_add(written as u64);
@@ -615,6 +752,49 @@ mod tests {
         assert!(writer.shared.state.lock().unwrap().terminal.is_none());
         block_on(writer.finish()).unwrap();
         waiter.join().unwrap();
+    }
+
+    /// A held pause gate must park front-download writes without touching
+    /// the buffer, and release them exactly when the last holder drops.
+    /// This is what gives a timeline seek suffix the whole connection
+    /// instead of competing with the front stream it replaces.
+    #[tokio::test]
+    async fn pause_gate_parks_writes_until_the_last_holder_drops() {
+        let mut file = ProgressiveFile::new(AudioFormat::Mp3, Some(16)).unwrap();
+        let gate = DownloadPauseGate::new();
+        file.set_pause_gate(gate.clone());
+        let mut writer = file.writer().unwrap();
+
+        let first = gate.hold();
+        let second = gate.hold();
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                writer.write_all(&[1; 8])
+            )
+            .await
+            .is_err(),
+            "a held gate must park the front write"
+        );
+
+        drop(first);
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                writer.write_all(&[1; 8])
+            )
+            .await
+            .is_err(),
+            "the gate must stay held while any holder remains"
+        );
+
+        drop(second);
+        tokio::time::timeout(std::time::Duration::from_secs(1), writer.write_all(&[1; 8]))
+            .await
+            .expect("the front write must resume once the gate is released")
+            .unwrap();
+        writer.flush().await.unwrap();
+        assert_eq!(writer.shared.state.lock().unwrap().written, 8);
     }
 
     #[test]

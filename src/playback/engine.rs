@@ -20,7 +20,9 @@ use rodio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::progressive::{ProgressiveCompletion, ProgressiveReader, TimelineSeekSession};
+use super::progressive::{
+    ProgressiveCompletion, ProgressiveReader, TimelineSeekSession, TimelineSuffixState,
+};
 use super::ramped_gain::RampedGain;
 use super::resolver::{AudioFormat, ResolvedAudio, ResolvedProgressiveAudio};
 use super::standby::{PreparedSource, ProgressiveSeek, SinkProbe};
@@ -64,6 +66,13 @@ pub(crate) trait AudioEngine {
     fn apply_deferred_seek(&mut self) -> Result<SeekOutcome, String> {
         Ok(SeekOutcome::Deferred)
     }
+
+    /// Live state of the suffix a timeline seek landed on or is fetching,
+    /// so the buffering indicator can track what will actually play. None
+    /// when no timeline suffix drives playback.
+    fn timeline_suffix_state(&self) -> Option<TimelineSuffixState> {
+        None
+    }
     fn set_transport_gain_target(&self, target: f32);
     fn reset_transport_gain(&self, gain: f32);
     fn transport_gain_settled(&self, target: f32) -> bool;
@@ -95,6 +104,9 @@ pub(crate) struct RodioEngine {
     pending_seek_completion: Option<SeekCompletion>,
     pending_position: Option<Duration>,
     active_timeline_cancellation: Option<CancellationToken>,
+    /// Timeline position of the landed suffix the sink is playing, when a
+    /// timeline seek superseded the front buffer.
+    active_suffix: Option<Duration>,
     playback_intent: Arc<AtomicBool>,
     transport_gain: Arc<RampedGain>,
 }
@@ -115,6 +127,7 @@ impl RodioEngine {
             pending_seek_completion: None,
             pending_position: None,
             active_timeline_cancellation: None,
+            active_suffix: None,
             playback_intent: Arc::new(AtomicBool::new(false)),
             transport_gain: Arc::new(RampedGain::default()),
         })
@@ -299,10 +312,14 @@ impl RodioEngine {
         resume_after: Option<bool>,
         timeline_cancellation: Option<CancellationToken>,
     ) -> bool {
+        let timeline_reload = timeline_cancellation.is_some();
         replace_active_timeline_cancellation(
             &mut self.active_timeline_cancellation,
             timeline_cancellation,
         );
+        // A timeline reload replaces the front buffer with a suffix; any
+        // other install goes back to playing a whole-file decoder.
+        self.active_suffix = timeline_reload.then_some(position);
         let standby_dropped = self.sink.len() > 1;
         if standby_dropped {
             discard_progressive_seek(&mut self.standby_progressive_seek);
@@ -532,6 +549,9 @@ impl RodioEngine {
                     }
                 }
                 self.pending_position = None;
+                // The failed fetch superseded any landed suffix, so the
+                // indicator can no longer trust the session's counters.
+                self.active_suffix = None;
                 Err(error)
             }
             Err(mpsc::TryRecvError::Empty) => Ok(None),
@@ -546,6 +566,7 @@ impl RodioEngine {
                     }
                 }
                 self.pending_position = None;
+                self.active_suffix = None;
                 Err("The playback seek worker stopped unexpectedly".into())
             }
         }
@@ -763,6 +784,7 @@ impl AudioEngine for RodioEngine {
     fn load(&mut self, prepared: PreparedSource, volume: f32) -> Option<Duration> {
         self.set_playback_intent(false);
         self.cancel_pending_progressive_reload();
+        self.active_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
         discard_progressive_seek(&mut self.standby_progressive_seek);
         self.sink.stop();
@@ -791,6 +813,7 @@ impl AudioEngine for RodioEngine {
     fn stop(&mut self) {
         self.set_playback_intent(false);
         self.cancel_pending_progressive_reload();
+        self.active_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
         discard_progressive_seek(&mut self.standby_progressive_seek);
         self.sink.stop();
@@ -838,6 +861,23 @@ impl AudioEngine for RodioEngine {
     }
     fn take_seek_completion(&mut self) -> Option<SeekCompletion> {
         self.pending_seek_completion.take()
+    }
+    fn timeline_suffix_state(&self) -> Option<TimelineSuffixState> {
+        let session = self
+            .progressive_seek
+            .as_ref()?
+            .timeline_seek_session
+            .as_ref()?;
+        let mut state = session.suffix_state()?;
+        if let Some(pending) = self.pending_progressive_reload.as_ref() {
+            state.pending = true;
+            state.base = pending.position;
+        } else {
+            // Only report a landed suffix; without one the session's
+            // counters describe a fetch the engine no longer plays.
+            state.base = self.active_suffix?;
+        }
+        Some(state)
     }
     fn set_playback_intent(&self, playing: bool) {
         self.playback_intent.store(playing, Ordering::Release);
@@ -907,12 +947,15 @@ impl AudioEngine for RodioEngine {
         self.standby_progressive_seek = progressive_seek;
         self.retain_playback_file(file);
     }
+
     fn skip_to_standby(&mut self) {
         self.cancel_pending_progressive_reload();
+        self.active_suffix = None;
         self.sink.skip_one();
     }
     fn activate_standby(&mut self) {
         self.cancel_pending_progressive_reload();
+        self.active_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
         self.progressive_seek = self.standby_progressive_seek.take();
         self.position_base = Duration::ZERO;

@@ -29,6 +29,7 @@ use super::{
     listen_history::{
         DeezerListenSession, ListenHistorySignal, SoundCloudListenReport, deezer_next_media,
     },
+    progressive::TimelineSuffixState,
     resolver::{ProgressCallback, ProgressUpdate, StreamResolver},
     standby::{self, ArmedStandby, PreparedSource, SinkProbe, StandbyPhase, WatchTick},
 };
@@ -219,6 +220,55 @@ fn apply_download_progress(state: &mut PlaybackState, progress: DownloadProgress
     let buffered = state.buffered;
     state.set_buffered_fraction(fraction);
     state.buffered != buffered
+}
+
+fn apply_buffered_progress(
+    state: &mut PlaybackState,
+    progress: Option<DownloadProgress>,
+    suffix: Option<TimelineSuffixState>,
+) -> bool {
+    if !matches!(
+        state.status,
+        PlaybackStatus::Loading | PlaybackStatus::Playing | PlaybackStatus::Paused
+    ) {
+        return false;
+    }
+    let mut changed = false;
+    // A pending timeline seek replaced the front download as the thing that
+    // plays next, so reporting the front's progress would claim buffering
+    // the player cannot use yet.
+    let front_visible = !suffix.is_some_and(|suffix| suffix.pending);
+    if front_visible && progress.is_some_and(|update| apply_download_progress(state, update)) {
+        changed = true;
+    }
+    if let Some(suffix) = suffix
+        && matches!(
+            state.status,
+            PlaybackStatus::Playing | PlaybackStatus::Paused
+        )
+        && apply_timeline_suffix_progress(state, &suffix)
+    {
+        changed = true;
+    }
+    changed
+}
+
+/// Maps a timeline seek suffix onto the buffering indicator. The suffix is
+/// what will actually play, so its bytes advance the indicator from the
+/// seek target toward the end of the track.
+fn apply_timeline_suffix_progress(state: &mut PlaybackState, suffix: &TimelineSuffixState) -> bool {
+    if state.duration.is_zero() || suffix.total == 0 {
+        return false;
+    }
+    let fraction = (suffix.written as f32 / suffix.total as f32).clamp(0.0, 1.0);
+    let remaining = state.duration.saturating_sub(suffix.base);
+    let buffered = suffix.base + remaining.mul_f32(fraction);
+    if buffered <= state.buffered {
+        return false;
+    }
+    let previous = state.buffered;
+    state.buffered = buffered.min(state.duration);
+    state.buffered != previous
 }
 
 fn completed_download_size(progress: DownloadProgress) -> Option<u64> {
@@ -2026,11 +2076,18 @@ impl PlaybackModel {
     fn poll(&mut self, cx: &mut Context<Self>) {
         let progress = self.download_progress.lock().ok().map(|progress| *progress);
         let completed_audio_info = self.adopt_completed_audio_size(progress);
-        let buffered_changed = matches!(
-            self.state.status,
-            PlaybackStatus::Loading | PlaybackStatus::Playing | PlaybackStatus::Paused
-        ) && progress
-            .is_some_and(|progress| apply_download_progress(&mut self.state, progress));
+        // While a timeline seek is landing, the front download is paused by
+        // the engine's seek gate and no longer what plays next, so the
+        // indicator must track the suffix instead of it.
+        let timeline_suffix = match self.state.status {
+            PlaybackStatus::Playing | PlaybackStatus::Paused => self
+                .engine
+                .as_ref()
+                .ok()
+                .and_then(|engine| engine.timeline_suffix_state()),
+            _ => None,
+        };
+        let buffered_changed = apply_buffered_progress(&mut self.state, progress, timeline_suffix);
         match self.state.status {
             PlaybackStatus::Loading => {
                 if buffered_changed || completed_audio_info {

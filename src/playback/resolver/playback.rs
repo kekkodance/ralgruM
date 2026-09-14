@@ -477,8 +477,13 @@ impl StreamResolver {
                 .await;
         }
         let mut fully_cached = initially_fully_cached;
-        let buffer = ProgressiveFile::new(source.format, (source.size > 0).then_some(source.size))
-            .map_err(|_| "A temporary playback file could not be created".to_string())?;
+        // One pause gate per track: timeline seeks on this source hold it
+        // to stall the front download while the seek suffix is fetched.
+        let pause_gate = DownloadPauseGate::new();
+        let mut buffer =
+            ProgressiveFile::new(source.format, (source.size > 0).then_some(source.size))
+                .map_err(|_| "A temporary playback file could not be created".to_string())?;
+        buffer.set_pause_gate(pause_gate.clone());
         let mut writer = buffer
             .writer()
             .map_err(|_| "The playback buffer could not be opened".to_string())?;
@@ -704,11 +709,22 @@ impl StreamResolver {
             SourceData::Backend(source) => source
                 .timeline_seek_session(cancellation.clone())
                 .or_else(|| {
-                    self.backend_range_seek_session(source, total, duration, &cancellation)
+                    self.backend_range_seek_session(
+                        source,
+                        total,
+                        duration,
+                        &cancellation,
+                        pause_gate.clone(),
+                    )
                 }),
-            SourceData::Remote(url) => {
-                self.progressive_range_seek_session(url, &source, total, duration, &cancellation)
-            }
+            SourceData::Remote(url) => self.progressive_range_seek_session(
+                url,
+                &source,
+                total,
+                duration,
+                &cancellation,
+                pause_gate.clone(),
+            ),
             SourceData::Inline(_) => None,
         };
         if fully_cached && let (Some(progress), Some(total)) = (&progress, total) {
@@ -748,6 +764,7 @@ impl StreamResolver {
         total: Option<u64>,
         duration: Option<Duration>,
         cancellation: &CancellationToken,
+        pause: DownloadPauseGate,
     ) -> Option<Arc<dyn TimelineSeekSession>> {
         let format = range_seek::RangeSeekFormat::from_audio(source.format)?;
         let total = total.filter(|total| *total > 0)?;
@@ -782,6 +799,7 @@ impl StreamResolver {
             duration,
             tokio::runtime::Handle::current(),
             cancellation.clone(),
+            pause,
         )))
     }
 
@@ -797,6 +815,7 @@ impl StreamResolver {
         total: Option<u64>,
         duration: Option<Duration>,
         cancellation: &CancellationToken,
+        pause: DownloadPauseGate,
     ) -> Option<Arc<dyn TimelineSeekSession>> {
         let metadata = source.metadata();
         if metadata.timeline {
@@ -822,6 +841,7 @@ impl StreamResolver {
             duration,
             tokio::runtime::Handle::current(),
             cancellation.clone(),
+            pause,
         )))
     }
 

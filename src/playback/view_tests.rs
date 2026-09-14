@@ -3,12 +3,13 @@ use std::time::Duration;
 
 use super::{
     DownloadProgress, SEEK_SLIDER_STEP, SeekSliderAction, SeekSliderInteraction, adjacent_track,
-    apply_download_progress, completed_download_size, effective_sink_gain,
-    listen_history_changed_on_completion, listen_history_scope_matches, media_play_should_toggle,
-    pause_silently, player_format_label, quality_label, seek_slider_accessibility_commit,
-    seek_slider_action,
+    apply_buffered_progress, apply_download_progress, apply_timeline_suffix_progress,
+    completed_download_size, effective_sink_gain, listen_history_changed_on_completion,
+    listen_history_scope_matches, media_play_should_toggle, pause_silently, player_format_label,
+    quality_label, seek_slider_accessibility_commit, seek_slider_action,
 };
 use crate::playback::fade::{USER_FADE_DURATION, USER_FADE_SETTLE_TIMEOUT};
+use crate::playback::progressive::TimelineSuffixState;
 use crate::playback::{PlaybackProvider, PlaybackState, PlaybackStatus, PlaybackTrack};
 use gpui_component::slider::{SliderEvent, SliderValue};
 
@@ -446,6 +447,146 @@ fn explicit_buffered_fraction_updates_without_a_byte_total() {
         },
     ));
     assert_eq!(state.buffered, Duration::from_secs(5));
+}
+
+/// While a timeline seek is landing, the front download no longer feeds
+/// the buffering indicator: a fully downloaded front must not claim the
+/// track is buffered when the suffix that will play is still fetching.
+#[test]
+fn pending_timeline_seek_hides_front_progress_from_the_indicator() {
+    let mut state = PlaybackState::default();
+    let track = PlaybackTrack {
+        downloadable: false,
+        progressive: true,
+        provider: PlaybackProvider::Deezer,
+        id: "fresh".into(),
+        title: "Fresh".into(),
+        artist: String::new(),
+        album: String::new(),
+        album_id: String::new(),
+        release_date: String::new(),
+        artists: Vec::new(),
+        artwork: String::new(),
+        duration: Duration::from_secs(10),
+        explicit: false,
+        service_url: String::new(),
+    };
+    let generation = state.replace(vec![track], 0).unwrap();
+    state.loaded_progressive(generation, Some(Duration::from_secs(10)));
+
+    let pending = TimelineSuffixState {
+        pending: true,
+        base: Duration::from_secs(9),
+        written: 50,
+        total: 100,
+    };
+    assert!(apply_buffered_progress(
+        &mut state,
+        Some(DownloadProgress {
+            generation,
+            downloaded: 100,
+            total: Some(100),
+            buffered_fraction: None,
+            fully_buffered: false,
+        }),
+        Some(pending),
+    ));
+    assert_eq!(
+        state.buffered,
+        Duration::from_millis(9_500),
+        "a pending seek must report the suffix frontier, not the finished front"
+    );
+
+    assert!(apply_timeline_suffix_progress(
+        &mut state,
+        &TimelineSuffixState {
+            pending: true,
+            base: Duration::from_secs(9),
+            written: 100,
+            total: 100,
+        },
+    ));
+    assert_eq!(
+        state.buffered,
+        Duration::from_secs(10),
+        "a completed suffix buffers the rest of the track"
+    );
+}
+
+/// Once a suffix has landed, both the front download and the suffix can
+/// advance the indicator, and neither can pull it backwards.
+#[test]
+fn landed_suffix_and_front_progress_keep_the_indicator_honest() {
+    let mut state = PlaybackState::default();
+    let track = PlaybackTrack {
+        downloadable: false,
+        progressive: true,
+        provider: PlaybackProvider::Deezer,
+        id: "fresh".into(),
+        title: "Fresh".into(),
+        artist: String::new(),
+        album: String::new(),
+        album_id: String::new(),
+        release_date: String::new(),
+        artists: Vec::new(),
+        artwork: String::new(),
+        duration: Duration::from_secs(10),
+        explicit: false,
+        service_url: String::new(),
+    };
+    let generation = state.replace(vec![track], 0).unwrap();
+    state.loaded_progressive(generation, Some(Duration::from_secs(10)));
+
+    let landed = TimelineSuffixState {
+        pending: false,
+        base: Duration::from_secs(9),
+        written: 50,
+        total: 100,
+    };
+    assert!(apply_buffered_progress(
+        &mut state,
+        Some(DownloadProgress {
+            generation,
+            downloaded: 80,
+            total: Some(100),
+            buffered_fraction: None,
+            fully_buffered: false,
+        }),
+        Some(landed),
+    ));
+    assert_eq!(
+        state.buffered,
+        Duration::from_millis(9_500),
+        "the landed suffix must outrank the still downloading front"
+    );
+
+    assert!(apply_buffered_progress(
+        &mut state,
+        Some(DownloadProgress {
+            generation,
+            downloaded: 100,
+            total: Some(100),
+            buffered_fraction: None,
+            fully_buffered: false,
+        }),
+        Some(landed),
+    ));
+    assert_eq!(
+        state.buffered,
+        Duration::from_secs(10),
+        "a completed front download buffers the whole track"
+    );
+
+    assert!(!apply_timeline_suffix_progress(
+        &mut state,
+        &TimelineSuffixState {
+            pending: false,
+            base: Duration::from_secs(9),
+            written: 0,
+            total: 100,
+        },
+    ));
+    assert_eq!(state.buffered, Duration::from_secs(10));
 }
 
 #[test]

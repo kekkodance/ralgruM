@@ -1,12 +1,16 @@
-use std::{sync::Arc, sync::mpsc, time::Duration};
-
 use futures::future::BoxFuture;
+use std::{
+    sync::Arc,
+    sync::atomic::{AtomicU64, Ordering},
+    sync::mpsc,
+    time::Duration,
+};
 use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 
 use super::super::progressive::{
-    ProgressiveFile, ProgressiveReader, ProgressiveWriter, TimelineSeekRequest,
-    TimelineSeekSession, TimelineSeekStartup,
+    DownloadPauseGate, ProgressiveFile, ProgressiveReader, ProgressiveWriter, TimelineSeekRequest,
+    TimelineSeekSession, TimelineSeekStartup, TimelineSuffixState,
 };
 use super::AudioFormat;
 
@@ -80,6 +84,21 @@ pub(crate) struct RangeTimelineSession {
     duration: Duration,
     runtime: Handle,
     track_cancellation: CancellationToken,
+    pause: DownloadPauseGate,
+    suffix: Arc<std::sync::Mutex<Option<SuffixTracker>>>,
+}
+
+/// Byte progress of the suffix a session is fetching. The seek worker
+/// refines the counters as the fetch advances, so the buffering indicator
+/// can track the buffer that actually gates playback.
+struct SuffixTracker {
+    base: Duration,
+    progress: Arc<SuffixProgress>,
+}
+
+struct SuffixProgress {
+    written: AtomicU64,
+    total: AtomicU64,
 }
 
 impl RangeTimelineSession {
@@ -90,6 +109,7 @@ impl RangeTimelineSession {
         duration: Duration,
         runtime: Handle,
         track_cancellation: CancellationToken,
+        pause: DownloadPauseGate,
     ) -> Self {
         Self {
             format,
@@ -98,6 +118,8 @@ impl RangeTimelineSession {
             duration,
             runtime,
             track_cancellation,
+            pause,
+            suffix: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -114,6 +136,18 @@ impl TimelineSeekSession for RangeTimelineSession {
         let format = self.format;
         let fraction = (position.as_secs_f64() / seconds).clamp(0.0, 0.99);
         let start = (fraction * self.total as f64) as u64;
+        let progress = Arc::new(SuffixProgress {
+            written: AtomicU64::new(0),
+            total: AtomicU64::new(self.total.saturating_sub(start).max(1)),
+        });
+        // The newest request owns the reported suffix state, so a
+        // superseded fetch stops feeding the indicator immediately.
+        if let Ok(mut suffix) = self.suffix.lock() {
+            *suffix = Some(SuffixTracker {
+                base: position,
+                progress: progress.clone(),
+            });
+        }
         let buffer = ProgressiveFile::new(format.audio(), None)
             .map_err(|_| "A temporary seek buffer could not be created".to_string())?;
         let reader = buffer
@@ -129,6 +163,10 @@ impl TimelineSeekSession for RangeTimelineSession {
         let fetch = self.fetch.clone();
         let total = self.total;
         let duration = self.duration;
+        // Hold the front download's pause gate for the whole suffix fetch,
+        // startup through the tail, so the range requests the seek needs
+        // never compete with the stream they are about to replace.
+        let pause_guard = self.pause.hold();
         self.runtime.spawn(async move {
             let error_sender = startup_sender.clone();
             let result = {
@@ -141,12 +179,14 @@ impl TimelineSeekSession for RangeTimelineSession {
                     cancellation: &worker_cancellation,
                     intra_segment_offset: None,
                     written: 0,
+                    progress: progress.clone(),
                 };
                 match format {
                     RangeSeekFormat::Mp3 => suffix.write_mp3(start).await,
                     RangeSeekFormat::Flac => suffix.write_flac(start, duration, position).await,
                 }
             };
+            drop(pause_guard);
             if let Err(error) = result {
                 let _ = error_sender.send(Err(error));
             }
@@ -156,6 +196,17 @@ impl TimelineSeekSession for RangeTimelineSession {
             intra_segment_offset: Duration::ZERO,
             cancellation,
             startup: startup_receiver,
+        })
+    }
+
+    fn suffix_state(&self) -> Option<TimelineSuffixState> {
+        let suffix = self.suffix.lock().ok()?;
+        let tracker = suffix.as_ref()?;
+        Some(TimelineSuffixState {
+            pending: false,
+            base: tracker.base,
+            written: tracker.progress.written.load(Ordering::Relaxed),
+            total: tracker.progress.total.load(Ordering::Relaxed),
         })
     }
 }
@@ -171,6 +222,7 @@ struct SuffixWriter<'a> {
     cancellation: &'a CancellationToken,
     intra_segment_offset: Option<Duration>,
     written: u64,
+    progress: Arc<SuffixProgress>,
 }
 
 impl SuffixWriter<'_> {
@@ -207,6 +259,13 @@ impl SuffixWriter<'_> {
         };
         self.written = header_len;
         self.intra_segment_offset = Some(target.saturating_sub(frame.position));
+        // The playable suffix is the frame range, not the staged header, so
+        // the indicator's denominator switches to it once it is known.
+        self.progress.total.store(
+            self.total.saturating_sub(frame.offset).max(1),
+            Ordering::Relaxed,
+        );
+        self.progress.written.store(0, Ordering::Relaxed);
         self.write_from(frame.offset).await
     }
 
@@ -226,6 +285,7 @@ impl SuffixWriter<'_> {
     async fn write_ranges(&mut self, mut start: u64) -> Result<(), String> {
         use tokio::io::AsyncWriteExt as _;
 
+        let mut fetched = 0_u64;
         while start < self.total {
             if self.cancellation.is_cancelled() {
                 return Err("Playback request cancelled".into());
@@ -243,6 +303,8 @@ impl SuffixWriter<'_> {
                 .await
                 .map_err(|_| "The seek buffer could not be finalized".to_string())?;
             self.written = self.written.saturating_add(bytes.len() as u64);
+            fetched = fetched.saturating_add(bytes.len() as u64);
+            self.progress.written.store(fetched, Ordering::Relaxed);
             start = end.saturating_add(1);
             if self.written >= SUFFIX_STARTUP_BYTES || start >= self.total {
                 self.release_startup()?;
@@ -312,25 +374,35 @@ async fn flac_suffix_start(
 }
 
 /// Fetches the `fLaC` marker and metadata blocks from the start of the file.
-/// A mid-file fragment has no stream header of its own, so the decoder needs
-/// them in front of the suffix frames.
 async fn flac_file_header(
     fetch: RangeFetch,
     total: u64,
     cancellation: &CancellationToken,
 ) -> Result<(Vec<u8>, FlacStreamInfo), String> {
     let mut probe_end = FLAC_HEADER_PROBE_BYTES.min(total);
+    let mut bytes = fetch(0, probe_end - 1, cancellation.clone())
+        .await
+        .map_err(|error| format!("The FLAC seek header could not be downloaded: {error}"))?;
     loop {
-        let bytes = fetch(0, probe_end - 1, cancellation.clone())
-            .await
-            .map_err(|error| format!("The FLAC seek header could not be downloaded: {error}"))?;
         match parse_flac_header(&bytes) {
             Ok(header) => return Ok(header),
             Err(FlacHeaderError::Incomplete) => {
-                let next = probe_end.saturating_mul(8).min(total);
-                if next <= probe_end || probe_end >= FLAC_HEADER_PROBE_LIMIT {
+                if probe_end >= FLAC_HEADER_PROBE_LIMIT {
                     return Err("The FLAC seek header was oversized".into());
                 }
+                // Grow the probe by fetching only the new tail, so a large
+                // cover art block costs one transfer of its own bytes
+                // instead of re-reading the whole prefix at every step.
+                let next = (probe_end * 4).min(total).min(FLAC_HEADER_PROBE_LIMIT);
+                if next <= probe_end {
+                    return Err("The FLAC seek header was oversized".into());
+                }
+                let tail = fetch(probe_end, next - 1, cancellation.clone())
+                    .await
+                    .map_err(|error| {
+                        format!("The FLAC seek header could not be downloaded: {error}")
+                    })?;
+                bytes.extend_from_slice(&tail);
                 probe_end = next;
             }
             Err(FlacHeaderError::Invalid) => {
@@ -971,6 +1043,7 @@ mod tests {
                 duration,
                 tokio::runtime::Handle::current(),
                 CancellationToken::new(),
+                DownloadPauseGate::new(),
             );
             let request = TimelineSeekSession::request(&session, target).unwrap();
             assert_eq!(request.format, AudioFormat::Flac);
@@ -1032,6 +1105,7 @@ mod tests {
             duration,
             tokio::runtime::Handle::current(),
             CancellationToken::new(),
+            DownloadPauseGate::new(),
         );
 
         let request = TimelineSeekSession::request(&session, Duration::from_millis(3_500)).unwrap();
@@ -1075,6 +1149,7 @@ mod tests {
             duration,
             tokio::runtime::Handle::current(),
             CancellationToken::new(),
+            DownloadPauseGate::new(),
         );
 
         let request = TimelineSeekSession::request(&session, Duration::from_millis(3_500)).unwrap();
@@ -1136,6 +1211,7 @@ mod tests {
             duration,
             tokio::runtime::Handle::current(),
             CancellationToken::new(),
+            DownloadPauseGate::new(),
         );
 
         // 1.9s sits in the silent intro while the byte ratio estimate lands
@@ -1200,6 +1276,7 @@ mod tests {
             duration,
             tokio::runtime::Handle::current(),
             CancellationToken::new(),
+            DownloadPauseGate::new(),
         ));
         let audio = ResolvedProgressiveAudio {
             reader: buffer.reader().unwrap(),
@@ -1295,6 +1372,7 @@ mod tests {
             duration,
             tokio::runtime::Handle::current(),
             CancellationToken::new(),
+            DownloadPauseGate::new(),
         ));
         let audio = ResolvedProgressiveAudio {
             reader: buffer.reader().unwrap(),
@@ -1393,6 +1471,7 @@ mod tests {
             duration,
             tokio::runtime::Handle::current(),
             CancellationToken::new(),
+            DownloadPauseGate::new(),
         ));
         let audio = ResolvedProgressiveAudio {
             reader: buffer.reader().unwrap(),
@@ -1514,6 +1593,288 @@ mod tests {
             log.started,
             log.cancelled + log.completed,
             "every started fetch must end cancelled or completed, log was {log:?}"
+        );
+    }
+
+    /// A near-end seek on a fresh track must resume as soon as its suffix
+    /// fetch lands, never after the original front download completes.
+    /// The front download is parked by the seek's pause gate while the
+    /// suffix is fetched, and the engine lands the seek from the suffix
+    /// while the front buffer is still incomplete.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn near_end_seek_lands_while_the_front_download_is_paused() {
+        use super::super::super::engine::{
+            AudioEngine, RodioEngine, RodioEngine as Engine, SeekOutcome,
+        };
+        use super::super::super::progressive::ProgressiveFile;
+        use super::super::super::standby::PreparedSource;
+        use super::super::ResolvedProgressiveAudio;
+        use tokio::io::AsyncWriteExt as _;
+
+        let Some(file) = make_mp3_tone_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping near end seek test");
+            return;
+        };
+        let bytes = std::fs::read(file.path()).unwrap();
+        let total = bytes.len() as u64;
+        let duration = Duration::from_secs(4);
+        let frontier =
+            super::super::super::progressive::startup_bytes(AudioFormat::Mp3, Some(total))
+                .min(total);
+
+        // The front buffer holds only its startup prefix. Its download
+        // shares the pause gate with the session, exactly like a live one.
+        let mut buffer = ProgressiveFile::new(AudioFormat::Mp3, Some(total)).unwrap();
+        let gate = DownloadPauseGate::new();
+        buffer.set_pause_gate(gate.clone());
+        let mut writer = buffer.writer().unwrap();
+        writer.write_all(&bytes[..frontier as usize]).await.unwrap();
+        writer.flush().await.unwrap();
+
+        // The suffix fetch blocks until the test releases it, so the seek
+        // can only land through the controlled fetch, never by accident.
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        let fetch: RangeFetch = {
+            let bytes = Arc::new(bytes.clone());
+            let release = release_rx.clone();
+            Arc::new(move |start, end, _cancellation| {
+                let bytes = bytes.clone();
+                let mut release = release.clone();
+                Box::pin(async move {
+                    while !*release.borrow_and_update() {
+                        if release.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                    let start = usize::try_from(start).expect("test range start fits");
+                    let end = usize::try_from(end).expect("test range end fits");
+                    Ok(bytes[start..=end].to_vec())
+                })
+            })
+        };
+        let session = Arc::new(RangeTimelineSession::new(
+            RangeSeekFormat::Mp3,
+            fetch,
+            total,
+            duration,
+            tokio::runtime::Handle::current(),
+            CancellationToken::new(),
+            gate,
+        ));
+        let audio = ResolvedProgressiveAudio {
+            reader: buffer.reader().unwrap(),
+            file: buffer.into_file(),
+            duration: Some(duration),
+            format: AudioFormat::Mp3,
+            total: Some(total),
+            timeline_size_unknown: false,
+            declared_bitrate: Some(128),
+            initial_downloaded: frontier,
+            initial_buffered_fraction: None,
+            fully_cached: false,
+            timeline_seek_session: Some(session),
+            worker: None,
+        };
+        let prepared = Engine::decode_progressive(audio).unwrap();
+        let (source, file, progressive_seek) = prepared.into_parts();
+        let prepared = PreparedSource::new(source, Some(duration), file)
+            .with_progressive_seek(progressive_seek.unwrap());
+
+        let Ok(mut engine) = RodioEngine::new() else {
+            eprintln!("no audio device; skipping near end seek test");
+            return;
+        };
+        engine.load(prepared, 1.0);
+
+        // The front download keeps streaming behind the seek, but its next
+        // chunk must park once the seek holds the gate.
+        let (front_parked_tx, mut front_parked_rx) = tokio::sync::oneshot::channel::<()>();
+        let (front_continue_tx, front_continue_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut front = tokio::spawn(async move {
+            front_continue_rx.await.unwrap();
+            writer.write_all(&bytes[frontier as usize..]).await.unwrap();
+            writer.flush().await.unwrap();
+            front_parked_tx.send(()).unwrap();
+        });
+
+        let started = std::time::Instant::now();
+        let outcome = engine.seek(Duration::from_millis(3_900)).unwrap();
+        assert_eq!(outcome, SeekOutcome::Deferred);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the seek must defer instantly, took {:?}",
+            started.elapsed()
+        );
+        let pending = engine
+            .timeline_suffix_state()
+            .expect("a pending seek must expose its suffix state");
+        assert!(pending.pending, "the suffix must be pending before landing");
+        assert_eq!(pending.base, Duration::from_millis(3_900));
+
+        // Let the front download attempt its next chunk: the held gate
+        // parks it, so it cannot finish while the suffix fetch is blocked.
+        front_continue_tx.send(()).unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), &mut front)
+                .await
+                .is_err(),
+            "the front download must be parked while the suffix is fetched"
+        );
+        for _ in 0..6 {
+            assert_eq!(
+                engine.apply_deferred_seek().unwrap(),
+                SeekOutcome::Deferred,
+                "the seek must not land while its suffix fetch is blocked"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        // Releasing the fetch is all the seek needs: it must land from the
+        // suffix while the front buffer is still incomplete.
+        release_tx.send(true).unwrap();
+        let mut applied = None;
+        for _ in 0..200 {
+            match engine.apply_deferred_seek().unwrap() {
+                SeekOutcome::Applied | SeekOutcome::AppliedStandbyDropped => {
+                    applied = Some(engine.position());
+                    break;
+                }
+                SeekOutcome::Deferred => tokio::time::sleep(Duration::from_millis(25)).await,
+            }
+        }
+        let position = applied.expect("the near end seek must land from the suffix");
+        assert!(
+            position >= Duration::from_millis(3_800),
+            "the seek must land at the target, was {position:?}"
+        );
+        let landed = engine
+            .timeline_suffix_state()
+            .expect("a landed seek must expose its suffix state");
+        assert!(
+            !landed.pending,
+            "the suffix must not be pending after landing"
+        );
+        assert_eq!(landed.base, position);
+        assert!(landed.written > 0, "the landed suffix must report progress");
+
+        // With the fetch task finished the gate is released, so the parked
+        // front download completes and later completed-buffer seeks keep
+        // working.
+        front_parked_rx
+            .await
+            .expect("the front download must resume once the gate is released");
+        front.await.unwrap();
+    }
+
+    /// The session must report the suffix a request is fetching, so the
+    /// buffering indicator can track the buffer that gates playback.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn range_session_reports_suffix_state_while_fetching() {
+        let Some(file) = make_mp3_tone_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping suffix state test");
+            return;
+        };
+        let bytes = Arc::new(std::fs::read(file.path()).unwrap());
+        let total = bytes.len() as u64;
+        let duration = Duration::from_secs(4);
+        let target = Duration::from_millis(3_500);
+        let (fetch, _log) = delayed_cancellable_fetch(bytes.clone(), Duration::from_millis(40));
+        let session = RangeTimelineSession::new(
+            RangeSeekFormat::Mp3,
+            fetch,
+            total,
+            duration,
+            tokio::runtime::Handle::current(),
+            CancellationToken::new(),
+            DownloadPauseGate::new(),
+        );
+        let start = ((target.as_secs_f64() / duration.as_secs_f64()) * total as f64) as u64;
+
+        let request = TimelineSeekSession::request(&session, target).unwrap();
+        let state = TimelineSeekSession::suffix_state(&session)
+            .expect("the session must report its fetching suffix");
+        assert_eq!(state.base, target);
+        assert_eq!(state.written, 0, "nothing is staged before the fetch lands");
+        assert_eq!(state.total, total - start);
+
+        let startup = request.startup.recv().unwrap().unwrap();
+        let mut state = TimelineSeekSession::suffix_state(&session).unwrap();
+        for _ in 0..80 {
+            state = TimelineSeekSession::suffix_state(&session).unwrap();
+            if state.written >= state.total {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(
+            state.written, state.total,
+            "the whole suffix must eventually be reported as staged"
+        );
+        drop(startup.file);
+    }
+
+    /// A FLAC header larger than the first probe must be fetched by growing
+    /// into its own tail instead of re-reading the whole prefix at every
+    /// step, so a cover art block costs one transfer of its own bytes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flac_header_probe_grows_by_fetching_only_the_new_tail() {
+        const PADDING: usize = 300 * 1024;
+        const FRAMES: u64 = 16;
+        const FRAME_BYTES: usize = 640;
+        let mut stream_info = Vec::new();
+        stream_info.extend_from_slice(&256_u16.to_be_bytes());
+        stream_info.extend_from_slice(&256_u16.to_be_bytes());
+        stream_info.extend_from_slice(&[0; 6]);
+        let packed = (1_000_u64 << 44) | (1_u64 << 41) | (15_u64 << 36) | (FRAMES * 256);
+        stream_info.extend_from_slice(&packed.to_be_bytes());
+        stream_info.extend_from_slice(&[0; 16]);
+        let mut bytes = b"fLaC".to_vec();
+        bytes.push(0x00);
+        bytes.extend_from_slice(&34_u32.to_be_bytes()[1..]);
+        bytes.extend_from_slice(&stream_info);
+        bytes.push(0x80 | 1);
+        bytes.extend_from_slice(&(PADDING as u32).to_be_bytes()[1..]);
+        bytes.resize(bytes.len() + PADDING, 0);
+        for number in 0..FRAMES {
+            let header = flac_frame_header_bytes(number);
+            bytes.extend_from_slice(&header);
+            bytes.resize(bytes.len() + FRAME_BYTES - header.len(), 0);
+        }
+        let header_len = bytes.len() - FRAMES as usize * FRAME_BYTES;
+        let bytes = Arc::new(bytes);
+        let total = bytes.len() as u64;
+        let duration = Duration::from_millis(4_096);
+
+        let (fetch, ranges) = memory_fetch(bytes.clone());
+        let session = RangeTimelineSession::new(
+            RangeSeekFormat::Flac,
+            fetch,
+            total,
+            duration,
+            tokio::runtime::Handle::current(),
+            CancellationToken::new(),
+            DownloadPauseGate::new(),
+        );
+        let request = TimelineSeekSession::request(&session, Duration::from_secs(4)).unwrap();
+        let startup = request
+            .startup
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        drop(startup.file);
+
+        let ranges = ranges.lock().unwrap().clone();
+        let mut coverage = vec![0_u8; header_len];
+        for (start, end) in &ranges {
+            for offset in *start..=*end {
+                if let Some(slot) = coverage.get_mut(usize::try_from(offset).unwrap()) {
+                    *slot += 1;
+                }
+            }
+        }
+        assert!(
+            coverage.iter().all(|&count| count == 1),
+            "every header byte must be fetched exactly once, ranges were {ranges:?}"
         );
     }
 }
