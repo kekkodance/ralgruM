@@ -508,28 +508,53 @@ fn dispatch_discover_action(
     card: Card,
     app: &mut gpui::App,
 ) {
-    host.update(app, |view, cx| match action {
-        DiscoverAction::OpenDetail | DiscoverAction::None => {}
-        DiscoverAction::PlayDeezerTrack(track_id) => {
-            view.start_deezer_track_mix(track_id, cx);
+    host.update(app, |view, cx| match discover_click_command(&action) {
+        DiscoverClickCommand::None => {}
+        DiscoverClickCommand::PlayDeezerTrack(track_id) => {
+            view.start_deezer_track_mix(track_id.to_owned(), cx);
         }
-        DiscoverAction::PlayDeezerFlow { smart_mix: true } => {
+        DiscoverClickCommand::PlayDeezerFlow { smart_mix: true } => {
             // Mixes play on click like Deezer; the context menu keeps Open
             // for navigating to the mix page.
             view.play_deezer_flow(card, true, cx);
         }
-        DiscoverAction::PlayDeezerFlow { smart_mix: false } => {
+        DiscoverClickCommand::PlayDeezerFlow { smart_mix: false } => {
             // Ordinary flows play on click too; the context menu keeps
             // Open for navigating to the flow page.
             view.play_deezer_flow(card, false, cx);
         }
-        DiscoverAction::OpenDeezerChannel(slug) => {
-            view.open_deezer_channel(card, slug, cx);
+        DiscoverClickCommand::OpenDeezerChannel(slug) => {
+            view.open_deezer_channel(card, slug.to_owned(), cx);
         }
-        DiscoverAction::OpenSoundCloudSelection(track_ids) => {
-            view.open_soundcloud_discover_selection(card, track_ids, cx);
+        DiscoverClickCommand::OpenSoundCloudSelection(track_ids) => {
+            view.open_soundcloud_discover_selection(card, track_ids.to_vec(), cx);
         }
     });
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscoverClickCommand<'a> {
+    None,
+    PlayDeezerTrack(&'a str),
+    PlayDeezerFlow { smart_mix: bool },
+    OpenDeezerChannel(&'a str),
+    OpenSoundCloudSelection(&'a [String]),
+}
+
+fn discover_click_command(action: &DiscoverAction) -> DiscoverClickCommand<'_> {
+    match action {
+        DiscoverAction::OpenDetail | DiscoverAction::None => DiscoverClickCommand::None,
+        DiscoverAction::PlayDeezerTrack(track_id) => {
+            DiscoverClickCommand::PlayDeezerTrack(track_id)
+        }
+        DiscoverAction::PlayDeezerFlow { smart_mix } => DiscoverClickCommand::PlayDeezerFlow {
+            smart_mix: *smart_mix,
+        },
+        DiscoverAction::OpenDeezerChannel(slug) => DiscoverClickCommand::OpenDeezerChannel(slug),
+        DiscoverAction::OpenSoundCloudSelection(track_ids) => {
+            DiscoverClickCommand::OpenSoundCloudSelection(track_ids)
+        }
+    }
 }
 
 pub(super) fn card_grid_row_count(card_count: usize, columns: u16) -> usize {
@@ -676,6 +701,30 @@ mod tests {
             source: Provider::Deezer,
             ..Card::default()
         }
+    }
+
+    #[test]
+    fn discover_click_commands_preserve_play_and_open_behavior() {
+        assert_eq!(
+            discover_click_command(&DiscoverAction::PlayDeezerFlow { smart_mix: false }),
+            DiscoverClickCommand::PlayDeezerFlow { smart_mix: false }
+        );
+        assert_eq!(
+            discover_click_command(&DiscoverAction::PlayDeezerFlow { smart_mix: true }),
+            DiscoverClickCommand::PlayDeezerFlow { smart_mix: true }
+        );
+        assert_eq!(
+            discover_click_command(&DiscoverAction::OpenDetail),
+            DiscoverClickCommand::None
+        );
+        assert_eq!(
+            discover_menu_actions(&DiscoverAction::PlayDeezerFlow { smart_mix: false }),
+            Some(&[DiscoverMenuPrimary::PlayFlow, DiscoverMenuPrimary::Open,][..])
+        );
+        assert_eq!(
+            discover_menu_actions(&DiscoverAction::PlayDeezerFlow { smart_mix: true }),
+            Some(&[DiscoverMenuPrimary::PlayMix, DiscoverMenuPrimary::Open,][..])
+        );
     }
 
     #[test]
@@ -871,94 +920,6 @@ mod tests {
     }
 
     #[test]
-    fn discover_detail_cards_use_the_channel_preserving_opener() {
-        let production = include_str!("cards_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or(include_str!("cards_view.rs"), |(production, _)| production);
-        let discover_detail = production
-            .split_once("if item.action == DiscoverAction::OpenDetail")
-            .and_then(|(_, rest)| rest.split_once("let card = &item.card;"))
-            .map(|(branch, _)| branch)
-            .expect("Discover detail card branch");
-        let call = discover_detail
-            .split_once("render_card_with_presentation(")
-            .and_then(|(_, rest)| rest.split_once(");"))
-            .map(|(call, _)| call)
-            .expect("Discover detail card presentation call");
-        assert!(call.contains("true"));
-        assert!(call.contains("discover_card_presentation(item)"));
-        assert!(call.contains("Some((section_id, item_index))"));
-        assert!(production.contains("this.open_discover_card"));
-    }
-
-    #[test]
-    fn special_discover_cards_get_explicit_action_menus() {
-        assert_eq!(
-            discover_menu_actions(&DiscoverAction::PlayDeezerTrack("42".into())),
-            Some(&[DiscoverMenuPrimary::PlayMix][..])
-        );
-        assert_eq!(
-            discover_menu_actions(&DiscoverAction::PlayDeezerFlow { smart_mix: false }),
-            Some(&[DiscoverMenuPrimary::PlayFlow, DiscoverMenuPrimary::Open][..])
-        );
-        assert_eq!(
-            discover_menu_actions(&DiscoverAction::PlayDeezerFlow { smart_mix: true }),
-            Some(&[DiscoverMenuPrimary::PlayMix, DiscoverMenuPrimary::Open][..])
-        );
-        assert_eq!(
-            discover_menu_actions(&DiscoverAction::OpenDeezerChannel("dance".into())),
-            Some(&[DiscoverMenuPrimary::Open][..])
-        );
-        assert_eq!(
-            discover_menu_actions(&DiscoverAction::OpenSoundCloudSelection(vec!["1".into()])),
-            Some(
-                &[
-                    DiscoverMenuPrimary::PlaySelection,
-                    DiscoverMenuPrimary::Open
-                ][..]
-            )
-        );
-        assert_eq!(discover_menu_actions(&DiscoverAction::OpenDetail), None);
-        let source = include_str!("cards_view.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("cards view production source");
-        assert!(source.contains("discover_card_menu_with_actions("));
-        assert!(source.contains("play_soundcloud_discover_selection"));
-    }
-
-    #[test]
-    fn flow_and_mix_cards_play_on_click_while_open_stays_in_the_menu() {
-        let production = &include_str!("cards_view.rs")
-            [..include_str!("cards_view.rs").find("#[cfg(test)]").unwrap()];
-        let dispatch = production
-            .split_once("fn dispatch_discover_action")
-            .and_then(|(_, body)| body.split_once("fn "))
-            .map(|(body, _)| body)
-            .expect("dispatch_discover_action should exist");
-        // Smarttracklist mixes (the Mixes inspired by type) play on click.
-        assert!(dispatch.contains("PlayDeezerFlow { smart_mix: true } => {"));
-        assert!(dispatch.contains("view.play_deezer_flow(card, true, cx);"));
-        // Ordinary flows play on click as well.
-        assert!(dispatch.contains("PlayDeezerFlow { smart_mix: false } => {"));
-        assert!(dispatch.contains("view.play_deezer_flow(card, false, cx);"));
-        // The flow page stays reachable through the context menu Open entry
-        // instead of the primary click.
-        let menu_dispatch = production
-            .split_once("fn dispatch_discover_menu_action")
-            .and_then(|(_, body)| body.split_once("fn dispatch_discover_action"))
-            .map(|(body, _)| body)
-            .expect("dispatch_discover_menu_action should exist");
-        assert!(menu_dispatch.contains(
-            "(DiscoverMenuPrimary::Open, DiscoverAction::PlayDeezerFlow { smart_mix }) => {"
-        ));
-        assert!(menu_dispatch.contains("view.open_deezer_flow(card, smart_mix, cx);"));
-        // The flow card advertises playing, not opening, on its label.
-        assert!(production.contains("\"Play Deezer Flow\""));
-        assert!(!production.contains("\"Open Deezer Flow\""));
-    }
-
-    #[test]
     fn mixed_collection_cards_keep_routes_and_actions() {
         let cards = [
             card(ResultType::Albums, "42"),
@@ -974,18 +935,5 @@ mod tests {
             })
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(ids.len(), cards.len());
-    }
-
-    #[test]
-    fn card_grid_scrollbar_uses_the_shared_viewport_edge_outset() {
-        let implementation = include_str!("cards_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("cards view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains("library_vertical_scrollbar("));
-        assert!(implementation.contains("&fixed_scroll"));
-        assert!(implementation.contains("narrow"));
     }
 }

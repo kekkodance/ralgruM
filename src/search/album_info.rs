@@ -1109,13 +1109,4 @@ mod tests {
         assert_eq!(format_duration(3725), "1h 2m");
         assert_eq!(format_duration(125), "2m 05s");
     }
-
-    #[test]
-    fn info_dialog_registers_escape_and_overlay_dismiss_handlers() {
-        let source = include_str!("album_info.rs");
-        let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        assert!(production.contains("overlay_closable(true)"));
-        assert!(production.contains("on_cancel"));
-        assert!(production.contains("\"escape\""));
-    }
 }

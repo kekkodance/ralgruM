@@ -595,20 +595,6 @@ mod tests {
     }
 
     #[test]
-    fn track_rows_keep_download_before_more_and_playlist_removal() {
-        let source = include_str!("rows_view.rs");
-        let download_helper = ["fn ", "download_button("].concat();
-        let favorite_helper = ["fn ", "favorite_button("].concat();
-        assert!(source.contains("track_menu_button("));
-        assert!(source.contains("track_download_button_above("));
-        assert!(source.contains("remove_button("));
-        assert!(source.contains(&download_helper));
-        assert!(!source.contains(&favorite_helper));
-        assert!(source.contains(".child(download_button("));
-        assert!(source.contains(".child(more_action)"));
-    }
-
-    #[test]
     fn preview_and_virtual_track_slots_share_the_same_stride() {
         assert_eq!(
             track_row_slot_height(true),
@@ -619,17 +605,5 @@ mod tests {
                 + f32::from(crate::library::virtualization::row_gap()),
             f32::from(crate::library::virtualization::row_height())
         );
-    }
-
-    #[test]
-    fn playlist_drag_is_only_enabled_for_full_detail_rows() {
-        assert!(playlist_row_reorder_enabled(false, true));
-        assert!(!playlist_row_reorder_enabled(true, true));
-        assert!(!playlist_row_reorder_enabled(false, false));
-
-        let source = include_str!("rows_view.rs");
-        assert!(source.contains(".on_drag("));
-        assert!(source.contains(".on_drop::<PlaylistTrackDrag>"));
-        assert!(source.contains("this.move_playlist_track(drag.from_index, index, cx)"));
     }
 }

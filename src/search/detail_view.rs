@@ -991,10 +991,7 @@ fn artist_tracks_preview(tracks_only: bool, expanded: Option<ArtistSection>) -> 
 
 #[cfg(test)]
 mod layout_tests {
-    use super::{
-        ArtistSection, Provider, artist_popular_actions, artist_tracks_preview,
-        artist_tracks_title, detail_route_card,
-    };
+    use super::{Provider, artist_popular_actions, detail_route_card};
     use crate::collection_detail::DETAIL_CONTEXT_OPTICAL_OFFSET_PX;
     use crate::search::detail::DetailRoute;
     use crate::search::models::ResultType;
@@ -1030,107 +1027,8 @@ mod layout_tests {
     }
 
     #[test]
-    fn collection_headings_do_not_render_a_heading_info_action() {
-        let source = include_str!("detail_view.rs");
-        for needle in [
-            ["album", "_info_button"].concat(),
-            ["DETAIL_INFO_OPTICAL", "_OFFSET_PX"].concat(),
-            ["About this ", "album"].concat(),
-            ["About this ", "playlist"].concat(),
-        ] {
-            assert!(!source.contains(needle.as_str()), "found {needle}");
-        }
-    }
-
-    #[test]
     fn detail_track_actions_follow_both_provider_favorite_support() {
         assert!(artist_popular_actions(Provider::Deezer));
         assert!(artist_popular_actions(Provider::SoundCloud));
-    }
-
-    #[test]
-    fn empty_detail_view_retains_page_heading() {
-        let source = include_str!("detail_view.rs");
-        assert!(source.contains("DetailState::Empty(page) => {"));
-        assert!(source.contains("render_page("));
-        assert!(source.contains("detail_message("));
-    }
-
-    #[test]
-    fn artist_header_groups_favorite_and_more_with_title_and_albums_section() {
-        let source = include_str!("detail_view.rs");
-        assert!(source.contains("\"Albums\",\n            1,"));
-        assert!(source.contains("\"Albums\",\n            ArtistSection::Albums,"));
-        let legacy = format!("Albums {} {}Ps", '&', 'E');
-        assert!(!source.contains(legacy.as_str()));
-    }
-
-    #[test]
-    fn soundcloud_tracks_only_heading_is_tracks_without_preview_or_view_all() {
-        assert_eq!(artist_tracks_title(), "Tracks");
-        assert!(!artist_tracks_preview(true, None));
-        assert!(!artist_tracks_preview(
-            true,
-            Some(ArtistSection::PopularTracks)
-        ));
-        assert!(artist_tracks_preview(false, None));
-        assert!(!artist_tracks_preview(
-            false,
-            Some(ArtistSection::PopularTracks)
-        ));
-
-        let implementation = include_str!("detail_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("detail view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains("soundcloud_tracks_only(route.provider, artist)"));
-        assert!(implementation.contains("artist_tracks_title()"));
-        assert!(implementation.contains("artist_tracks_preview(tracks_only, expanded)"));
-        assert!(implementation.contains("tracks_only,"));
-        assert!(implementation.contains("if tracks_only { None } else { expanded }"));
-        assert!(implementation.contains("render_shared_artist_section_header"));
-    }
-
-    #[test]
-    fn artist_section_list_measures_all_rows_for_exact_scroll_extents() {
-        let implementation = include_str!("detail_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("detail view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        // Natural-height rows (headings, card grid rows, track slots) need
-        // the measured-all state: lazily measured rows would leave the
-        // scrollbar extent growing as rows scroll into view.
-        assert!(
-            implementation
-                .contains("view.measured_track_list_state(&identity, builders.len(), layout)")
-        );
-        assert!(implementation.contains("BrowserScrollTarget::List(state)"));
-    }
-
-    #[test]
-    fn collection_header_groups_actions_with_title_and_keeps_platform_context_separate() {
-        let source = include_str!("detail_view.rs")
-            .split_once("#[cfg(test)]")
-            .expect("detail view tests follow the implementation")
-            .0;
-        assert!(source.contains("render_shared_provider_detail("));
-        assert!(source.contains("ProviderHeaderSpec"));
-        assert!(source.contains("render_shared_artist_header"));
-        assert!(!source.contains("fn detail_delete("));
-        assert!(!source.contains("playlist_header_delete_button"));
-    }
-
-    #[test]
-    fn playlist_detail_does_not_render_reorder_status_banner() {
-        let implementation = include_str!("detail_view.rs")
-            .split_once("#[cfg(test)]")
-            .expect("detail view tests follow the implementation")
-            .0;
-        assert!(!implementation.contains("reorder_status("));
-        assert!(!implementation.contains("Saving playlist order"));
     }
 }

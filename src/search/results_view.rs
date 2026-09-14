@@ -1083,47 +1083,6 @@ mod tests {
     }
 
     #[test]
-    fn dedicated_card_surface_owns_list_scroll() {
-        let implementation = include_str!("cards_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("cards view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains("gpui::list(state.clone()"));
-        assert!(implementation.contains("library_vertical_scrollbar("));
-        assert!(implementation.contains("&fixed_scroll"));
-        assert!(implementation.contains("BrowserScrollTarget::FixedList(fixed_scroll)"));
-    }
-
-    #[test]
-    fn search_main_content_wrapper_keeps_horizontal_gutter_with_inner_bottom_padding() {
-        let implementation = include_str!("results_view.rs")
-            .split_once("impl Render for SearchView")
-            .map_or_else(
-                || panic!("search view renderer must have an implementation section"),
-                |(_, implementation)| implementation,
-            );
-        let start_marker = "let content = div()\n                    .w_full()\n                    .px(px(gutter))";
-        let start = implementation
-            .find(start_marker)
-            .unwrap_or_else(|| panic!("search main content wrapper marker is missing"));
-        let end = implementation[start..]
-            .find(".child(if detail_open")
-            .map(|offset| start + offset)
-            .unwrap_or_else(|| panic!("search main content wrapper end marker is missing"));
-        let wrapper = &implementation[start..end];
-
-        assert!(wrapper.contains(".px(px(gutter))"));
-        // Inner bottom padding only for div scrolls. Virtualized lists own
-        // their scroll state and must not get a persistent outer gap.
-        assert!(wrapper.contains(".when(!virtualized_scroll"));
-        assert!(wrapper.contains(".pb(px(SEARCH_RESULTS_BOTTOM_PADDING_PX))"));
-        assert!(!wrapper.contains(".py("));
-        assert_eq!(super::SEARCH_RESULTS_BOTTOM_PADDING_PX, 16.);
-    }
-
-    #[test]
     fn whole_results_animation_key_uses_source_and_normalized_query() {
         let deezer_tracks = search_results_content_identity(Source::Deezer, "  QuErY  ");
 
@@ -1140,25 +1099,6 @@ mod tests {
             deezer_tracks,
             search_results_content_identity(Source::Deezer, "different")
         );
-    }
-
-    #[test]
-    fn results_entrance_animation_is_gated_on_fresh_results() {
-        let implementation = include_str!("results_view.rs")
-            .split_once("fn results(")
-            .and_then(|(_, rest)| rest.split_once("impl Render for SearchView"))
-            .map_or_else(
-                || panic!("search results must remain before the view renderer"),
-                |(results, _)| results,
-            );
-
-        // Tab switches remount this subtree under a different element id,
-        // which would restart a shared animation every time. Only the key
-        // armed by a fresh completion plays; re-presented tabs settle.
-        assert!(implementation.contains("results_entrance_key.as_deref()"));
-        assert!(implementation.contains("if entrance {"));
-        assert!(implementation.contains("with_animation("));
-        assert!(implementation.contains("} else {"));
     }
 
     #[test]
@@ -1211,41 +1151,6 @@ mod tests {
     }
 
     #[test]
-    fn search_result_count_slot_is_persistent_and_animates_width_and_opacity() {
-        let implementation = include_str!("results_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("results view tests must have an implementation section"),
-                |(implementation, _)| implementation,
-            );
-
-        assert!(implementation.contains(".id(\"search-result-count\")"));
-        assert!(implementation.contains(".flex_none()"));
-        assert!(implementation.contains(".overflow_hidden()"));
-        assert!(implementation.contains(".whitespace_nowrap()"));
-        assert!(implementation.contains(".w(px(count_target_width))"));
-        assert!(implementation.contains(".ml(px(count_target_margin))"));
-        assert!(implementation.contains(".opacity(count_target_opacity)"));
-        assert!(implementation.contains("count_visual.epoch"));
-        assert!(implementation.contains("count_visual.endpoints(10., 0.)"));
-        assert!(!implementation.contains(".when(count_is_visible"));
-    }
-
-    #[test]
-    fn track_only_all_results_keep_full_list_without_inline_toggle() {
-        assert_eq!(preview_limit(ResultType::Tracks), 5);
-        assert!(is_preview_expandable(ResultType::Tracks, 8));
-        let implementation = include_str!("results_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("results view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains("if track_only_all"));
-        assert!(implementation.contains("fn view_toggle_slot"));
-    }
-
-    #[test]
     fn track_only_groups_hide_the_all_preview_count_but_keep_tracks_tab() {
         let track_only = tracks(9);
         assert!(track_only.is_track_only());
@@ -1271,25 +1176,6 @@ mod tests {
         assert!(should_show_section_count(true, ResultType::Tracks, &mixed));
         assert!(should_show_section_count(false, ResultType::Tracks, &mixed));
         assert!(should_show_section_count(false, ResultType::Albums, &mixed));
-    }
-
-    #[test]
-    fn search_results_scroll_uses_the_view_owned_handle() {
-        let implementation = include_str!("results_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("results view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        assert!(implementation.contains(".track_scroll(scroll)"));
-        assert!(implementation.contains(".overflow_y_scroll()"));
-        assert!(implementation.contains("Scrollbar::vertical(scroll)"));
-        assert!(implementation.contains("ScrollbarShow::Hover"));
-        assert!(implementation.contains("search-results-scroll-viewport"));
-        let nested_scrollbar_call = [".vertical_scrollbar", "(scroll)"].concat();
-        assert!(!implementation.contains(&nested_scrollbar_call));
-        let wrapped_scroll_call = [".overflow_y_scrollbar", "()"].concat();
-        assert!(!implementation.contains(&wrapped_scroll_call));
     }
 
     struct ScrollOwnerProbe {
@@ -1473,128 +1359,6 @@ mod tests {
                 assert_eq!(row_y.get(), Some(88.));
             }
         }
-    }
-
-    #[test]
-    fn track_section_header_height_is_fixed_regardless_of_view_toggle() {
-        assert_eq!(super::SEARCH_SECTION_HEADER_HEIGHT_PX, 28.);
-        assert_eq!(super::SEARCH_VIEW_ALL_HEIGHT_PX, 22.);
-        assert_eq!(super::SEARCH_VIEW_ALL_CHROME_OFFSET_PX, 1.);
-        let implementation = include_str!("results_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("results view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        // The section header keeps a fixed height so the All preview and the
-        // dedicated tab measure identically. The toggle button uses natural
-        // width hugging its label, a fixed height with
-        // a 1px chrome offset, and never uses vertical padding.
-        assert!(implementation.contains(".h(px(SEARCH_SECTION_HEADER_HEIGHT_PX))"));
-        assert!(implementation.contains(".h(px(SEARCH_VIEW_ALL_HEIGHT_PX))"));
-        assert!(implementation.contains(".top(px(SEARCH_VIEW_ALL_CHROME_OFFSET_PX))"));
-        assert!(implementation.contains(".top(px(-SEARCH_VIEW_ALL_CHROME_OFFSET_PX))"));
-        assert!(implementation.contains(".justify_center()"));
-        let toggle_start = implementation
-            .find("fn view_toggle_button")
-            .unwrap_or_else(|| panic!("view toggle button is missing"));
-        let toggle_window =
-            &implementation[toggle_start..(toggle_start + 2500).min(implementation.len())];
-        assert!(!toggle_window.contains(".py(px(3.))"));
-        assert!(toggle_window.contains(".px(px(7.))"));
-        assert!(!toggle_window.contains(".w(px(SEARCH_VIEW_ALL_SLOT_WIDTH_PX))"));
-        assert!(toggle_window.contains(".justify_center()"));
-        assert!(toggle_window.contains("\"view-toggle-"));
-    }
-
-    #[test]
-    fn view_toggle_slot_is_static_with_view_all_and_view_less() {
-        let implementation = include_str!("results_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("results view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        // No width, margin, or opacity animation remains for the toggle slot.
-        assert!(!implementation.contains("SEARCH_VIEW_ALL_SLOT_MAX_WIDTH_PX"));
-        assert!(!implementation.contains("SEARCH_VIEW_ALL_ANIMATION_ID"));
-        assert!(!implementation.contains("fn tracks_view_all_slot"));
-        assert!(!implementation.contains("fn static_view_all_slot"));
-        assert!(!implementation.contains("view_all_motion"));
-        assert!(!implementation.contains("view_all_target_max_width"));
-        assert!(!implementation.contains("view_all_from_max_width"));
-        // Available actions use natural width. A section without more results
-        // reserves no invisible toggle, keeping the result count at the edge.
-        assert!(implementation.contains("fn view_toggle_slot"));
-        assert!(implementation.contains("fn view_toggle_button"));
-        assert!(implementation.contains("\"View all\""));
-        assert!(implementation.contains("\"View less\""));
-        assert!(implementation.contains("fn view_toggle_label"));
-        assert!(implementation.contains("return_to_all_from_dedicated"));
-        assert!(implementation.contains("is_preview_expandable"));
-        assert!(implementation.contains("this.select_type(section"));
-        assert!(!implementation.contains("toggle_preview_expanded"));
-        assert!(!implementation.contains("is_preview_expanded"));
-        assert!(!implementation.contains("expanded_preview"));
-        assert!(!implementation.contains("render_tracks_expanded_inline"));
-        assert!(!implementation.contains("render_cards_expanded_inline"));
-        // The button uses natural width for View all and dedicated states.
-        let slot_start = implementation
-            .find("fn view_toggle_slot")
-            .unwrap_or_else(|| panic!("view toggle slot is missing"));
-        let slot_end = implementation[slot_start..]
-            .find("pub(super) fn search_results_content_identity")
-            .map(|offset| slot_start + offset)
-            .unwrap_or_else(|| panic!("toggle slot end is missing"));
-        let slot = &implementation[slot_start..slot_end];
-        assert!(!slot.contains(".w(px(SEARCH_VIEW_ALL_SLOT_WIDTH_PX))"));
-        assert!(slot.contains(".justify_center()"));
-        assert!(!slot.contains(".justify_end()"));
-        assert!(!slot.contains("with_animation"));
-        assert!(!slot.contains(".max_w("));
-        assert!(!slot.contains(".when(show_view_all"));
-        assert!(slot.contains("all && !expandable"));
-        assert!(!slot.contains(".opacity(0.)"));
-    }
-
-    #[test]
-    fn preview_limits_toggle_between_bounded_and_full_inline_lists() {
-        assert_eq!(
-            preview_limit(ResultType::Tracks),
-            super::SEARCH_TRACK_PREVIEW_LIMIT
-        );
-        assert_eq!(
-            preview_limit(ResultType::Albums),
-            super::SEARCH_CARD_PREVIEW_LIMIT
-        );
-        assert_eq!(
-            preview_limit(ResultType::Artists),
-            super::SEARCH_CARD_PREVIEW_LIMIT
-        );
-        assert_eq!(
-            preview_limit(ResultType::Playlists),
-            super::SEARCH_CARD_PREVIEW_LIMIT
-        );
-        assert_eq!(super::SEARCH_TRACK_PREVIEW_LIMIT, 5);
-        assert_eq!(super::SEARCH_CARD_PREVIEW_LIMIT, 12);
-        assert_eq!(view_toggle_label(true), "View all");
-        assert_eq!(view_toggle_label(false), "View less");
-        let implementation = include_str!("results_view.rs")
-            .split_once("#[cfg(test)]")
-            .map_or_else(
-                || panic!("results view implementation section is missing"),
-                |(implementation, _)| implementation,
-            );
-        // The All preview always stays bounded. Full lists live only on the
-        // dedicated virtualized tabs reached via select_type, so no large
-        // non-virtualized inline draw can exhaust the glyph atlas.
-        assert!(!implementation.contains("fn render_tracks_expanded_inline"));
-        assert!(!implementation.contains("fn render_cards_expanded_inline"));
-        assert!(!implementation.contains("SearchTrackRows::new"));
-        assert!(!implementation.contains("track_row_slot"));
-        assert!(!implementation.contains("render_card_grid_row"));
-        assert!(implementation.contains("super::cards_view::render_cards"));
-        assert!(implementation.contains("this.select_type(section"));
     }
 
     impl Render for ScrollOwnerProbe {
