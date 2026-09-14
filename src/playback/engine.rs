@@ -421,6 +421,11 @@ impl RodioEngine {
                         let startup = startup.recv().map_err(|_| {
                             "The timeline seek worker stopped unexpectedly".to_string()
                         })??;
+                        // A session that lands its fragment before the
+                        // target reports the exact discard once the
+                        // fetch completes; otherwise the request already
+                        // carried the intra-segment offset.
+                        let intra_segment = startup.intra_segment_offset.unwrap_or(intra_segment);
                         let mut decoder = Decoder::builder()
                             .with_data(startup.reader)
                             .with_hint(format.extension())

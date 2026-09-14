@@ -24,6 +24,11 @@ const EMPTY_READ_WAIT: Duration = Duration::from_millis(1);
 pub(crate) struct TimelineSeekStartup {
     pub(crate) reader: ProgressiveReader,
     pub(crate) file: tempfile::NamedTempFile,
+    /// Discard the engine must apply before playing this startup. A session
+    /// sets it when the fetched fragment starts before the seek target and
+    /// the exact offset only becomes known once the fetch has landed; the
+    /// request's own intra-segment offset is used when this stays `None`.
+    pub(crate) intra_segment_offset: Option<Duration>,
 }
 
 /// Transport-neutral request details needed to decode a timeline seek.

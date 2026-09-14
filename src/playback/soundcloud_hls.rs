@@ -202,7 +202,11 @@ impl HlsSeekSession {
                 .await?;
                 writer.mark_startup_ready();
                 if startup_sender
-                    .send(Ok(TimelineSeekStartup { reader, file }))
+                    .send(Ok(TimelineSeekStartup {
+                        reader,
+                        file,
+                        intra_segment_offset: None,
+                    }))
                     .is_err()
                 {
                     return Err(PlaybackDownloadError::message(

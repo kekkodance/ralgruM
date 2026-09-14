@@ -749,3 +749,241 @@ async fn exact_resolution_rejects_wrong_quality_after_refresh() {
     );
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
+
+/// A progressive backend source whose byte ranges and downloads are served
+/// from memory, standing in for a Deezer track resolved through the murglar
+/// backend.
+struct SeekFixtureBackend {
+    metadata: BackendSourceMetadata,
+    bytes: Arc<Vec<u8>>,
+}
+
+impl BackendSourceOps for SeekFixtureBackend {
+    fn metadata(&self) -> BackendSourceMetadata {
+        self.metadata.clone()
+    }
+
+    fn timeline_seek_session(
+        &self,
+        _cancellation: CancellationToken,
+    ) -> Option<Arc<dyn TimelineSeekSession>> {
+        None
+    }
+
+    fn read_range<'a>(
+        &'a self,
+        start: u64,
+        end: u64,
+        _cancellation: &'a CancellationToken,
+    ) -> BackendFuture<'a, Result<Vec<u8>, PlaybackDownloadError>> {
+        let bytes = self.bytes.clone();
+        Box::pin(async move {
+            let start = usize::try_from(start)
+                .map_err(|_| PlaybackDownloadError::message("test range start overflow"))?;
+            let end = usize::try_from(end)
+                .map_err(|_| PlaybackDownloadError::message("test range end overflow"))?;
+            if start > end || end >= bytes.len() {
+                return Err(PlaybackDownloadError::message("test range out of bounds"));
+            }
+            Ok(bytes[start..=end].to_vec())
+        })
+    }
+
+    fn probe_size<'a>(
+        &'a self,
+        _cancellation: &'a CancellationToken,
+    ) -> BackendFuture<'a, Option<u64>> {
+        Box::pin(async { Some(self.metadata.size) })
+    }
+
+    fn download<'a>(
+        &'a self,
+        output: &'a mut dyn DownloadOutput,
+        _cancellation: &'a CancellationToken,
+        _progress: Option<&'a ProgressCallback>,
+    ) -> BackendFuture<'a, Result<(), PlaybackDownloadError>> {
+        let bytes = self.bytes.clone();
+        Box::pin(async move {
+            output.set_total_hint(Some(bytes.len() as u64));
+            output.write_all(&bytes).await.map_err(|_| {
+                PlaybackDownloadError::message("test download could not be written")
+            })?;
+            output.flush().await.map_err(|_| {
+                PlaybackDownloadError::message("test download could not be finalized")
+            })?;
+            Ok(())
+        })
+    }
+}
+
+fn seek_fixture_source(format: AudioFormat, bytes: Arc<Vec<u8>>) -> BackendSource {
+    let size = bytes.len() as u64;
+    BackendSource::from_ops(Arc::new(SeekFixtureBackend {
+        metadata: BackendSourceMetadata {
+            format,
+            format_name: match format {
+                AudioFormat::Mp3 => "MP3_320".into(),
+                _ => format.label().into(),
+            },
+            size,
+            declared_bitrate: None,
+            duration: None,
+            timeline: false,
+            cacheable: true,
+            initial_buffered_fraction: None,
+            deezer_track_id: Some("42".into()),
+            provenance: BackendProvenance::Deezer,
+            cache_identity: BackendCacheIdentity::new("deezer-range-session-test"),
+        },
+        bytes,
+    }))
+}
+
+/// Deterministic fixture bytes with a valid FLAC header prefix so the
+/// progressive prefix validation passes without reaching the network.
+fn flac_fixture_bytes() -> Vec<u8> {
+    let mut bytes = b"fLaC\x80\x00\x00\x22".to_vec();
+    let mut stream_info = [0_u8; 34];
+    stream_info[0..2].copy_from_slice(&4096_u16.to_be_bytes());
+    stream_info[2..4].copy_from_slice(&4096_u16.to_be_bytes());
+    // 44.1kHz, 2 channels, 16 bits per sample, 4 seconds of samples.
+    let packed = (u64::from(44_100_u32) << 44) | (1_u64 << 41) | (15_u64 << 36) | (4_u64 * 44_100);
+    stream_info[10..18].copy_from_slice(&packed.to_be_bytes());
+    bytes.extend_from_slice(&stream_info);
+    bytes.extend((0..64 * 1024).map(|index| (index % 251) as u8));
+    bytes
+}
+
+async fn resolve_deezer_progressive_fixture(
+    format: AudioFormat,
+    bytes: Arc<Vec<u8>>,
+) -> Result<ResolvedProgressiveAudio, String> {
+    let mut resolver = StreamResolver::new().unwrap();
+    let backend = seek_fixture_source(format, bytes);
+    resolver.backend_resolve_override = Some(Arc::new(move |_| {
+        MediaResolveOutcome::Source(backend.clone())
+    }));
+    let track = PlaybackTrack {
+        provider: PlaybackProvider::Deezer,
+        id: "deezer-range-session".into(),
+        title: "Fixture track".into(),
+        artist: "Fixture artist".into(),
+        album: String::new(),
+        album_id: String::new(),
+        release_date: String::new(),
+        artists: Vec::new(),
+        artwork: String::new(),
+        duration: Duration::from_secs(4),
+        downloadable: false,
+        progressive: false,
+        explicit: false,
+        service_url: String::new(),
+    };
+    resolver
+        .resolve_progressive(
+            &track,
+            None,
+            None,
+            Some(crate::murglar_backend::test_media_credentials()),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn deezer_backend_progressive_mp3_attaches_a_range_seek_session() {
+    let bytes: Arc<Vec<u8>> = Arc::new((0..128 * 1024).map(|index| (index % 251) as u8).collect());
+    let audio = resolve_deezer_progressive_fixture(AudioFormat::Mp3, bytes)
+        .await
+        .unwrap();
+    assert!(
+        audio.timeline_seek_session.is_some(),
+        "a Deezer backend MP3 source must land mid-download seeks through a range session"
+    );
+}
+
+#[tokio::test]
+async fn deezer_backend_progressive_flac_attaches_a_range_seek_session() {
+    let audio =
+        resolve_deezer_progressive_fixture(AudioFormat::Flac, Arc::new(flac_fixture_bytes()))
+            .await
+            .unwrap();
+    assert!(
+        audio.timeline_seek_session.is_some(),
+        "a Deezer backend FLAC source must land mid-download seeks through a range session"
+    );
+}
+
+#[tokio::test]
+async fn backend_range_sessions_skip_timelines_and_unknown_sizes() {
+    let resolver = StreamResolver::new().unwrap();
+    let cancellation = CancellationToken::new();
+    let (progressive, _) = offline_backend(1_000, false, AudioFormat::Flac);
+    assert!(
+        resolver
+            .backend_range_seek_session(
+                &progressive,
+                Some(1_000),
+                Some(Duration::from_secs(4)),
+                &cancellation
+            )
+            .is_some()
+    );
+    let (timeline, _) = offline_backend(0, true, AudioFormat::Flac);
+    assert!(
+        resolver
+            .backend_range_seek_session(&timeline, None, None, &cancellation)
+            .is_none(),
+        "timeline sources keep their own seek sessions"
+    );
+    let (unknown, _) = offline_backend(0, false, AudioFormat::Mp3);
+    assert!(
+        resolver
+            .backend_range_seek_session(&unknown, None, Some(Duration::from_secs(4)), &cancellation)
+            .is_none(),
+        "unknown sizes stay on the deferred path"
+    );
+}
+
+#[tokio::test]
+async fn direct_deezer_progressive_sources_attach_range_seek_sessions() {
+    let resolver = StreamResolver::new().unwrap();
+    let cancellation = CancellationToken::new();
+    let url = "https://cdnt-stream.dzcdn.net/media/42/file";
+    let source = |format: AudioFormat| ResolvedSource {
+        data: SourceData::Remote(url.into()),
+        size: 0,
+        deezer_track_id: Some("42".into()),
+        is_soundcloud: false,
+        cache_identity: None,
+        format,
+        format_name: format.label().into(),
+        declared_bitrate: None,
+    };
+    let session = |format: AudioFormat| {
+        resolver.progressive_range_seek_session(
+            url,
+            &source(format),
+            Some(262_144),
+            Some(Duration::from_secs(4)),
+            &cancellation,
+        )
+    };
+    assert!(
+        session(AudioFormat::Mp3).is_some(),
+        "direct Deezer MP3 keeps its range session"
+    );
+    assert!(
+        session(AudioFormat::Flac).is_some(),
+        "direct Deezer FLAC now lands mid-download seeks through a range session"
+    );
+    assert!(
+        session(AudioFormat::Wav).is_none(),
+        "formats without a range strategy stay on the deferred path"
+    );
+    assert!(
+        session(AudioFormat::M4a).is_none(),
+        "M4A keeps its completed-buffer reload path"
+    );
+}

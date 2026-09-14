@@ -95,6 +95,7 @@ pub(crate) struct RalgrumApp {
     cache_view: Entity<CacheView>,
     right_sidebar_transition: RightSidebarTransition,
     right_sidebar_settle_task: Option<Task<()>>,
+    sidebar_width_settle_task: Option<Task<()>>,
     player_bar_motion: PlayerBarMotion,
     settings_motion_generation: u64,
     sidebar_width_motion: SidebarWidthMotion,
@@ -166,7 +167,7 @@ enum RightSidebarTransitionAction {
     ScheduleEnter { epoch: u64, started_at: Instant },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct RightSidebarTransition {
     displayed_sidebar: RightSidebar,
     desired_sidebar: RightSidebar,
@@ -176,13 +177,17 @@ struct RightSidebarTransition {
     content_switch: bool,
     // Settings unmounts lyrics/queue; remounting must not replay enter.
     skip_enter: bool,
-    // When the enter slide started, so the center reserve flips only after
-    // the slide's final frame.
+    // When the enter slide started, so the settle lands only after the
+    // slide's final frame.
     enter_started_at: Option<Instant>,
-    // Whether the center column currently reserves the sidebar strip. The
-    // desktop sidebar is an absolute overlay, so this flag is the only thing
-    // that reflows the row, and it flips exactly once per transition.
+    // Whether the center column counts the sidebar strip as taken. The
+    // desktop sidebar is an absolute overlay, so this flag only marks when
+    // a slide is settled; the visible squeeze comes from center_squeeze.
     center_reserved: bool,
+    // Fraction of the panel width the center column cedes, animated in
+    // lockstep with the panel overlay's slide so the column squeezes
+    // smoothly with the panel's edge instead of snapping once at the end.
+    center_squeeze: CenterSqueezeMotion,
 }
 
 impl RightSidebarTransition {
@@ -197,9 +202,17 @@ impl RightSidebarTransition {
             skip_enter: false,
             enter_started_at: None,
             // A panel restored from saved settings starts settled: the enter
-            // slide is purely visual, so the center never reflows for it.
+            // slide is purely visual, so the center never squeezes for it.
             center_reserved: sidebar != RightSidebar::Closed,
+            center_squeeze: CenterSqueezeMotion::settled(sidebar != RightSidebar::Closed),
         }
+    }
+
+    // Whether a panel slide is in flight, i.e. whether the center column's
+    // width is currently animating. Snap paths (content switches, settings
+    // remounts, reduced motion) settle instantly and never report active.
+    fn slide_active(&self) -> bool {
+        self.closing || (self.desired_sidebar != RightSidebar::Closed && !self.center_reserved)
     }
 
     fn skip_enter_if_already_open(&mut self) {
@@ -211,6 +224,7 @@ impl RightSidebarTransition {
             // reserves its strip immediately instead of waiting for a settle.
             self.center_reserved = true;
             self.enter_started_at = None;
+            self.center_squeeze.snap(true);
         }
     }
 
@@ -230,6 +244,7 @@ impl RightSidebarTransition {
                 self.skip_enter = false;
                 self.enter_started_at = None;
                 self.center_reserved = false;
+                self.center_squeeze.snap(false);
                 return RightSidebarTransitionAction::CancelClose;
             }
             return RightSidebarTransitionAction::None;
@@ -250,10 +265,15 @@ impl RightSidebarTransition {
                     self.displayed_sidebar = RightSidebar::Closed;
                     self.closing = false;
                     self.center_reserved = false;
+                    self.center_squeeze.snap(false);
                     RightSidebarTransitionAction::CancelClose
                 } else {
                     self.closing = true;
                     self.close_started_at = Some(now);
+                    // The panel's slide-out restarts from fully open, so the
+                    // ceded fraction starts fully reserved to stay locked to
+                    // the panel's edge.
+                    self.center_squeeze.slide_to(false, self.epoch, now);
                     RightSidebarTransitionAction::ScheduleClose {
                         epoch: self.epoch,
                         started_at: now,
@@ -270,9 +290,11 @@ impl RightSidebarTransition {
                     // there is no slide to wait for.
                     self.center_reserved = true;
                     self.enter_started_at = None;
+                    self.center_squeeze.snap(true);
                     RightSidebarTransitionAction::CancelClose
                 } else {
                     self.enter_started_at = Some(now);
+                    self.center_squeeze.slide_to(true, self.epoch, now);
                     RightSidebarTransitionAction::ScheduleEnter {
                         epoch: self.epoch,
                         started_at: now,
@@ -321,8 +343,10 @@ impl RightSidebarTransition {
         self.content_switch = false;
         self.skip_enter = false;
         self.enter_started_at = None;
-        // The panel is gone, so this is the close's single center reflow.
+        // The panel is gone and the strip has fully retracted, so the
+        // content hold releases into the wide column it already shows.
         self.center_reserved = false;
+        self.center_squeeze.snap(false);
         true
     }
 
@@ -352,7 +376,66 @@ impl RightSidebarTransition {
 
         self.center_reserved = true;
         self.enter_started_at = None;
+        self.center_squeeze.snap(true);
         true
+    }
+}
+
+/// Animated fraction of the right panel's width that the center column
+/// cedes to it. The fraction, not pixels, keeps the motion valid when the
+/// viewport, and with it the panel width, changes mid-slide.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CenterSqueezeMotion {
+    from: f32,
+    target: f32,
+    epoch: u64,
+    started_at: Instant,
+}
+
+impl CenterSqueezeMotion {
+    fn settled(reserved: bool) -> Self {
+        let fraction = reserved as u8 as f32;
+        Self {
+            from: fraction,
+            target: fraction,
+            epoch: 0,
+            started_at: Instant::now(),
+        }
+    }
+
+    fn snap(&mut self, reserved: bool) {
+        let fraction = reserved as u8 as f32;
+        self.from = fraction;
+        self.target = fraction;
+    }
+
+    fn slide_to(&mut self, reserved: bool, epoch: u64, now: Instant) {
+        self.target = reserved as u8 as f32;
+        // An opening slide continues from wherever the column currently
+        // cedes; a closing slide starts fully reserved because the panel's
+        // slide-out restarts from fully open.
+        self.from = if reserved {
+            self.displayed_fraction(now)
+        } else {
+            1.0
+        };
+        self.started_at = now;
+        self.epoch = epoch;
+    }
+
+    fn displayed_fraction(self, now: Instant) -> f32 {
+        if self.from == self.target || crate::motion::PANEL_DURATION.is_zero() {
+            return self.target;
+        }
+
+        let duration = crate::motion::PANEL_DURATION;
+        let progress = crate::motion::clamp_unit(
+            now.saturating_duration_since(self.started_at).as_secs_f32() / duration.as_secs_f32(),
+        );
+        // ease_out_quint, matching motion::panel() so the strip tracks the
+        // panel overlay's slide exactly.
+        let eased = 1.0 - (1.0 - progress).powi(5);
+        crate::motion::lerp(self.from, self.target, eased)
     }
 }
 
@@ -378,20 +461,22 @@ impl Default for SidebarWidthMotion {
 }
 
 impl SidebarWidthMotion {
-    fn retarget(&mut self, target: f32, now: Instant, reduced_motion: bool) {
+    // Returns whether an animated width slide just started, so the caller
+    // can schedule the settle that releases the content hold.
+    fn retarget(&mut self, target: f32, now: Instant, reduced_motion: bool) -> bool {
         if !self.initialized {
             self.from = target;
             self.target = target;
             self.started_at = now;
             self.initialized = true;
-            return;
+            return false;
         }
 
         if self.target == target {
             if reduced_motion || crate::motion::PANEL_DURATION.is_zero() {
                 self.from = target;
             }
-            return;
+            return false;
         }
 
         self.from = self.displayed_width(now);
@@ -402,6 +487,15 @@ impl SidebarWidthMotion {
         if reduced_motion || crate::motion::PANEL_DURATION.is_zero() {
             self.from = target;
         }
+
+        self.from != self.target
+    }
+
+    fn animating(self, now: Instant) -> bool {
+        self.initialized
+            && self.from != self.target
+            && !crate::motion::PANEL_DURATION.is_zero()
+            && now.saturating_duration_since(self.started_at) < crate::motion::PANEL_DURATION
     }
 
     fn displayed_width(self, now: Instant) -> f32 {
@@ -691,6 +785,41 @@ fn right_sidebar_overlay_offset(sidebar_width: f32, closing: bool, delta: f32) -
     } else {
         crate::motion::lerp(-sidebar_width, 0.0, delta)
     }
+}
+
+// Width the routed content region keeps while a sidebar slide animates the
+// center column: the widest column the whole transition passes through. The
+// content lays out once at this width and the animating column merely clips
+// it, so no list inside ever re-measures mid-slide. Returns 0 when no hold
+// applies (nothing animating, or the narrow mobile layout).
+fn content_hold_width(
+    narrow_content: bool,
+    viewport_width: f32,
+    sidebar_width_motion: SidebarWidthMotion,
+    right_slide_active: bool,
+    settled_center_squeeze_width: f32,
+    now: Instant,
+) -> f32 {
+    let left_sidebar_animating = sidebar_width_motion.animating(now);
+    if narrow_content || (!right_slide_active && !left_sidebar_animating) {
+        return 0.;
+    }
+
+    // The column is widest where the animated strips are narrowest: the left
+    // sidebar at the smaller of its slide endpoints, and the center strip at
+    // zero, because every right transition starts or ends with the panel
+    // closed.
+    let left_min = if left_sidebar_animating {
+        sidebar_width_motion.from.min(sidebar_width_motion.target)
+    } else {
+        sidebar_width_motion.displayed_width(now)
+    };
+    let reserve_min = if right_slide_active {
+        0.
+    } else {
+        settled_center_squeeze_width
+    };
+    (viewport_width - left_min - reserve_min).max(0.)
 }
 
 impl RalgrumApp {
@@ -1227,6 +1356,7 @@ impl RalgrumApp {
             cache_view,
             right_sidebar_transition: RightSidebarTransition::new(initial_right_sidebar),
             right_sidebar_settle_task: None,
+            sidebar_width_settle_task: None,
             player_bar_motion: PlayerBarMotion::default(),
             settings_motion_generation: 0,
             sidebar_width_motion: SidebarWidthMotion::default(),
@@ -1297,6 +1427,17 @@ impl RalgrumApp {
                 }));
             }
         }
+    }
+
+    fn schedule_sidebar_width_settle(&mut self, cx: &mut Context<Self>) {
+        // The content hold must outlive the width animation's final frame,
+        // so the release lands after the sidebar has visually settled.
+        self.sidebar_width_settle_task = None;
+        let executor = cx.background_executor().clone();
+        self.sidebar_width_settle_task = Some(cx.spawn(async move |this, cx| {
+            executor.timer(crate::motion::PANEL_SETTLING_DURATION).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        }));
     }
 
     pub(super) fn toggle_mobile_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -1411,8 +1552,8 @@ fn update_download_scope(last_scope: &mut u128, observed_scope: u128) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        RectSelectorMotion, RectSelectorTransition, RightSidebarTransition,
-        RightSidebarTransitionAction, SidebarBottomMotion, SidebarWidthMotion,
+        CenterSqueezeMotion, RectSelectorMotion, RectSelectorTransition, RightSidebarTransition,
+        RightSidebarTransitionAction, SidebarBottomMotion, SidebarWidthMotion, content_hold_width,
         playback_sidebar_exits_settings, right_sidebar_overlay_offset, update_account_scope,
         update_download_scope,
     };
@@ -1930,6 +2071,247 @@ mod tests {
         assert_eq!(motion.visible_geometry(start), (75.0, 34.0));
     }
 
+    #[test]
+    fn center_squeeze_motion_slides_between_settled_extremes() {
+        let now = Instant::now();
+        let mut motion = CenterSqueezeMotion::settled(false);
+        assert_eq!(motion.displayed_fraction(now), 0.0);
+
+        motion.slide_to(true, 3, now);
+        assert_eq!(motion.from, 0.0);
+        assert_eq!(motion.target, 1.0);
+        assert_eq!(motion.epoch, 3);
+        // The eased fraction passes through the open interval, so the strip
+        // tracks the panel's edge per frame.
+        let midway = motion.displayed_fraction(now + motion::PANEL_DURATION / 2);
+        assert!((0.0..1.0).contains(&midway));
+        assert_eq!(motion.displayed_fraction(now + motion::PANEL_DURATION), 1.0);
+
+        // A close restarts fully reserved, matching the panel slide-out.
+        let closing_at = now + motion::PANEL_DURATION;
+        motion.slide_to(false, 4, closing_at);
+        assert_eq!(motion.from, 1.0);
+        assert_eq!(motion.target, 0.0);
+        assert_eq!(motion.displayed_fraction(closing_at), 1.0);
+        assert_eq!(
+            motion.displayed_fraction(closing_at + motion::PANEL_DURATION),
+            0.0
+        );
+
+        motion.snap(true);
+        assert_eq!(motion.from, 1.0);
+        assert_eq!(motion.displayed_fraction(now), 1.0);
+    }
+
+    #[test]
+    fn sidebar_transition_slides_the_center_squeeze_with_the_panel() {
+        let now = Instant::now();
+        let mut transition = RightSidebarTransition::new(RightSidebar::Closed);
+        assert_eq!(transition.center_squeeze.target, 0.0);
+        assert!(!transition.slide_active());
+
+        assert_eq!(
+            transition.request(RightSidebar::Queue, false, now),
+            RightSidebarTransitionAction::ScheduleEnter {
+                epoch: 1,
+                started_at: now,
+            }
+        );
+        // The slide animates the ceded fraction per frame, from the wide
+        // pre-transition column toward the reserved one.
+        assert!(transition.slide_active());
+        assert_eq!(transition.center_squeeze.from, 0.0);
+        assert_eq!(transition.center_squeeze.target, 1.0);
+        assert_eq!(transition.center_squeeze.epoch, 1);
+        let midway = transition
+            .center_squeeze
+            .displayed_fraction(now + motion::PANEL_DURATION / 2);
+        assert!((0.0..1.0).contains(&midway));
+
+        // The settle is what ends the slide, not a frame earlier.
+        assert!(!transition.finish_enter(1, now + motion::PANEL_DURATION));
+        assert!(transition.slide_active());
+        assert!(transition.finish_enter(1, now + motion::PANEL_SETTLING_DURATION));
+        assert!(!transition.slide_active());
+        assert_eq!(transition.center_squeeze.from, 1.0);
+        assert_eq!(transition.center_squeeze.target, 1.0);
+    }
+
+    #[test]
+    fn sidebar_transition_close_slides_the_squeeze_back_to_zero() {
+        let started_at = Instant::now();
+        let mut transition = RightSidebarTransition::new(RightSidebar::Queue);
+        assert_eq!(transition.center_squeeze.target, 1.0);
+
+        assert_eq!(
+            transition.request(RightSidebar::Closed, false, started_at),
+            RightSidebarTransitionAction::ScheduleClose {
+                epoch: 1,
+                started_at,
+            }
+        );
+        assert!(transition.slide_active());
+        assert_eq!(transition.center_squeeze.from, 1.0);
+        assert_eq!(transition.center_squeeze.target, 0.0);
+        let midway = transition
+            .center_squeeze
+            .displayed_fraction(started_at + motion::PANEL_DURATION / 2);
+        assert!((0.0..1.0).contains(&midway));
+
+        assert!(!transition.finish_close(1, started_at));
+        assert!(transition.slide_active());
+        assert!(transition.finish_close(1, started_at + motion::PANEL_DURATION));
+        assert!(!transition.slide_active());
+        assert_eq!(
+            transition.center_squeeze.displayed_fraction(started_at),
+            0.0
+        );
+        assert_eq!(transition.displayed_sidebar, RightSidebar::Closed);
+    }
+
+    #[test]
+    fn sidebar_transition_snap_paths_never_slide_the_center_squeeze() {
+        let now = Instant::now();
+
+        // Content switch between open panels: no slide, no hold.
+        let mut switching = RightSidebarTransition::new(RightSidebar::Queue);
+        assert_eq!(
+            switching.request(RightSidebar::Lyrics, false, now),
+            RightSidebarTransitionAction::CancelClose
+        );
+        assert!(switching.content_switch);
+        assert!(!switching.slide_active());
+        assert_eq!(switching.center_squeeze.from, 1.0);
+        assert_eq!(switching.center_squeeze.target, 1.0);
+        assert_eq!(switching.center_squeeze.displayed_fraction(now), 1.0);
+
+        // Reopening mid-close snaps the panel fully open instead of sliding.
+        let mut closing = RightSidebarTransition::new(RightSidebar::Queue);
+        assert_eq!(
+            closing.request(RightSidebar::Closed, false, now),
+            RightSidebarTransitionAction::ScheduleClose {
+                epoch: 1,
+                started_at: now,
+            }
+        );
+        assert_eq!(
+            closing.request(RightSidebar::Queue, false, now),
+            RightSidebarTransitionAction::CancelClose
+        );
+        assert!(!closing.slide_active());
+        assert_eq!(closing.center_squeeze.displayed_fraction(now), 1.0);
+
+        // Reduced motion snaps open and closed without a hold.
+        let mut reduced = RightSidebarTransition::new(RightSidebar::Closed);
+        assert_eq!(
+            reduced.request(RightSidebar::Queue, true, now),
+            RightSidebarTransitionAction::CancelClose
+        );
+        assert!(!reduced.slide_active());
+        assert_eq!(reduced.center_squeeze.displayed_fraction(now), 1.0);
+        assert_eq!(
+            reduced.request(RightSidebar::Closed, true, now),
+            RightSidebarTransitionAction::CancelClose
+        );
+        assert!(!reduced.slide_active());
+        assert_eq!(reduced.center_squeeze.displayed_fraction(now), 0.0);
+
+        // A reduced close request during a close snaps it shut immediately.
+        let mut reducing = RightSidebarTransition::new(RightSidebar::Queue);
+        assert_eq!(
+            reducing.request(RightSidebar::Closed, false, now),
+            RightSidebarTransitionAction::ScheduleClose {
+                epoch: 1,
+                started_at: now,
+            }
+        );
+        assert_eq!(
+            reducing.request(RightSidebar::Closed, true, now),
+            RightSidebarTransitionAction::CancelClose
+        );
+        assert!(!reducing.slide_active());
+        assert_eq!(reducing.center_squeeze.displayed_fraction(now), 0.0);
+
+        // Settings remounts render the panel in place without a slide.
+        let mut remount = RightSidebarTransition::new(RightSidebar::Closed);
+        assert_eq!(
+            remount.request(RightSidebar::Lyrics, false, now),
+            RightSidebarTransitionAction::ScheduleEnter {
+                epoch: 1,
+                started_at: now,
+            }
+        );
+        remount.skip_enter_if_already_open();
+        assert!(remount.skip_enter);
+        assert!(!remount.slide_active());
+        assert_eq!(remount.center_squeeze.displayed_fraction(now), 1.0);
+    }
+
+    #[test]
+    fn content_hold_width_holds_the_widest_column_of_the_transition() {
+        let now = Instant::now();
+        let mut sidebar_width_motion = SidebarWidthMotion::default();
+        sidebar_width_motion.retarget(240.0, now, false);
+
+        // Idle: no hold, the content simply fills the column.
+        assert_eq!(
+            content_hold_width(false, 1600.0, sidebar_width_motion, false, 0.0, now),
+            0.0
+        );
+
+        // Right sidebar opening: the content keeps the wide pre-transition
+        // column for the whole slide.
+        assert_eq!(
+            content_hold_width(false, 1600.0, sidebar_width_motion, true, 0.0, now),
+            1360.0
+        );
+
+        // Left sidebar collapsing with the panel settled open: the hold
+        // covers the transition's wide endpoint.
+        sidebar_width_motion.retarget(68.0, now, false);
+        assert_eq!(
+            content_hold_width(false, 1600.0, sidebar_width_motion, false, 480.0, now),
+            1052.0
+        );
+
+        // Both slides at once: the widest point of the whole chain.
+        assert_eq!(
+            content_hold_width(false, 1600.0, sidebar_width_motion, true, 480.0, now),
+            1532.0
+        );
+
+        // The narrow mobile layout never holds.
+        assert_eq!(
+            content_hold_width(true, 1600.0, sidebar_width_motion, true, 480.0, now),
+            0.0
+        );
+
+        // Once the left slide settles the hold releases.
+        let settled = now + motion::PANEL_SETTLING_DURATION;
+        assert_eq!(
+            content_hold_width(false, 1600.0, sidebar_width_motion, false, 480.0, settled),
+            0.0
+        );
+    }
+
+    #[test]
+    fn sidebar_width_motion_reports_when_it_starts_a_slide() {
+        let started_at = Instant::now();
+        let mut motion = SidebarWidthMotion::default();
+
+        // First render and repeated targets never start a slide.
+        assert!(!motion.retarget(240.0, started_at, false));
+        assert!(!motion.retarget(240.0, started_at, false));
+        assert!(motion.retarget(68.0, started_at, false));
+        assert!(motion.animating(started_at));
+        assert!(motion.animating(started_at + motion::PANEL_DURATION / 2));
+        assert!(!motion.animating(started_at + motion::PANEL_DURATION));
+
+        // Reduced motion snaps instead of sliding.
+        assert!(!motion.retarget(240.0, started_at, true));
+        assert!(!motion.animating(started_at));
+    }
+
     // The boundary markers are concatenated so the pin tests below cannot
     // match their own source instead of the render implementation.
     fn desktop_sidebar_render_section() -> &'static str {
@@ -1990,20 +2372,67 @@ mod tests {
     }
 
     #[test]
-    fn desktop_right_sidebar_center_reflows_only_through_the_settle_reserve() {
+    fn desktop_right_sidebar_squeezes_the_center_with_an_animated_strip() {
         let shell_render = shell_render_section();
 
-        // The reserve spacer is the single reflow point, it is keyed on the
-        // transition's settle flag, and the panel itself is out of flow.
-        assert!(shell_render.contains("right_sidebar_center_reserve > 0."));
-        assert!(shell_render.contains("div().flex_none().w(px(right_sidebar_center_reserve))"));
-        assert!(shell_render.contains("self.right_sidebar_transition.center_reserved"));
+        // The center strip animates its width per frame in lockstep with the
+        // panel overlay (same panel easing and transition epoch), so the
+        // center column follows the panel's edge instead of snapping once at
+        // settle. It only mounts while the strip is visible or wanted.
+        assert!(shell_render.contains("let center_squeeze_mounted = desktop_sidebar_mounted"));
+        assert!(
+            shell_render.contains("(center_squeeze_displayed > 0. || center_squeeze.target > 0.)")
+        );
+        let squeeze_animation = shell_render
+            .split(r#"("shell-center-squeeze", center_squeeze.epoch)"#)
+            .nth(1)
+            .expect("center squeeze animation");
+        assert!(squeeze_animation.contains("crate::motion::panel()"));
+        assert!(squeeze_animation.contains(".w(px("));
+        assert!(squeeze_animation.contains("crate::motion::lerp("));
 
         // The overlay is only mounted while a panel is displayed, so nothing
         // invisible sits over the center content once the sidebar is closed.
-        assert!(shell_render.contains("let desktop_sidebar_mounted = !self.settings_mode"));
+        assert!(shell_render
+            .contains("let desktop_sidebar_mounted =\n            !self.settings_mode && right_sidebar_is_rendered"));
         assert!(shell_render.contains("&& right_sidebar_is_rendered"));
         assert!(shell_render.contains(".when(desktop_sidebar_mounted, |this| {"));
+    }
+
+    #[test]
+    fn desktop_center_content_holds_one_width_through_sidebar_transitions() {
+        let shell_render = shell_render_section();
+
+        // The routed content region holds a single fixed width, with the
+        // overflow hidden, whenever a sidebar slide animates the column. The
+        // styles only apply inside the conditional, so the hold releases
+        // (width and clipping removed) exactly when no slide is active.
+        assert!(shell_render.contains("let content_hold_width = content_hold_width("));
+        let hold_branch = shell_render
+            .split(".when(content_hold_width > 0., |this|")
+            .nth(1)
+            .and_then(|rest| rest.split("})").next())
+            .expect("content hold branch");
+        assert!(hold_branch.contains(".w(px(content_hold_width))"));
+        assert!(hold_branch.contains(".overflow_hidden()"));
+
+        // The column itself clips, so the held wrapper never widens the
+        // column.
+        assert!(shell_render.contains(
+            ".h_full()\n                            .flex()\n                            .flex_col()\n                            .overflow_hidden()"
+        ));
+
+        // Both sidebar slides feed the same hold: the left retarget reports
+        // when it starts a slide and schedules the settle that releases the
+        // hold after the width animation's final frame.
+        assert!(shell_render.contains("self.schedule_sidebar_width_settle(cx);"));
+        let shell_source = include_str!("mod.rs");
+        let settle_scheduler = shell_source
+            .split("fn schedule_sidebar_width_settle(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }").next())
+            .expect("sidebar width settle scheduler");
+        assert!(settle_scheduler.contains("crate::motion::PANEL_SETTLING_DURATION"));
     }
 }
 
@@ -2016,9 +2445,12 @@ impl Render for RalgrumApp {
         let metrics =
             crate::music_ui::shell_metrics_for_viewport(viewport_width, f32::from(viewport.height));
         let now = Instant::now();
-        if !metrics.narrow_content {
-            self.sidebar_width_motion
-                .retarget(metrics.sidebar_width, now, cx.reduce_motion());
+        if !metrics.narrow_content
+            && self
+                .sidebar_width_motion
+                .retarget(metrics.sidebar_width, now, cx.reduce_motion())
+        {
+            self.schedule_sidebar_width_settle(cx);
         }
         let sidebar_width_motion = self.sidebar_width_motion;
         let sidebar_bottom_visual = self.sidebar_bottom_motion.prepare(
@@ -2074,6 +2506,47 @@ impl Render for RalgrumApp {
                 );
             });
         }
+        let displayed_right_sidebar = self.right_sidebar_transition.displayed_sidebar;
+        let right_sidebar_closing = self.right_sidebar_transition.closing;
+        let right_sidebar_epoch = self.right_sidebar_transition.epoch;
+        let right_sidebar_content_switch = self.right_sidebar_transition.content_switch;
+        let right_sidebar_skip_animation = right_sidebar_content_switch
+            || (self.right_sidebar_transition.skip_enter && !right_sidebar_closing);
+        let right_sidebar_key = match displayed_right_sidebar {
+            RightSidebar::Lyrics => "lyrics",
+            RightSidebar::Queue => "queue",
+            RightSidebar::Closed => "closed",
+        };
+        let right_sidebar_width = metrics.right_sidebar_width;
+        let right_sidebar_is_rendered = displayed_right_sidebar != RightSidebar::Closed;
+        let desktop_sidebar_mounted =
+            !self.settings_mode && right_sidebar_is_rendered && !metrics.narrow_content;
+        let center_squeeze = self.right_sidebar_transition.center_squeeze;
+        let center_squeeze_displayed = center_squeeze.displayed_fraction(now);
+        let center_squeeze_mounted = desktop_sidebar_mounted
+            && (center_squeeze_displayed > 0. || center_squeeze.target > 0.);
+        // While any sidebar slide animates the center column's width, the
+        // routed content keeps the widest column width the transition passes
+        // through: it lays out once and the animating column merely clips it,
+        // so no list inside ever re-measures mid-slide.
+        let content_hold_width = content_hold_width(
+            metrics.narrow_content,
+            viewport_width,
+            sidebar_width_motion,
+            self.right_sidebar_transition.slide_active(),
+            center_squeeze_displayed * right_sidebar_width,
+            now,
+        );
+        let desktop_sidebar_content = match (right_sidebar_closing, displayed_right_sidebar) {
+            (true, _) | (_, RightSidebar::Closed) => div().into_any_element(),
+            (false, RightSidebar::Lyrics) => self.lyrics.clone().into_any_element(),
+            (false, RightSidebar::Queue) => self.queue.clone().into_any_element(),
+        };
+        let mobile_sidebar_content = match (right_sidebar_closing, displayed_right_sidebar) {
+            (true, _) | (_, RightSidebar::Closed) => div().into_any_element(),
+            (false, RightSidebar::Lyrics) => self.lyrics.clone().into_any_element(),
+            (false, RightSidebar::Queue) => self.queue.clone().into_any_element(),
+        };
         let main_page_key = if self.settings_mode {
             "settings"
         } else {
@@ -2111,6 +2584,11 @@ impl Render for RalgrumApp {
             .min_h_0()
             .min_w_0()
             .relative()
+            .when(content_hold_width > 0., |this| {
+                // Hold the routed content at one fixed width while the
+                // column animates; the hold releases exactly at settle.
+                this.w(px(content_hold_width)).overflow_hidden()
+            })
             .child(main_page)
             .with_animation(
                 format!("shell-main-page-{main_page_key}"),
@@ -2120,39 +2598,6 @@ impl Render for RalgrumApp {
                         .left(px(crate::motion::lerp(8.0, 0.0, delta)))
                 },
             );
-        let displayed_right_sidebar = self.right_sidebar_transition.displayed_sidebar;
-        let right_sidebar_closing = self.right_sidebar_transition.closing;
-        let right_sidebar_epoch = self.right_sidebar_transition.epoch;
-        let right_sidebar_content_switch = self.right_sidebar_transition.content_switch;
-        let right_sidebar_skip_animation = right_sidebar_content_switch
-            || (self.right_sidebar_transition.skip_enter && !right_sidebar_closing);
-        let right_sidebar_key = match displayed_right_sidebar {
-            RightSidebar::Lyrics => "lyrics",
-            RightSidebar::Queue => "queue",
-            RightSidebar::Closed => "closed",
-        };
-        let right_sidebar_width = metrics.right_sidebar_width;
-        let desktop_sidebar_content = match (right_sidebar_closing, displayed_right_sidebar) {
-            (true, _) | (_, RightSidebar::Closed) => div().into_any_element(),
-            (false, RightSidebar::Lyrics) => self.lyrics.clone().into_any_element(),
-            (false, RightSidebar::Queue) => self.queue.clone().into_any_element(),
-        };
-        let mobile_sidebar_content = match (right_sidebar_closing, displayed_right_sidebar) {
-            (true, _) | (_, RightSidebar::Closed) => div().into_any_element(),
-            (false, RightSidebar::Lyrics) => self.lyrics.clone().into_any_element(),
-            (false, RightSidebar::Queue) => self.queue.clone().into_any_element(),
-        };
-        let right_sidebar_is_rendered = displayed_right_sidebar != RightSidebar::Closed;
-        let desktop_sidebar_mounted =
-            !self.settings_mode && right_sidebar_is_rendered && !metrics.narrow_content;
-        // The desktop sidebar is an absolute overlay, so the center column's
-        // width only changes when this reserve flips, once per transition.
-        let right_sidebar_center_reserve =
-            if desktop_sidebar_mounted && self.right_sidebar_transition.center_reserved {
-                right_sidebar_width
-            } else {
-                0.0
-            };
         div()
             .image_cache(self.artwork_cache.clone())
             .size_full()
@@ -2195,26 +2640,55 @@ impl Render for RalgrumApp {
                         )
                     })
                     .child(
+                        // The center column clips: while a sidebar slide
+                        // runs, the held content wrapper can be wider than
+                        // the animating column.
                         div()
                             .flex_1()
                             .min_w_0()
                             .h_full()
                             .flex()
                             .flex_col()
+                            .overflow_hidden()
                             .when(
                                 !self.settings_mode
                                     && self.nav != Nav::Downloads
                                     && self.nav != Nav::Cache,
                                 |this| {
-                                this.child(render_top_toolbar(self, window, cx))
+                                    this.child(render_top_toolbar(self, window, cx))
                                 },
                             )
                             .child(main_page),
                     )
-                    .when(right_sidebar_center_reserve > 0., |this| {
-                        // The strip the settled panel occupies. Flipping this
-                        // spacer is the transition's single center reflow.
-                        this.child(div().flex_none().w(px(right_sidebar_center_reserve)))
+                    .when(center_squeeze_mounted, |this| {
+                        // The strip the sliding panel occupies. Its width
+                        // animates in lockstep with the panel overlay's slide
+                        // (same easing, duration, and epoch), so the center
+                        // column squeezes smoothly with the panel's edge and
+                        // the content reflow lands once, at settle.
+                        let strip = div().flex_none();
+                        let strip: AnyElement = if center_squeeze.from == center_squeeze.target {
+                            strip
+                                .w(px(center_squeeze_displayed * right_sidebar_width))
+                                .into_any_element()
+                        } else {
+                            strip
+                                .with_animation(
+                                    ("shell-center-squeeze", center_squeeze.epoch),
+                                    crate::motion::panel(),
+                                    move |this, delta| {
+                                        this.w(px(
+                                            crate::motion::lerp(
+                                                center_squeeze.from,
+                                                center_squeeze.target,
+                                                delta,
+                                            ) * right_sidebar_width,
+                                        ))
+                                    },
+                                )
+                                .into_any_element()
+                        };
+                        this.child(strip)
                     })
                     .when(desktop_sidebar_mounted, |this| {
                         let inner_sidebar = div()

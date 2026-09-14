@@ -682,9 +682,13 @@ impl StreamResolver {
                 MAX_AUDIO_SIZE,
                 BROWSER_USER_AGENT,
             ))),
-            SourceData::Backend(source) => source.timeline_seek_session(cancellation.clone()),
+            SourceData::Backend(source) => source
+                .timeline_seek_session(cancellation.clone())
+                .or_else(|| {
+                    self.backend_range_seek_session(source, total, duration, &cancellation)
+                }),
             SourceData::Remote(url) => {
-                self.mp3_range_seek_session(url, &source, total, duration, &cancellation)
+                self.progressive_range_seek_session(url, &source, total, duration, &cancellation)
             }
             SourceData::Inline(_) => None,
         };
@@ -712,11 +716,13 @@ impl StreamResolver {
         })
     }
 
-    /// Builds the byte range seek session for a remote progressive MP3
-    /// source. Constant bitrate MP3 maps a seek target to a byte offset, so
-    /// the CDN can serve the rest of the file from that offset and the seek
-    /// lands while the download is still running.
-    fn mp3_range_seek_session(
+    /// Builds the byte range seek session for a remote progressive source.
+    /// Constant bitrate MP3 maps a seek target to a byte offset directly,
+    /// while FLAC additionally parses frame headers from the fetched suffix
+    /// to discard up to the exact target. The CDN serves the rest of the
+    /// file from that offset, so the seek lands while the download is still
+    /// running.
+    pub(super) fn progressive_range_seek_session(
         &self,
         url: &str,
         source: &ResolvedSource,
@@ -724,11 +730,9 @@ impl StreamResolver {
         duration: Option<Duration>,
         cancellation: &CancellationToken,
     ) -> Option<Arc<dyn TimelineSeekSession>> {
+        let format = range_seek::RangeSeekFormat::from_audio(source.format)?;
         let total = total.filter(|total| *total > 0)?;
         let duration = duration.filter(|duration| !duration.is_zero())?;
-        if source.format != AudioFormat::Mp3 {
-            return None;
-        }
         let resolver = self.clone();
         let url = url.to_string();
         let deezer_track_id = source.deezer_track_id.clone();
@@ -753,6 +757,47 @@ impl StreamResolver {
             })
         });
         Some(Arc::new(range_seek::RangeTimelineSession::new(
+            format,
+            fetch,
+            total,
+            duration,
+            tokio::runtime::Handle::current(),
+            cancellation.clone(),
+        )))
+    }
+
+    /// Builds a byte range seek session for a progressive backend source that
+    /// does not provide its own timeline session, such as Deezer MP3 and FLAC
+    /// resolved through the murglar backend. Byte ranges go through the
+    /// backend source, which widens requests to Deezer stripe boundaries and
+    /// decrypts them, so a suffix starting mid-stripe still decrypts
+    /// correctly.
+    pub(super) fn backend_range_seek_session(
+        &self,
+        source: &BackendSource,
+        total: Option<u64>,
+        duration: Option<Duration>,
+        cancellation: &CancellationToken,
+    ) -> Option<Arc<dyn TimelineSeekSession>> {
+        let metadata = source.metadata();
+        if metadata.timeline {
+            return None;
+        }
+        let format = range_seek::RangeSeekFormat::from_audio(metadata.format)?;
+        let total = total.filter(|total| *total > 0)?;
+        let duration = duration.filter(|duration| !duration.is_zero())?;
+        let backend = source.clone();
+        let fetch: range_seek::RangeFetch = Arc::new(move |start, end, fetch_cancellation| {
+            let backend = backend.clone();
+            Box::pin(async move {
+                backend
+                    .read_range(start, end, &fetch_cancellation)
+                    .await
+                    .map_err(|error| error.message)
+            })
+        });
+        Some(Arc::new(range_seek::RangeTimelineSession::new(
+            format,
             fetch,
             total,
             duration,
