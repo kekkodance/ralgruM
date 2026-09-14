@@ -6,7 +6,7 @@ use gpui::{AnyElement, Entity, FontWeight, KeyDownEvent, px, rgb};
 use crate::{
     app_button::primary_button,
     assets::{LocalIcon, local_icon},
-    browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
+    browser_scroll::{BrowserScrollTarget, FixedListScrollHandle, browser_scroll_surface},
     collection_detail::{
         DETAIL_CARD_CAROUSEL_INSET_PX, DETAIL_CARD_GRID_ROW_HEIGHT_EXTRA_PX,
         collection_card_carousel_content, collection_card_frame,
@@ -77,8 +77,10 @@ struct DiscoverSectionGeometry {
     row_height: f32,
 }
 
-/// Every section heading reserves the subtitle line, empty when absent, so
-/// subtitled and plain sections measure identical heading heights.
+/// The heading slot every row is pinned against: title line, text gap, and
+/// subtitle line. Subtitled sections and loading rows render it in full;
+/// sections without a subtitle render the title line alone and the freed
+/// slot becomes bottom slack inside the pinned row.
 fn section_heading_height() -> f32 {
     DISCOVER_SECTION_TITLE_HEIGHT_PX
         + DISCOVER_SECTION_TEXT_GAP_PX
@@ -221,16 +223,19 @@ fn render_feed(
     content_identity: String,
     cache_identity: String,
 ) -> AnyElement {
-    // Rows are pinned to the unified section geometry so the uniform height
-    // hint matches what every row actually measures. Headings and card
-    // captions reserve their subtitle lines, so section and loading rows fill
-    // the pinned height exactly and the scrollbar never corrects mid-scroll.
+    // Rows are pinned to the unified section geometry so every row measures
+    // the same height and the scrollbar never corrects mid-scroll. Loading
+    // rows and subtitled sections fill the pinned height exactly; sections
+    // without a subtitle render the title line alone and leave the freed
+    // heading slot as bottom slack inside the pinned row.
     let row_height = section_geometry(narrow).row_height;
+    let item_count = entries.len();
     let (state, browser_scroll) = view.discover_feed_state(
         &cache_identity,
         &content_identity,
-        entries.len(),
+        item_count,
         row_height,
+        available_width,
     );
     let entries = Rc::new(entries);
     let host = host.clone();
@@ -245,6 +250,10 @@ fn render_feed(
             row_height,
         )
     });
+    // GPUI discards cached row heights whenever the layout width changes, so
+    // the scrollbar and wheel math read the pinned uniform geometry instead
+    // of the raw list summary, exactly like the card grids.
+    let fixed_scroll = FixedListScrollHandle::new(state.clone(), item_count, px(row_height));
     let content = gpui::div()
         .size_full()
         .flex_1()
@@ -252,13 +261,14 @@ fn render_feed(
         .relative()
         .child(list.w_full().h_full().min_h_0())
         .child(crate::library::virtualization::library_vertical_scrollbar(
-            &state, narrow,
+            &fixed_scroll,
+            narrow,
         ))
         .into_any_element();
     browser_scroll_surface(
         format!("discover-feed-scroll-{cache_identity}"),
         content,
-        BrowserScrollTarget::List(state),
+        BrowserScrollTarget::FixedList(fixed_scroll),
         browser_scroll,
     )
 }
@@ -524,11 +534,13 @@ fn render_section(
 }
 
 fn section_heading(section: &DiscoverSection) -> AnyElement {
-    // The subtitle line is always reserved, empty when absent, so every
-    // section heading measures the same height inside its pinned row. The
-    // heading row is top aligned and the icon box matches the title line
-    // box, so the icon rides the title line in single and double line
-    // headings alike.
+    // The subtitle line is rendered only when the section has one, so a
+    // single line heading sits the normal heading gap above its carousel.
+    // Rows stay pinned to the unified geometry, so the freed subtitle slot
+    // becomes bottom slack inside the pinned row instead of extra space
+    // between the title and the carousel. The heading row is top aligned
+    // and the icon box matches the title line box, so the icon rides the
+    // title line in single and double line headings alike.
     let has_subtitle = !section.subtitle.trim().is_empty();
     gpui::div()
         .flex()
@@ -560,16 +572,18 @@ fn section_heading(section: &DiscoverSection) -> AnyElement {
                         .text_color(rgb(FOREGROUND))
                         .child(section.title.clone()),
                 )
-                .child(
-                    gpui::div()
-                        .min_w_0()
-                        .truncate()
-                        .h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))
-                        .text_size(px(12.))
-                        .line_height(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))
-                        .text_color(rgb(MUTED))
-                        .when(has_subtitle, |this| this.child(section.subtitle.clone())),
-                ),
+                .when(has_subtitle, |this| {
+                    this.child(
+                        gpui::div()
+                            .min_w_0()
+                            .truncate()
+                            .h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))
+                            .text_size(px(12.))
+                            .line_height(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))
+                            .text_color(rgb(MUTED))
+                            .child(section.subtitle.clone()),
+                    )
+                }),
         )
         .into_any_element()
 }
@@ -746,9 +760,11 @@ fn render_channel_loading(
 }
 
 fn skeleton_heading(provider: Provider) -> AnyElement {
-    // Both text slots are reserved for every provider so skeleton headings
-    // measure exactly the section heading height. The icon box matches the
-    // title line box and the row is top aligned, mirroring section_heading.
+    // Loading rows are pinned and cannot know whether the section they are
+    // standing in for will have a subtitle, so both text slots stay
+    // reserved and skeleton headings measure exactly the pinned heading
+    // slot. The icon box matches the title line box and the row is top
+    // aligned, mirroring section_heading.
     gpui::div()
         .flex()
         .items_start()
@@ -976,7 +992,7 @@ mod tests {
             .map_or(include_str!("view.rs"), |(production, _)| production);
         assert!(implementation.contains("gpui::list(state.clone()"));
         assert!(implementation.contains(".when(pins_height, |this| this.h(px(row_height)))"));
-        assert!(implementation.contains("BrowserScrollTarget::List(state)"));
+        assert!(implementation.contains("BrowserScrollTarget::FixedList(fixed_scroll)"));
         assert!(implementation.contains("render_discover_card"));
     }
 
@@ -1091,7 +1107,11 @@ mod tests {
     }
 
     #[test]
-    fn section_headings_reserve_the_subtitle_line() {
+    fn section_headings_render_the_subtitle_line_only_with_a_subtitle() {
+        // With a subtitle the heading keeps the full reserved slot; without
+        // one the slot is absent entirely, so the title line sits the
+        // normal heading gap above the carousel and the freed space lands
+        // at the bottom of the pinned row.
         let production = include_str!("view.rs")
             .split_once("#[cfg(test)]")
             .map_or(include_str!("view.rs"), |(production, _)| production);
@@ -1100,12 +1120,17 @@ mod tests {
             .nth(1)
             .and_then(|source| source.split("fn provider_icon").next())
             .expect("section heading source");
+        // The title line box, the top aligned heading row, and the icon box
+        // that centers on the title line are the same in both shapes.
         assert!(heading.contains(".line_height(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))"));
+        assert!(heading.contains(".items_start()"));
+        assert!(heading.contains(".h(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))"));
+        // The subtitle slot is a conditional child, not an always-reserved
+        // empty line: present with a subtitle, gone without one.
+        assert!(heading.contains(".when(has_subtitle, |this|"));
         assert!(heading.contains(".h(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))"));
         assert!(heading.contains(".line_height(px(DISCOVER_SECTION_SUBTITLE_HEIGHT_PX))"));
         assert!(!heading.contains(".when(!section.subtitle.trim().is_empty()"));
-        assert!(heading.contains(".items_start()"));
-        assert!(heading.contains(".h(px(DISCOVER_SECTION_TITLE_HEIGHT_PX))"));
         assert!(!heading.contains(".h(px(18.))"));
     }
 
@@ -1230,10 +1255,12 @@ mod tests {
 
     #[test]
     fn section_rows_measure_the_pinned_row_height_exactly() {
-        // The pinned row height is the sum of the rendered content parts:
-        // the heading (title line, text gap, reserved subtitle slot), the
-        // heading gap, the carousel inset, the card row, the carousel
-        // reserve, and the section gap padding.
+        // The pinned row height is the sum of the full heading slot (title
+        // line, text gap, subtitle line), the heading gap, the carousel
+        // inset, the card row, the carousel reserve, and the section gap
+        // padding. Sections without a subtitle render a shorter heading,
+        // but the row pin in render_entry keeps every row measuring this
+        // height so the scrollbar never jitters.
         for narrow in [false, true] {
             let geometry = section_geometry(narrow);
             let content_height = section_heading_height()

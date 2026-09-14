@@ -236,7 +236,8 @@ struct DiscoverFeedCache {
     browser_scroll: BrowserScrollState,
     content_identity: String,
     item_count: usize,
-    row_height: f32,
+    width: f32,
+    hint_restore_pending: bool,
 }
 
 struct FavoriteAction {
@@ -305,6 +306,51 @@ fn preserve_card_grid_anchor(
         offset_in_item,
     });
     cache.browser_scroll.reset();
+}
+
+/// Reconcile a cached Discover feed with the current render inputs.
+///
+/// GPUI's `List::prepaint` discards every cached size hint whenever the
+/// list's layout width changes, and that wipe runs after render calls in
+/// the same frame, so unvisited rows would count as zero height and
+/// collapse the scrollbar until each one is scrolled into view. The hints
+/// cannot be restored on the width-change frame itself because the wipe
+/// would erase them again, so the restore is deferred to the first render
+/// at a stable width. Row heights only change together with the width (the
+/// narrow breakpoint), so the deferred restore also re-pins hints after a
+/// responsive relayout.
+fn update_discover_feed_cache(
+    cache: &mut DiscoverFeedCache,
+    content_identity: &str,
+    item_count: usize,
+    row_height: f32,
+    width: f32,
+) {
+    let content_changed =
+        cache.content_identity != content_identity || cache.item_count != item_count;
+    let width_changed = (cache.width - width).abs() > f32::EPSILON;
+    if content_changed {
+        cache
+            .state
+            .reset_with_uniform_height(item_count, px(row_height));
+        cache.browser_scroll.reset();
+        cache.hint_restore_pending = true;
+    } else if width_changed {
+        // A re-apply now would be wiped by the width-change prepaint later
+        // in this same frame, so only remember that a restore is due.
+        cache.hint_restore_pending = true;
+    } else if cache.hint_restore_pending {
+        // Stable width, so the wipe has already run. The builder path keeps
+        // the scroll position and every measured height while giving
+        // unvisited rows their full uniform height again.
+        cache.state.clone().with_uniform_item_height(px(row_height));
+        cache.hint_restore_pending = false;
+    }
+    if content_changed || width_changed {
+        cache.content_identity = content_identity.to_owned();
+        cache.item_count = item_count;
+        cache.width = width;
+    }
 }
 
 impl SearchView {
@@ -618,28 +664,12 @@ impl SearchView {
         content_identity: &str,
         item_count: usize,
         row_height: f32,
+        width: f32,
     ) -> (ListState, BrowserScrollState) {
         let row_height = row_height.max(1.);
         let mut states = self.discover_feed_states.borrow_mut();
         if let Some(cache) = states.get_mut(identity) {
-            let content_changed =
-                cache.content_identity != content_identity || cache.item_count != item_count;
-            let layout_changed = (cache.row_height - row_height).abs() > f32::EPSILON;
-            if content_changed {
-                cache
-                    .state
-                    .reset_with_uniform_height(item_count, px(row_height));
-                cache.browser_scroll.reset();
-            } else if layout_changed {
-                // Discover rows are measured by GPUI. A responsive change only
-                // invalidates measured heights and preserves the user's scroll.
-                cache.state.remeasure();
-            }
-            if content_changed || layout_changed {
-                cache.content_identity = content_identity.to_owned();
-                cache.item_count = item_count;
-                cache.row_height = row_height;
-            }
+            update_discover_feed_cache(cache, content_identity, item_count, row_height, width);
             return (cache.state.clone(), cache.browser_scroll.clone());
         }
         if states.len() >= MAX_DISCOVER_FEED_STATES
@@ -661,7 +691,10 @@ impl SearchView {
                 browser_scroll: browser_scroll.clone(),
                 content_identity: content_identity.to_owned(),
                 item_count,
-                row_height,
+                width,
+                // The first prepaint always discards the creation hints, so
+                // the next stable-width render must restore them.
+                hint_restore_pending: true,
             },
         );
         (state, browser_scroll)
@@ -3557,20 +3590,23 @@ mod scroll_tests {
     }
 
     #[test]
-    fn discover_feed_layout_change_remeasures_without_resetting_scroll() {
+    fn discover_feed_width_change_defers_hint_restore_without_resetting_scroll() {
         let implementation = include_str!("view.rs");
         let method = implementation
-            .split_once("pub(super) fn discover_feed_state")
-            .and_then(|(_, rest)| rest.split_once("fn clear_discover_feed_states"))
+            .split_once("fn update_discover_feed_cache")
+            .and_then(|(_, rest)| rest.split_once("impl SearchView"))
             .map(|(method, _)| method)
-            .expect("discover feed state implementation");
-        assert!(method.contains("cache.state.remeasure()"));
+            .expect("discover feed cache update implementation");
+        assert!(method.contains("reset_with_uniform_height"));
+        assert!(method.contains("hint_restore_pending = true"));
+        assert!(method.contains("with_uniform_item_height"));
+        assert!(!method.contains("cache.state.remeasure()"));
         assert!(!method.contains("preserve_discover_feed_anchor"));
-        let layout_branch = method
-            .split_once("else if layout_changed")
+        let width_branch = method
+            .split_once("else if width_changed")
             .map(|(_, branch)| branch)
-            .expect("Discover layout-change branch");
-        assert!(!layout_branch.contains("cache.browser_scroll.reset()"));
+            .expect("Discover width-change branch");
+        assert!(!width_branch.contains("cache.browser_scroll.reset()"));
     }
 
     #[test]
@@ -3586,6 +3622,95 @@ mod scroll_tests {
             state.scroll_px_offset_for_scrollbar(),
             point(px(0.), px(-307.))
         );
+    }
+
+    #[gpui::test]
+    fn discover_feed_width_change_restores_hints_and_preserves_scroll(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::prelude::*;
+
+        struct FeedRows(ListState);
+        impl gpui::Render for FeedRows {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                // Discover rows are pinned to the height the uniform hints
+                // promise, so measured heights match the hints exactly.
+                gpui::div().size_full().child(
+                    gpui::list(self.0.clone(), |_, _, _| {
+                        gpui::div().h(px(50.)).w_full().into_any_element()
+                    })
+                    .w_full()
+                    .h_full(),
+                )
+            }
+        }
+
+        let state =
+            ListState::new(10, ListAlignment::Top, px(0.)).with_uniform_item_height(px(50.));
+        let mut cache = DiscoverFeedCache {
+            state: state.clone(),
+            browser_scroll: BrowserScrollState::new(),
+            content_identity: "feed-a".to_owned(),
+            item_count: 10,
+            width: 100.,
+            hint_restore_pending: true,
+        };
+        let cx = cx.add_empty_window();
+        let view = cx.update(|_, cx| cx.new(|_| FeedRows(state.clone())));
+        let draw = |cx: &mut gpui::VisualTestContext, width: f32| {
+            cx.draw(
+                gpui::point(px(0.), px(0.)),
+                gpui::size(px(width), px(200.)),
+                {
+                    let view = view.clone();
+                    move |_, _| view.into_any_element()
+                },
+            );
+        };
+
+        // The first prepaint discards the creation hints, and the next
+        // stable-width render restores them.
+        draw(cx, 100.);
+        update_discover_feed_cache(&mut cache, "feed-a", 10, 50., 100.);
+        draw(cx, 100.);
+        assert_eq!(f32::from(state.max_offset_for_scrollbar().y), 300.);
+        assert_eq!(f32::from(state.scroll_px_offset_for_scrollbar().y), 0.);
+
+        state.scroll_to(gpui::ListOffset {
+            item_ix: 5,
+            offset_in_item: px(0.),
+        });
+        draw(cx, 100.);
+        assert_eq!(f32::from(state.scroll_px_offset_for_scrollbar().y), -250.);
+
+        // On the width-change frame GPUI wipes every hint after the render
+        // call, so the extent collapses even though a restore was scheduled.
+        // The item-anchored scroll position itself survives the wipe.
+        update_discover_feed_cache(&mut cache, "feed-a", 10, 50., 200.);
+        draw(cx, 200.);
+        assert_eq!(f32::from(state.max_offset_for_scrollbar().y), 0.);
+        assert_eq!(state.logical_scroll_top().item_ix, 5);
+        assert_eq!(f32::from(state.logical_scroll_top().offset_in_item), 0.);
+
+        // The first stable-width render re-applies the uniform hints, so the
+        // full extent and the pixel offset both come back.
+        update_discover_feed_cache(&mut cache, "feed-a", 10, 50., 200.);
+        draw(cx, 200.);
+        assert_eq!(f32::from(state.max_offset_for_scrollbar().y), 300.);
+        assert_eq!(f32::from(state.scroll_px_offset_for_scrollbar().y), -250.);
+        assert_eq!(state.logical_scroll_top().item_ix, 5);
+        assert_eq!(f32::from(state.logical_scroll_top().offset_in_item), 0.);
+
+        // A content change still resets the feed to the top with full hints.
+        update_discover_feed_cache(&mut cache, "feed-b", 10, 50., 200.);
+        draw(cx, 200.);
+        assert_eq!(f32::from(state.max_offset_for_scrollbar().y), 300.);
+        assert_eq!(f32::from(state.scroll_px_offset_for_scrollbar().y), 0.);
+        assert_eq!(state.logical_scroll_top().item_ix, 0);
     }
 
     #[test]
