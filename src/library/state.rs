@@ -882,17 +882,13 @@ impl LibraryState {
 
     /// Synchronize a Deezer SmartMix page with a queue-extension response.
     ///
-    /// The playback queue owns the cursor, so the caller supplies its current
-    /// track id.  When Deezer asks us to clear the remaining queue, preserve
-    /// everything through the last displayed occurrence of that track.  If
-    /// the cursor is not represented by the page, preserve the entire page as
-    /// the conservative fallback.
+    /// The playback queue owns the cursor, and queue extensions append like
+    /// SoundCloud stations, so the page keeps every listed track and adds
+    /// only the fresh batch below them.
     pub(crate) fn sync_active_deezer_smart_mix_tracks(
         &mut self,
         expected_config_id: &str,
-        current_track_id: Option<&str>,
         additions: &[Track],
-        clear_remaining_tracks: bool,
     ) -> usize {
         let active_route = self.route().clone();
         let expected_config_id = expected_config_id.trim();
@@ -910,22 +906,8 @@ impl LibraryState {
         let Some(page) = self.page.as_mut() else {
             return 0;
         };
-        let preserved_len = if clear_remaining_tracks {
-            current_track_id
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .and_then(|current_id| {
-                    page.tracks
-                        .iter()
-                        .rposition(|track| track.id.trim() == current_id)
-                })
-                .map_or(page.tracks.len(), |index| index + 1)
-        } else {
-            page.tracks.len()
-        };
-
-        let removed = page.tracks.len().saturating_sub(preserved_len);
-        let mut existing_ids = page.tracks[..preserved_len]
+        let mut existing_ids = page
+            .tracks
             .iter()
             .map(|track| track.id.trim().to_owned())
             .filter(|id| !id.is_empty())
@@ -936,18 +918,15 @@ impl LibraryState {
             .filter(|track| existing_ids.insert(track.id.trim().to_owned()))
             .cloned()
             .collect::<Vec<_>>();
-        if fresh.is_empty() && removed == 0 {
+        if fresh.is_empty() {
             return 0;
         }
 
-        if removed > 0 {
-            page.tracks.truncate(preserved_len);
-        }
-        let changed = removed + fresh.len();
+        let appended = fresh.len();
         page.tracks.extend(fresh);
         page.total = page.tracks.len();
         self.cache.insert(cache_key, page.clone());
-        changed
+        appended
     }
 
     pub(crate) fn update_active_deezer_smart_mix_title(
@@ -1726,13 +1705,11 @@ mod tests {
 
         let appended = state.sync_active_deezer_smart_mix_tracks(
             "inspired-by-3",
-            Some("2"),
             &[
                 soundcloud_track("2"),
                 soundcloud_track("3"),
                 soundcloud_track("3"),
             ],
-            false,
         );
 
         assert_eq!(appended, 1);
@@ -1760,60 +1737,6 @@ mod tests {
     }
 
     #[test]
-    fn smart_mix_clear_extension_replaces_only_unplayed_visible_tail() {
-        let mut state = active_deezer_smart_mix_state(&["1", "2", "3", "4"]);
-
-        let appended = state.sync_active_deezer_smart_mix_tracks(
-            "inspired-by-3",
-            Some("2"),
-            &[
-                soundcloud_track("3"),
-                soundcloud_track("5"),
-                soundcloud_track("5"),
-            ],
-            true,
-        );
-
-        assert_eq!(appended, 4);
-        assert_eq!(
-            state
-                .page
-                .as_ref()
-                .unwrap()
-                .tracks
-                .iter()
-                .map(|track| track.id.as_str())
-                .collect::<Vec<_>>(),
-            ["1", "2", "3", "5"]
-        );
-    }
-
-    #[test]
-    fn smart_mix_clear_extension_preserves_page_when_cursor_is_not_visible() {
-        let mut state = active_deezer_smart_mix_state(&["1", "2", "3"]);
-
-        let appended = state.sync_active_deezer_smart_mix_tracks(
-            "inspired-by-3",
-            Some("missing"),
-            &[soundcloud_track("4")],
-            true,
-        );
-
-        assert_eq!(appended, 1);
-        assert_eq!(
-            state
-                .page
-                .as_ref()
-                .unwrap()
-                .tracks
-                .iter()
-                .map(|track| track.id.as_str())
-                .collect::<Vec<_>>(),
-            ["1", "2", "3", "4"]
-        );
-    }
-
-    #[test]
     fn smart_mix_extension_rejects_stale_or_mismatched_pages_without_mutation() {
         let mut state = active_deezer_smart_mix_state(&["1", "2"]);
         let route = state.route().clone();
@@ -1821,24 +1744,14 @@ mod tests {
         let cache = state.cache.clone();
 
         assert_eq!(
-            state.sync_active_deezer_smart_mix_tracks(
-                "other-mix",
-                Some("2"),
-                &[soundcloud_track("3")],
-                false,
-            ),
+            state.sync_active_deezer_smart_mix_tracks("other-mix", &[soundcloud_track("3")],),
             0
         );
         assert_state_unchanged(&state, &route, &page, &cache);
 
         state.status = Status::Loading;
         assert_eq!(
-            state.sync_active_deezer_smart_mix_tracks(
-                "inspired-by-3",
-                Some("2"),
-                &[soundcloud_track("3")],
-                false,
-            ),
+            state.sync_active_deezer_smart_mix_tracks("inspired-by-3", &[soundcloud_track("3")],),
             0
         );
         assert_eq!(
@@ -1849,39 +1762,20 @@ mod tests {
     }
 
     #[test]
-    fn smart_mix_duplicate_only_clear_batch_still_truncates_visible_tail() {
+    fn smart_mix_duplicate_only_batch_returns_zero_without_mutation() {
         let mut state = active_deezer_smart_mix_state(&["1", "2", "3"]);
+        let route = state.route().clone();
+        let page = state.page.clone();
+        let cache = state.cache.clone();
 
         assert_eq!(
             state.sync_active_deezer_smart_mix_tracks(
                 "inspired-by-3",
-                Some("2"),
-                &[soundcloud_track("1"), soundcloud_track("2")],
-                true,
+                &[soundcloud_track(" 2 "), soundcloud_track("1")],
             ),
-            1
+            0
         );
-        assert_eq!(
-            state
-                .page
-                .as_ref()
-                .unwrap()
-                .tracks
-                .iter()
-                .map(|track| track.id.as_str())
-                .collect::<Vec<_>>(),
-            ["1", "2"]
-        );
-        assert_eq!(state.page.as_ref().unwrap().total, 2);
-        assert_eq!(
-            state
-                .cache
-                .get(&cache_key(state.route(), "deezer-account"))
-                .unwrap()
-                .tracks
-                .len(),
-            2
-        );
+        assert_state_unchanged(&state, &route, &page, &cache);
     }
 
     #[test]

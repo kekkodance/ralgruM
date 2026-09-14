@@ -68,7 +68,6 @@ enum Credential {
 struct ExtensionBatch {
     tracks: Vec<Track>,
     provider: Provider,
-    clear_remaining_tracks: bool,
     next_flow_tuner: Option<super::deezer_radio::FlowTuner>,
     continuation_seed: Option<String>,
 }
@@ -96,7 +95,6 @@ impl ExtensionBatch {
         Self {
             tracks: batch.tracks,
             provider: Provider::Deezer,
-            clear_remaining_tracks: batch.clear_remaining_tracks,
             next_flow_tuner: batch.next_flow_tuner,
             continuation_seed: None,
         }
@@ -111,7 +109,6 @@ impl ExtensionBatch {
         Self {
             tracks: page.tracks,
             provider: Provider::SoundCloud,
-            clear_remaining_tracks: false,
             next_flow_tuner: None,
             continuation_seed,
         }
@@ -1685,18 +1682,15 @@ impl LibraryView {
                     .iter()
                     .map(|track| PlaybackTrack::from_library(track, batch.provider))
                     .collect::<Vec<_>>();
-                let (result, current_track_id) = playback.update(cx, |playback, cx| {
-                    let result = playback.apply_extension_batch(
+                let result = playback.update(cx, |playback, cx| {
+                    playback.apply_extension_batch(
                         &ticket,
                         additions,
-                        batch.clear_remaining_tracks,
                         batch.next_flow_tuner,
                         batch.continuation_seed,
                         batch_nonempty,
                         cx,
-                    );
-                    let current_track_id = playback.state.current_id().map(str::to_owned);
-                    (result, current_track_id)
+                    )
                 });
                 let Ok(retry_ticket) = result else {
                     return;
@@ -1709,12 +1703,9 @@ impl LibraryView {
                         ..
                     } = &ticket.context
                 {
-                    let appended = this.state.sync_active_deezer_smart_mix_tracks(
-                        config_id,
-                        current_track_id.as_deref(),
-                        &batch.tracks,
-                        batch.clear_remaining_tracks,
-                    );
+                    let appended = this
+                        .state
+                        .sync_active_deezer_smart_mix_tracks(config_id, &batch.tracks);
                     if appended > 0 {
                         cx.notify();
                     }

@@ -640,20 +640,16 @@ impl PlaybackModel {
         &mut self,
         ticket: &QueueExtensionTicket,
         additions: Vec<PlaybackTrack>,
-        clear_remaining: bool,
         next_flow_tuner: Option<crate::library::FlowTuner>,
         continuation_seed: Option<String>,
         batch_nonempty: bool,
         cx: &mut Context<Self>,
     ) -> Result<Option<QueueExtensionTicket>, ()> {
         let has_next_tuner = next_flow_tuner.is_some();
-        match self.state.apply_extension(
-            ticket,
-            additions,
-            clear_remaining,
-            next_flow_tuner,
-            continuation_seed,
-        ) {
+        match self
+            .state
+            .apply_extension(ticket, additions, next_flow_tuner, continuation_seed)
+        {
             ExtensionApply::Stale => Err(()),
             ExtensionApply::Applied { added } => {
                 let resume_after_extension =

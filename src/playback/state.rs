@@ -1107,14 +1107,13 @@ impl PlaybackState {
     }
 
     /// Apply one successful radio response atomically with its continuation
-    /// tuner.  A Flow response can replace only the unplayed remainder while
-    /// retaining the current track and history; ordinary responses append in
-    /// the order returned by Deezer.
+    /// tuner.  Extensions append in the order returned by the provider, so
+    /// every previously listed unplayed track stays above the fresh batch,
+    /// matching SoundCloud station queues.
     pub(crate) fn apply_extension(
         &mut self,
         ticket: &QueueExtensionTicket,
         additions: Vec<PlaybackTrack>,
-        clear_remaining: bool,
         next_flow_tuner: Option<library::FlowTuner>,
         continuation_seed: Option<String>,
     ) -> ExtensionApply {
@@ -1122,11 +1121,7 @@ impl PlaybackState {
             return ExtensionApply::Stale;
         }
 
-        let added = if clear_remaining {
-            self.replace_remaining(additions)
-        } else {
-            self.append_tracks(additions)
-        };
+        let added = self.append_tracks(additions);
         if let Some(next_seed) = continuation_seed.filter(|seed| !seed.trim().is_empty())
             && let PlaybackContext::SoundCloudStation { seed_track_id } = &mut self.context
             && seed_track_id != &next_seed
@@ -2438,7 +2433,7 @@ mod tests {
         let ticket = state.extension_ticket().unwrap();
         state.replace(vec![tracks()[2].clone()], 0);
         assert_eq!(
-            state.apply_extension(&ticket, vec![tracks()[1].clone()], false, None, None),
+            state.apply_extension(&ticket, vec![tracks()[1].clone()], None, None),
             ExtensionApply::Stale
         );
         assert_eq!(
@@ -2452,7 +2447,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_remaining_preserves_history_and_current_without_audio_reset() {
+    fn replace_remaining_tracks_preserves_history_and_current_without_audio_reset() {
         let mut state = PlaybackState::default();
         state.replace(tracks(), 2);
         state.select(0);
@@ -2465,27 +2460,20 @@ mod tests {
             tuner: Some(library::FlowTuner::initial(library::FlowMode::Default)),
             kind: DeezerFlowKind::Flow,
         };
-        let ticket = state.extension_ticket().unwrap();
         let generation = state.generation;
         let status = state.status;
         let position = state.position;
         let duration = state.duration;
         let buffered = state.buffered;
         assert_eq!(
-            state.apply_extension(
-                &ticket,
-                vec![
-                    tracks()[1].clone(),
-                    PlaybackTrack {
-                        id: "new".into(),
-                        ..tracks()[1].clone()
-                    }
-                ],
-                true,
-                Some(library::FlowTuner::initial(library::FlowMode::Discovery)),
-                None,
-            ),
-            ExtensionApply::Applied { added: 2 }
+            state.replace_remaining_tracks(vec![
+                tracks()[1].clone(),
+                PlaybackTrack {
+                    id: "new".into(),
+                    ..tracks()[1].clone()
+                }
+            ]),
+            2
         );
         assert_eq!(
             state
@@ -2502,16 +2490,6 @@ mod tests {
         assert_eq!(state.position, position);
         assert_eq!(state.duration, duration);
         assert_eq!(state.buffered, buffered);
-        match state.context {
-            PlaybackContext::DeezerFlow { mode, tuner, .. } => {
-                assert_eq!(mode, library::FlowMode::Default);
-                assert_eq!(
-                    tuner.unwrap().as_str(),
-                    library::FlowTuner::initial(library::FlowMode::Discovery).as_str()
-                );
-            }
-            _ => panic!("expected Flow context"),
-        }
     }
 
     #[test]
@@ -2530,7 +2508,6 @@ mod tests {
             state.apply_extension(
                 &ticket,
                 vec![duplicate.clone(), fresh.clone(), duplicate],
-                false,
                 None,
                 None,
             ),
@@ -2558,10 +2535,60 @@ mod tests {
         let epoch = state.queue_epoch();
 
         assert_eq!(
-            state.apply_extension(&ticket, vec![tracks()[1].clone()], false, None, None),
+            state.apply_extension(&ticket, vec![tracks()[1].clone()], None, None),
             ExtensionApply::Applied { added: 1 }
         );
         assert_ne!(state.queue_epoch(), epoch);
+        assert!(!state.extension_ticket_is_current(&ticket));
+    }
+
+    #[test]
+    fn flow_extension_keeps_listed_upcoming_tracks_and_appends_the_batch() {
+        let mut state = PlaybackState::default();
+        state.replace(tracks(), 0);
+        state.replace_context(PlaybackContext::DeezerFlow {
+            config_id: "flow".into(),
+            mode: library::FlowMode::Default,
+            tuner: Some(library::FlowTuner::initial(library::FlowMode::Default)),
+            kind: DeezerFlowKind::Flow,
+        });
+        let ticket = state.extension_ticket().unwrap();
+        let previous_epoch = state.queue_epoch();
+
+        // Flow responses ask Deezer to clear the remaining queue, but the
+        // extension must keep the listed upcoming tracks and append below
+        // them like a SoundCloud station.
+        let mut duplicate = tracks()[1].clone();
+        duplicate.title = "duplicate".into();
+        let mut fresh = tracks()[1].clone();
+        fresh.id = "fresh".into();
+        fresh.title = "fresh flow track".into();
+
+        assert_eq!(
+            state.apply_extension(
+                &ticket,
+                vec![duplicate, fresh],
+                Some(library::FlowTuner::initial(library::FlowMode::Discovery)),
+                None,
+            ),
+            ExtensionApply::Applied { added: 1 }
+        );
+        assert_eq!(
+            state
+                .queue
+                .iter()
+                .map(|track| track.id.as_str())
+                .collect::<Vec<_>>(),
+            ["0", "1", "2", "fresh"]
+        );
+        assert_eq!(state.current_index, Some(0));
+        assert!(matches!(
+            &state.context,
+            PlaybackContext::DeezerFlow { tuner, .. }
+                if tuner.as_ref().unwrap().as_str()
+                    == library::FlowTuner::initial(library::FlowMode::Discovery).as_str()
+        ));
+        assert_ne!(state.queue_epoch(), previous_epoch);
         assert!(!state.extension_ticket_is_current(&ticket));
     }
 
@@ -2592,7 +2619,6 @@ mod tests {
             state.apply_extension(
                 &ticket,
                 vec![duplicate, final_track, prior_track],
-                false,
                 None,
                 Some(raw_response_seed.clone()),
             ),
