@@ -303,7 +303,11 @@ pub(super) fn cards_with_snapshot(
                     this.focusable()
                         .tab_stop(true)
                         .role(gpui::Role::Button)
-                        .aria_label(format!("Open {}", card.title))
+                        .aria_label(if card.kind == Category::Flow {
+                            format!("Play {}", card.title)
+                        } else {
+                            format!("Open {}", card.title)
+                        })
                         .cursor_pointer()
                         .focus_visible(|style| {
                             style.border_1().border_color(rgb(crate::theme::PRIMARY))
@@ -422,11 +426,40 @@ pub(super) fn cards_with_snapshot(
                         element.into_any_element()
                     }
                 }
-                Category::Flow
-                | Category::Station
-                | Category::Tracks
-                | Category::History
-                | Category::MyTracks => element.into_any_element(),
+                Category::Flow => {
+                    // The primary click plays the mix, so the flow page
+                    // stays reachable through the context menu Open entry.
+                    let play_host = host.clone();
+                    let play_card = card.clone();
+                    let open_host = host.clone();
+                    let open_card = card.clone();
+                    context_menu::discover_card_menu_with_actions(
+                        element,
+                        card.title.clone(),
+                        vec![
+                            context_menu::DiscoverMenuAction::new(
+                                context_menu::DiscoverMenuPrimary::PlayFlow,
+                                move |_, _, app| {
+                                    play_host.update(app, |this, cx| {
+                                        this.start_deezer_flow(play_card.clone(), false, cx)
+                                    });
+                                },
+                            ),
+                            context_menu::DiscoverMenuAction::new(
+                                context_menu::DiscoverMenuPrimary::Open,
+                                move |_, _, app| {
+                                    open_host.update(app, |this, cx| {
+                                        this.open_card(open_card.clone(), cx)
+                                    });
+                                },
+                            ),
+                        ],
+                    )
+                    .into_any_element()
+                }
+                Category::Station | Category::Tracks | Category::History | Category::MyTracks => {
+                    element.into_any_element()
+                }
             };
             if snapshot.grid_visual.animating && !card_row {
                 animate_grid_card(
@@ -485,7 +518,15 @@ pub(super) fn cards_with_snapshot(
 
 fn activate_card(host: &gpui::Entity<LibraryView>, card: Card, window: &mut Window, app: &mut App) {
     let _ = window;
-    host.update(app, |this, cx| this.open_card(card, cx));
+    host.update(app, |this, cx| {
+        // Deezer behavior: the primary click on a Flow card starts the
+        // mix playing; the context menu keeps Open for the flow page.
+        if card.kind == Category::Flow {
+            this.start_deezer_flow(card, false, cx);
+        } else {
+            this.open_card(card, cx);
+        }
+    });
 }
 
 pub(super) fn provider_artist_detail(view: &LibraryView) -> bool {
@@ -526,6 +567,39 @@ mod tests {
     use super::{card_content_identity, card_kind, is_card_actionable, is_provider_artist_route};
     use crate::library::model::{Card, Category, Route, Service};
     use crate::music_ui::CardKind;
+
+    #[test]
+    fn flow_cards_play_on_click_while_the_menu_keeps_open() {
+        let source = include_str!("cards_view.rs");
+        let implementation = source.split_once("#[cfg(test)]").map_or_else(
+            || panic!("cards implementation section is missing"),
+            |(code, _)| code,
+        );
+        let activate = implementation
+            .split_once("fn activate_card(")
+            .and_then(|(_, body)| body.split_once("pub(super) fn provider_artist_detail"))
+            .map(|(body, _)| body)
+            .expect("activate_card should precede provider_artist_detail");
+        // The primary click on a flow card starts the mix playing.
+        assert!(activate.contains("if card.kind == Category::Flow {"));
+        assert!(activate.contains("this.start_deezer_flow(card, false, cx);"));
+        // Every other actionable card keeps navigating to its page.
+        assert!(activate.contains("this.open_card(card, cx);"));
+        // The flow card advertises playing, not opening.
+        assert!(implementation.contains("format!(\"Play {}\", card.title)"));
+
+        // The flow page stays reachable through the context menu entries.
+        let flow_menu = implementation
+            .split_once("Category::Flow => {")
+            .and_then(|(_, body)| body.split_once("Category::Station"))
+            .map(|(body, _)| body)
+            .expect("flow card menu branch");
+        assert!(flow_menu.contains("discover_card_menu_with_actions("));
+        assert!(flow_menu.contains("DiscoverMenuPrimary::PlayFlow"));
+        assert!(flow_menu.contains("this.start_deezer_flow(play_card.clone(), false, cx)"));
+        assert!(flow_menu.contains("DiscoverMenuPrimary::Open"));
+        assert!(flow_menu.contains("this.open_card(open_card.clone(), cx)"));
+    }
 
     #[test]
     fn card_actionable_matches_route_categories_and_non_empty_id() {

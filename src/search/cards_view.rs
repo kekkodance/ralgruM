@@ -338,7 +338,7 @@ pub(super) fn render_discover_card(
     let action_label = match action {
         DiscoverAction::PlayDeezerTrack(_) => "Play Deezer mix for",
         DiscoverAction::PlayDeezerFlow { smart_mix: true } => "Play Deezer mix",
-        DiscoverAction::PlayDeezerFlow { smart_mix: false } => "Open Deezer Flow",
+        DiscoverAction::PlayDeezerFlow { smart_mix: false } => "Play Deezer Flow",
         DiscoverAction::OpenDeezerChannel(_) => "Open Deezer channel",
         DiscoverAction::OpenSoundCloudSelection(_) => "Open SoundCloud selection",
         DiscoverAction::OpenDetail | DiscoverAction::None => "Open",
@@ -519,7 +519,9 @@ fn dispatch_discover_action(
             view.play_deezer_flow(card, true, cx);
         }
         DiscoverAction::PlayDeezerFlow { smart_mix: false } => {
-            view.open_deezer_flow(card, false, cx);
+            // Ordinary flows play on click too; the context menu keeps
+            // Open for navigating to the flow page.
+            view.play_deezer_flow(card, false, cx);
         }
         DiscoverAction::OpenDeezerChannel(slug) => {
             view.open_deezer_channel(card, slug, cx);
@@ -926,7 +928,7 @@ mod tests {
     }
 
     #[test]
-    fn mix_cards_play_on_click_while_flows_still_navigate() {
+    fn flow_and_mix_cards_play_on_click_while_open_stays_in_the_menu() {
         let production = &include_str!("cards_view.rs")
             [..include_str!("cards_view.rs").find("#[cfg(test)]").unwrap()];
         let dispatch = production
@@ -937,9 +939,23 @@ mod tests {
         // Smarttracklist mixes (the Mixes inspired by type) play on click.
         assert!(dispatch.contains("PlayDeezerFlow { smart_mix: true } => {"));
         assert!(dispatch.contains("view.play_deezer_flow(card, true, cx);"));
-        // Ordinary flows keep navigating to the flow page.
+        // Ordinary flows play on click as well.
         assert!(dispatch.contains("PlayDeezerFlow { smart_mix: false } => {"));
-        assert!(dispatch.contains("view.open_deezer_flow(card, false, cx);"));
+        assert!(dispatch.contains("view.play_deezer_flow(card, false, cx);"));
+        // The flow page stays reachable through the context menu Open entry
+        // instead of the primary click.
+        let menu_dispatch = production
+            .split_once("fn dispatch_discover_menu_action")
+            .and_then(|(_, body)| body.split_once("fn dispatch_discover_action"))
+            .map(|(body, _)| body)
+            .expect("dispatch_discover_menu_action should exist");
+        assert!(menu_dispatch.contains(
+            "(DiscoverMenuPrimary::Open, DiscoverAction::PlayDeezerFlow { smart_mix }) => {"
+        ));
+        assert!(menu_dispatch.contains("view.open_deezer_flow(card, smart_mix, cx);"));
+        // The flow card advertises playing, not opening, on its label.
+        assert!(production.contains("\"Play Deezer Flow\""));
+        assert!(!production.contains("\"Open Deezer Flow\""));
     }
 
     #[test]
