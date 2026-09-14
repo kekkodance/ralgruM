@@ -431,6 +431,14 @@ impl RalgrumApp {
                 this.close_mobile_sidebar(cx);
             }))
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.settings_mode {
+                    // Escape leaves the settings page the same way the back
+                    // button does, with the drafts persisted on the way out.
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    this.request_settings_save(window, cx);
+                    return;
+                }
                 if crate::tab_keyboard::is_activation_key(event.keystroke.key.as_str()) {
                     window.prevent_default();
                     this.settings.update(cx, |settings, cx| {
@@ -516,6 +524,12 @@ impl RalgrumApp {
                 this.activate_settings_button(window, cx);
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.settings_mode {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    this.request_settings_save(window, cx);
+                    return;
+                }
                 if crate::tab_keyboard::is_activation_key(event.keystroke.key.as_str()) {
                     window.prevent_default();
                     this.activate_settings_button(window, cx);
@@ -601,6 +615,12 @@ impl RalgrumApp {
                 this.activate_settings_button(window, cx);
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.settings_mode {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    this.request_settings_save(window, cx);
+                    return;
+                }
                 if crate::tab_keyboard::is_activation_key(event.keystroke.key.as_str()) {
                     window.prevent_default();
                     this.activate_settings_button(window, cx);

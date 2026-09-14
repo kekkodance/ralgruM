@@ -19,10 +19,11 @@ const FLAC_HEADER_PROBE_BYTES: u64 = 64 * 1024;
 /// Upper bound for the FLAC header probe before the seek gives up.
 const FLAC_HEADER_PROBE_LIMIT: u64 = 4 * 1024 * 1024;
 /// FLAC probe attempts that home in on a frame at or before the target.
-const FLAC_SEEK_PROBES: usize = 4;
-/// Slack that keeps a backing-up FLAC probe short of the target.
-const FLAC_BACKUP_SAFETY: Duration = Duration::from_millis(1_500);
-/// Distance the forward re-aim leaves between the frame and the target.
+/// Variable bitrate streams bracket the target first and then interpolate
+/// inside the bracket, so the budget only runs low on extreme profiles.
+const FLAC_SEEK_PROBES: usize = 10;
+/// Distance the probes leave between their aim point and the target, from
+/// either direction, so the frame they find lands just short of it.
 const FLAC_AIM_AHEAD: Duration = Duration::from_secs(2);
 /// Largest FLAC gap bridged by discarding instead of another probe.
 const FLAC_FORWARD_LIMIT: Duration = Duration::from_secs(4);
@@ -338,13 +339,17 @@ async fn flac_file_header(
         }
     }
 }
-
-/// Locates a FLAC frame whose position is at or before the seek target.
+/// Locates a FLAC frame at or before the seek target.
 ///
 /// The byte ratio estimate only approximates a variable bitrate stream, so
 /// each probe parses the first frame header it finds to learn the exact
-/// timeline position, then re-aims until one frame lands close enough that
-/// discarding the remainder is cheaper than another request.
+/// timeline position. The probes keep a bracket around the target: the
+/// closest frame at or before it and the closest frame past it. Once both
+/// bounds exist the next probe interpolates the target's byte offset inside
+/// the bracket, which converges for any bitrate profile; a lone bound is
+/// re-aimed with the bitrate measured between the last two probes. The
+/// returned frame is always at or before the target: a frame past it would
+/// zero the discard and resume playback past the requested position.
 async fn flac_frame_near(
     fetch: RangeFetch,
     total: u64,
@@ -358,47 +363,109 @@ async fn flac_frame_near(
     if !(seconds > 0.0) {
         return Err("The track duration is unknown".into());
     }
-    let bytes_per_second = (total as f64 / seconds).max(1.0);
+    let average_bytes_per_second = (total as f64 / seconds).max(1.0);
     let probe_len = stream_info
         .max_frame_bytes()
         .clamp(64 * 1024, 4 * 1024 * 1024);
     let mut probe_start = estimate.min(total - 1);
-    let mut frame: Option<FlacFrame> = None;
+    let mut lower: Option<FlacFrame> = None;
+    let mut upper: Option<FlacFrame> = None;
+    let mut previous: Option<FlacFrame> = None;
     for _ in 0..FLAC_SEEK_PROBES {
-        let end = (probe_start + probe_len - 1).min(total - 1);
+        // A window reaching past the upper bound would re-find the frame
+        // that set it, so the probe stays inside the bracket.
+        let bracket_end = upper.map_or(total - 1, |frame| frame.offset.saturating_sub(1));
+        let end = (probe_start + probe_len - 1)
+            .min(total - 1)
+            .min(bracket_end);
+        if probe_start > end {
+            break;
+        }
         let bytes = fetch(probe_start, end, cancellation.clone())
             .await
             .map_err(|error| format!("The FLAC seek probe could not be downloaded: {error}"))?;
-        let parsed = parse_first_flac_frame(&bytes, stream_info, probe_start)
-            .ok_or_else(|| "The FLAC seek frame could not be located".to_string())?;
-        let position = parsed.position;
-        let offset = parsed.offset;
-        frame = Some(parsed);
-        if position > target {
-            // The estimate overshot: step back over the overshoot plus a
-            // safety margin so the next probe lands before the target.
-            let overshoot = position - target + FLAC_BACKUP_SAFETY;
-            let back = bytes_for(overshoot, bytes_per_second, 1.1).max(1);
-            let next = offset.saturating_sub(back).min(total - 1);
-            if next >= probe_start {
-                break;
-            }
-            probe_start = next;
-        } else if target - position <= FLAC_FORWARD_LIMIT {
+        let Some(parsed) = parse_first_flac_frame(&bytes, stream_info, probe_start) else {
             break;
-        } else {
-            // The frame sits far before the target: aim the next probe a
-            // couple of seconds ahead of this frame.
-            let gap = target - position - FLAC_AIM_AHEAD;
-            let forward = bytes_for(gap, bytes_per_second, 1.0);
-            let next = offset.saturating_add(forward).min(total - 1);
-            if next <= probe_start {
+        };
+        // Consecutive probes measure the local bitrate, which a variable
+        // bitrate stream makes far more accurate than the file average.
+        let rate =
+            local_bytes_per_second(&parsed, previous.as_ref()).unwrap_or(average_bytes_per_second);
+        previous = Some(parsed);
+        if parsed.position > target {
+            if upper
+                .as_ref()
+                .is_some_and(|frame| parsed.position >= frame.position)
+            {
                 break;
             }
-            probe_start = next;
+            upper = Some(parsed);
+            probe_start = match lower.as_ref() {
+                Some(lower) => interpolated_offset(lower, &parsed, target),
+                None => {
+                    let back =
+                        bytes_for(parsed.position - target + FLAC_AIM_AHEAD, rate, 1.1).max(1);
+                    let next = parsed.offset.saturating_sub(back).min(total - 1);
+                    if next >= probe_start {
+                        // The backup cannot move closer: fall back to the
+                        // file start, whose first frame always sits at or
+                        // before the target.
+                        0
+                    } else {
+                        next
+                    }
+                }
+            };
+        } else {
+            if lower
+                .as_ref()
+                .is_some_and(|frame| parsed.position <= frame.position)
+            {
+                break;
+            }
+            lower = Some(parsed);
+            if target - parsed.position <= FLAC_FORWARD_LIMIT {
+                break;
+            }
+            probe_start = match upper.as_ref() {
+                Some(upper) => interpolated_offset(&parsed, upper, target),
+                None => parsed
+                    .offset
+                    .saturating_add(bytes_for(
+                        target - parsed.position - FLAC_AIM_AHEAD,
+                        rate,
+                        1.0,
+                    ))
+                    .min(total - 1),
+            };
         }
     }
-    frame.ok_or_else(|| "The FLAC seek frame could not be located".to_string())
+    lower.ok_or_else(|| "The FLAC seek frame could not be located".to_string())
+}
+
+/// Byte rate between two probes, which tracks the local bitrate of a
+/// variable bitrate stream far better than the file average.
+fn local_bytes_per_second(current: &FlacFrame, previous: Option<&FlacFrame>) -> Option<f64> {
+    let previous = previous?;
+    let span = current.position.max(previous.position) - current.position.min(previous.position);
+    let seconds = span.as_secs_f64();
+    let bytes = current.offset.abs_diff(previous.offset);
+    (seconds > 0.0).then(|| (bytes as f64 / seconds).max(1.0))
+}
+
+/// Interpolates the byte offset of the seek target between two bracketing
+/// frames, aiming a couple of seconds short of it so the frame the probe
+/// finds lands at or before the target.
+fn interpolated_offset(lower: &FlacFrame, upper: &FlacFrame, target: Duration) -> u64 {
+    let span = upper.position.saturating_sub(lower.position).as_secs_f64();
+    if !(span > 0.0) {
+        return lower.offset;
+    }
+    let aim = target.saturating_sub(FLAC_AIM_AHEAD);
+    let into_span = aim.saturating_sub(lower.position).as_secs_f64().min(span);
+    let fraction = (into_span / span).clamp(0.0, 1.0);
+    let span_bytes = upper.offset.saturating_sub(lower.offset) as f64;
+    lower.offset.saturating_add((fraction * span_bytes) as u64)
 }
 
 /// Stream parameters read from the FLAC STREAMINFO metadata block.
@@ -420,7 +487,7 @@ impl FlacStreamInfo {
     }
 }
 
-/// A located FLAC frame: where its header starts and when it plays.
+#[derive(Clone, Copy)]
 struct FlacFrame {
     offset: u64,
     position: Duration,
@@ -735,6 +802,153 @@ mod tests {
             / 1_000_000_000;
         for _ in 0..target {
             decoder.next();
+        }
+    }
+
+    /// Appends the UTF-8-like coded number every FLAC frame header carries.
+    fn push_flac_coded_number(bytes: &mut Vec<u8>, number: u64) {
+        if number < 0x80 {
+            bytes.push(u8::try_from(number).unwrap());
+        } else if number < 0x800 {
+            bytes.push(0xc0 | u8::try_from(number >> 6).unwrap());
+            bytes.push(0x80 | u8::try_from(number & 0x3f).unwrap());
+        } else {
+            panic!("the fixture keeps frame numbers below 2048");
+        }
+    }
+
+    /// One valid fixed-blocksize FLAC frame header: sync, 256 samples per
+    /// block, the sample rate left to STREAMINFO, stereo, 16 bit, then the
+    /// coded frame number and the CRC-8 the parser verifies.
+    fn flac_frame_header_bytes(number: u64) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xf8, 0x80, 0x18];
+        push_flac_coded_number(&mut bytes, number);
+        let crc = crc8(&bytes);
+        bytes.push(crc);
+        bytes
+    }
+
+    /// Builds a synthetic variable bitrate FLAC file: a cheap quiet intro of
+    /// 512-byte frames followed by an expensive loud tail of 3430-byte
+    /// frames, each covering 256 samples at 1 kHz. The quiet intro costs a
+    /// quarter of the file average, so the byte ratio estimate for a target
+    /// inside it overshoots deep into the loud tail.
+    fn synthetic_vbr_flac() -> (Arc<Vec<u8>>, Vec<(u64, Duration)>) {
+        const SAMPLE_RATE: u64 = 1_000;
+        const BLOCK_SAMPLES: u16 = 256;
+        const QUIET_FRAME_BYTES: usize = 512;
+        const LOUD_FRAME_BYTES: usize = 3_430;
+        const QUIET_FRAMES: u64 = 235;
+        const LOUD_FRAMES: u64 = 272;
+
+        let mut stream_info = Vec::new();
+        stream_info.extend_from_slice(&BLOCK_SAMPLES.to_be_bytes());
+        stream_info.extend_from_slice(&BLOCK_SAMPLES.to_be_bytes());
+        stream_info.extend_from_slice(&[0; 6]);
+        let packed = (SAMPLE_RATE << 44)
+            | (u64::from(2_u16 - 1) << 41)
+            | (u64::from(16_u8 - 1) << 36)
+            | ((QUIET_FRAMES + LOUD_FRAMES) * u64::from(BLOCK_SAMPLES));
+        stream_info.extend_from_slice(&packed.to_be_bytes());
+        stream_info.extend_from_slice(&[0; 16]);
+        assert_eq!(stream_info.len(), 34);
+
+        let mut bytes = b"fLaC".to_vec();
+        bytes.push(0x80);
+        bytes.extend_from_slice(&34_u32.to_be_bytes()[1..]);
+        bytes.extend_from_slice(&stream_info);
+
+        let mut frames = Vec::new();
+        let mut number = 0_u64;
+        for _ in 0..QUIET_FRAMES {
+            frames.push((bytes.len() as u64, number));
+            let header = flac_frame_header_bytes(number);
+            bytes.extend_from_slice(&header);
+            bytes.resize(bytes.len() + QUIET_FRAME_BYTES - header.len(), 0);
+            number += 1;
+        }
+        for _ in 0..LOUD_FRAMES {
+            frames.push((bytes.len() as u64, number));
+            let header = flac_frame_header_bytes(number);
+            bytes.extend_from_slice(&header);
+            bytes.resize(bytes.len() + LOUD_FRAME_BYTES - header.len(), 0);
+            number += 1;
+        }
+        let positions = frames
+            .into_iter()
+            .map(|(offset, number)| {
+                (
+                    offset,
+                    Duration::from_nanos(
+                        number * u64::from(BLOCK_SAMPLES) * 1_000_000_000 / SAMPLE_RATE,
+                    ),
+                )
+            })
+            .collect();
+        (Arc::new(bytes), positions)
+    }
+
+    /// A mid-download seek into the cheap intro of a variable bitrate FLAC
+    /// must hand the engine a suffix that starts at or before the target and
+    /// reports the exact discard to reach it. The unbracketed probing this
+    /// pins used to exhaust its attempts while overshooting and return a
+    /// frame past the target, which zeroed the discard and resumed playback
+    /// past the requested position.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flac_seek_never_lands_past_the_target_on_variable_bitrate() {
+        let (bytes, positions) = synthetic_vbr_flac();
+        let total = bytes.len() as u64;
+        let duration = Duration::from_secs(130);
+        for target in [Duration::from_secs(20), Duration::from_secs(50)] {
+            let (fetch, ranges) = memory_fetch(bytes.clone());
+            let session = RangeTimelineSession::new(
+                RangeSeekFormat::Flac,
+                fetch,
+                total,
+                duration,
+                tokio::runtime::Handle::current(),
+                CancellationToken::new(),
+            );
+            let request = TimelineSeekSession::request(&session, target).unwrap();
+            assert_eq!(request.format, AudioFormat::Flac);
+            let startup = request
+                .startup
+                .recv_timeout(Duration::from_secs(20))
+                .unwrap()
+                .unwrap();
+            let discard = startup
+                .intra_segment_offset
+                .expect("the session must report the discard to the target");
+
+            // The suffix stream starts where the first full chunk was
+            // fetched; probe and header requests stay at 64 KiB.
+            let ranges = ranges.lock().unwrap().clone();
+            let suffix_start = ranges
+                .iter()
+                .find(|(start, end)| end - start + 1 == SUFFIX_CHUNK)
+                .map(|(start, _)| *start)
+                .expect("the suffix must be streamed in full chunks");
+            let position = positions
+                .iter()
+                .find(|(offset, _)| *offset == suffix_start)
+                .map(|(_, position)| *position)
+                .expect("the suffix must start at a frame header");
+
+            assert!(
+                position <= target,
+                "the suffix must start at or before the target, started at {position:?}"
+            );
+            assert_eq!(
+                discard,
+                target - position,
+                "the discard must bridge from the suffix start to the target"
+            );
+            assert!(
+                target - position <= FLAC_FORWARD_LIMIT,
+                "the discard must stay bounded, was {}",
+                (target - position).as_secs_f32()
+            );
+            drop(startup.file);
         }
     }
 

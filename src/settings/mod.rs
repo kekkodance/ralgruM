@@ -4,8 +4,8 @@ use std::{
 };
 
 use gpui::{
-    AnimationExt as _, Context, Entity, EventEmitter, FontWeight, IntoElement, Render,
-    ScrollHandle, SharedString, Task, Window, div, point, prelude::*, px, rgb,
+    AnimationExt as _, Context, Entity, EventEmitter, FontWeight, IntoElement, KeyDownEvent,
+    Render, ScrollHandle, SharedString, Task, Window, div, point, prelude::*, px, rgb,
 };
 use gpui_component::IndexPath;
 use gpui_component::select::{SelectEvent, SelectState};
@@ -810,8 +810,8 @@ impl Render for SettingsView {
             BrowserScrollTarget::Handle(self.scroll.clone()),
             self.browser_scroll.clone(),
         );
-
         div()
+            .id("settings-page")
             .size_full()
             .flex()
             .flex_col()
@@ -819,6 +819,19 @@ impl Render for SettingsView {
             .bg(rgb(BACKGROUND))
             .text_color(rgb(FOREGROUND))
             .text_size(px(13.))
+            // Escape leaves the settings page through the same save path
+            // as the sidebar back button, so drafts persist and the session
+            // tears down. Inputs see the key first: an open input popover
+            // or inline completion is dismissed before the page exits,
+            // which matches how desktop forms layer escape. Modal dialogs
+            // render in overlays and keep the event for themselves.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.session_active {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    this.request_save(window, cx);
+                }
+            }))
             .child(
                 div()
                     .flex_none()
