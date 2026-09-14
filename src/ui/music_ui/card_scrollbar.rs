@@ -18,6 +18,7 @@ use super::{
 use crate::drag_cursor::{
     DragCursorOwner, DragCursorState, grabbing_cursor, set_drag_cursor_owned,
 };
+use crate::motion::CAROUSEL_CONTROLS_FADE_DURATION;
 
 const MIN_THUMB_WIDTH: f32 = 18.;
 /// Idle fade timing for the horizontal scrollbar, matching the vertical
@@ -42,13 +43,13 @@ fn scrollbar_thumb_color(cx: &App, state: ScrollbarThumbState) -> gpui::Backgrou
     }
 }
 
-/// Persistent visual state for one carousel scrollbar: hover plus the idle
-/// fade timing that mirrors the vertical scrollbar.
+/// Persistent interaction state for one carousel scrollbar: hover plus the
+/// offset its show window was last refreshed from. The idle fade timing
+/// itself lives in the shared controls fade so the arrows can follow it.
 struct CardScrollbarShowState {
     owner: Weak<Cell<Option<CarouselDrag>>>,
     hovered: Cell<bool>,
     last_scroll_offset: Cell<f32>,
-    last_scroll_time: Cell<Option<Instant>>,
     fade_wakeup_scheduled: Cell<bool>,
 }
 
@@ -69,7 +70,6 @@ fn card_scrollbar_show_state(drag: &Rc<Cell<Option<CarouselDrag>>>) -> Rc<CardSc
                     owner: Rc::downgrade(drag),
                     hovered: Cell::new(false),
                     last_scroll_offset: Cell::new(0.),
-                    last_scroll_time: Cell::new(None),
                     fade_wakeup_scheduled: Cell::new(false),
                 })
             })
@@ -84,20 +84,16 @@ fn update_scrollbar_hover(state: &Cell<bool>, track_hovered: bool, dragging: boo
     changed
 }
 
-/// Refresh the scrollbar's show window from live interaction, matching the
-/// vertical scrollbar: any offset change, hover, or drag counts as activity
-/// and holds the thumb fully visible.
-fn refresh_scrollbar_activity(
+/// Whether this frame counts as activity for the shared controls fade:
+/// any offset change, hover, or drag refreshes the show window, matching
+/// the vertical scrollbar.
+fn scrollbar_activity(
     show_state: &CardScrollbarShowState,
     offset: f32,
     hovered: bool,
     dragging: bool,
-    now: Instant,
-) {
-    if hovered || dragging || offset != show_state.last_scroll_offset.get() {
-        show_state.last_scroll_offset.set(offset);
-        show_state.last_scroll_time.set(Some(now));
-    }
+) -> bool {
+    hovered || dragging || offset != show_state.last_scroll_offset.get()
 }
 
 fn scrollbar_is_available(max_extent: f32) -> bool {
@@ -146,16 +142,165 @@ fn schedule_scrollbar_fade_wakeup(
         .detach();
 }
 
+/// Shared visibility for the carousel's horizontal scrollbar and both
+/// arrows, which appear and disappear as one unit. The row's live
+/// overflow gates the whole unit: when the row starts overflowing the
+/// controls fade in together, and when it stops they fade out together
+/// no matter how active the row still is. While the row keeps
+/// overflowing, the unit follows the scrollbar's activity window: any
+/// scroll, hover, or drag shows it, the hold window keeps it visible,
+/// and going idle fades it back out.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct CarouselControlsFade {
+    overflow: bool,
+    last_activity: Option<Instant>,
+    initialized: bool,
+    gate_from: f32,
+    gate_to: f32,
+    gate_started_at: Option<Instant>,
+    reduced_motion: bool,
+    last_opacity: f32,
+    needs_render_sync: bool,
+}
+
+impl CarouselControlsFade {
+    /// Advance the state with this frame's inputs. `overflow` is the
+    /// row's live measured overflow and `activity` whether the user
+    /// interacted this frame. The first update settles instead of
+    /// animating, so freshly mounted rows and skeleton carousels that
+    /// rebuild their state never flicker or drive endless frames.
+    pub(crate) fn update(
+        &mut self,
+        overflow: bool,
+        activity: bool,
+        now: Instant,
+        reduced_motion: bool,
+    ) {
+        self.reduced_motion = reduced_motion;
+        let was_initialized = self.initialized;
+        self.initialized = true;
+        if !was_initialized {
+            self.overflow = overflow;
+            self.gate_to = if overflow { 1. } else { 0. };
+            self.gate_from = self.gate_to;
+            self.gate_started_at = None;
+            // A row that is already scrollable when first measured shows
+            // its controls right away.
+            self.last_activity = overflow.then_some(now);
+            self.needs_render_sync = false;
+            self.last_opacity = self.opacity_at(now);
+            return;
+        }
+        if activity || (overflow && !self.overflow) {
+            self.last_activity = Some(now);
+        }
+        let gate_was_running = self.gate_started_at.is_some();
+        if overflow != self.overflow {
+            self.overflow = overflow;
+            self.gate_from = self.gate_at(now);
+            self.gate_to = if overflow { 1. } else { 0. };
+            self.gate_started_at =
+                (!reduced_motion && self.gate_from != self.gate_to).then_some(now);
+            if reduced_motion || self.gate_from == self.gate_to {
+                self.gate_from = self.gate_to;
+                self.gate_started_at = None;
+            }
+        } else if gate_was_running
+            && let Some(started_at) = self.gate_started_at
+            && now.saturating_duration_since(started_at) >= CAROUSEL_CONTROLS_FADE_DURATION
+        {
+            self.gate_from = self.gate_to;
+            self.gate_started_at = None;
+        }
+        let opacity = self.opacity_at(now);
+        // One more frame whenever the shown-or-hidden answer changes, or
+        // a running fade settles, so render-time consumers catch up
+        // exactly once instead of sticking a frame behind.
+        self.needs_render_sync = (self.last_opacity > 0.) != (opacity > 0.)
+            || (gate_was_running && self.gate_started_at.is_none());
+        self.last_opacity = opacity;
+    }
+
+    /// The overflow gate's animated zero-to-one value at `now`.
+    fn gate_at(&self, now: Instant) -> f32 {
+        let Some(started_at) = self.gate_started_at else {
+            return self.gate_to;
+        };
+        let elapsed = now.saturating_duration_since(started_at);
+        if elapsed >= CAROUSEL_CONTROLS_FADE_DURATION {
+            return self.gate_to;
+        }
+        let duration = CAROUSEL_CONTROLS_FADE_DURATION.as_secs_f32();
+        let progress = if duration == 0. {
+            1.
+        } else {
+            (elapsed.as_secs_f32() / duration).clamp(0., 1.)
+        };
+        crate::motion::lerp(self.gate_from, self.gate_to, gpui::ease_in_out(progress))
+    }
+
+    /// The shared opacity for the scrollbar and both arrows at `now`:
+    /// the overflow gate times the scrollbar's activity fade.
+    pub(crate) fn opacity_at(&self, now: Instant) -> f32 {
+        let elapsed = self
+            .last_activity
+            .map(|last| now.saturating_duration_since(last).as_secs_f32());
+        self.gate_at(now) * scrollbar_fade_opacity(elapsed, self.reduced_motion)
+    }
+
+    /// Opacity for render-time consumers such as the arrows, which are
+    /// built before the scrollbar paint has measured this frame's
+    /// overflow. An unmeasured state defers to the caller's layout
+    /// estimate; once the paint starts driving the state, the shared
+    /// fade takes over.
+    pub(crate) fn render_opacity(&self, now: Instant, overflow_estimate: bool) -> f32 {
+        if !self.initialized {
+            if overflow_estimate { 1. } else { 0. }
+        } else {
+            self.opacity_at(now)
+        }
+    }
+
+    /// Whether the shared fade still owes the window frames.
+    pub(crate) fn is_animating(&self, now: Instant) -> bool {
+        self.gate_started_at.is_some_and(|started_at| {
+            now.saturating_duration_since(started_at) < CAROUSEL_CONTROLS_FADE_DURATION
+        })
+    }
+
+    /// Whether this update changed the shown-or-hidden answer or settled
+    /// a running fade, so consumers that only re-render can catch up.
+    pub(crate) fn needs_render_sync(&self) -> bool {
+        self.needs_render_sync
+    }
+
+    /// Whether the paint has started driving this state yet.
+    pub(crate) fn is_initialized(&self) -> bool {
+        self.initialized
+    }
+
+    /// Seconds since the controls' last activity, if the show window ever
+    /// opened.
+    pub(crate) fn idle_for(&self, now: Instant) -> Option<f32> {
+        self.last_activity
+            .map(|last| now.saturating_duration_since(last).as_secs_f32())
+    }
+}
+
 #[derive(Clone)]
 struct CardScrollbarPaintState {
     viewport_hitbox: Hitbox,
-    track_hitbox: Hitbox,
+    track_hitbox: Option<Hitbox>,
     thumb_bounds: Bounds<Pixels>,
     max_extent: f32,
     thumb_travel: f32,
 }
 
-pub(crate) fn card_scrollbar(state: CardCarouselState, card_pitch: f32) -> impl IntoElement {
+pub(crate) fn card_scrollbar(
+    state: CardCarouselState,
+    card_pitch: f32,
+    controls_available: bool,
+) -> impl IntoElement {
     let prepaint_state = state.clone();
     let event_state = state.clone();
     let cursor_owner = DragCursorOwner::carousel(std::rc::Rc::as_ptr(&event_state.drag) as usize);
@@ -173,15 +318,27 @@ pub(crate) fn card_scrollbar(state: CardCarouselState, card_pitch: f32) -> impl 
                 viewport_bounds.size.width,
                 &prepaint_state.scroll_handle,
             );
+            // The track hitbox exists only while the shared controls are
+            // shown, so a hidden scrollbar cannot catch hovers, clicks, or
+            // drags. The viewport hitbox stays for the whole overflowing
+            // row: middle-button drags and wheel consumption belong to
+            // the row itself, not to the visible controls.
+            let track_hitbox = (prepaint_state
+                .controls_fade
+                .get()
+                .render_opacity(Instant::now(), controls_available)
+                > 0.)
+                .then(|| window.insert_hitbox(track_bounds, HitboxBehavior::Normal));
             CardScrollbarPaintState {
                 viewport_hitbox: window.insert_hitbox(viewport_bounds, HitboxBehavior::Normal),
-                track_hitbox: window.insert_hitbox(track_bounds, HitboxBehavior::Normal),
+                track_hitbox,
                 thumb_bounds: geometry.thumb_bounds,
                 max_extent: geometry.max_extent,
                 thumb_travel: geometry.thumb_travel,
             }
         },
         move |bounds, paint_data, window, cx| {
+            let offset = f32::from(event_state.scroll_handle.offset().x);
             let available = scrollbar_is_available(paint_data.max_extent);
             if !available {
                 if event_state.drag.take().is_some() {
@@ -189,28 +346,19 @@ pub(crate) fn card_scrollbar(state: CardCarouselState, card_pitch: f32) -> impl 
                     set_drag_cursor_owned(window, DragCursorState::Reset, cursor_owner);
                 }
                 show_state.hovered.set(false);
-                // A row that stops overflowing restarts its show window hidden.
-                show_state
-                    .last_scroll_offset
-                    .set(f32::from(event_state.scroll_handle.offset().x));
-                show_state.last_scroll_time.set(None);
-                return;
             }
+            let was_initialized = event_state.controls_fade.get().is_initialized();
             let now = Instant::now();
             let dragging = event_state.drag.get().is_some();
             let hovered = show_state.hovered.get();
-            refresh_scrollbar_activity(
-                &show_state,
-                f32::from(event_state.scroll_handle.offset().x),
-                hovered,
-                dragging,
-                now,
-            );
-            let elapsed = show_state
-                .last_scroll_time
-                .get()
-                .map(|last| now.saturating_duration_since(last).as_secs_f32());
-            let opacity = scrollbar_fade_opacity(elapsed, cx.reduce_motion());
+            let activity = available && scrollbar_activity(&show_state, offset, hovered, dragging);
+            show_state.last_scroll_offset.set(offset);
+            let mut fade = event_state.controls_fade.get();
+            fade.update(available, activity, now, cx.reduce_motion());
+            let opacity = fade.opacity_at(now);
+            let animating = fade.is_animating(now);
+            let needs_render_sync = fade.needs_render_sync();
+            event_state.controls_fade.set(fade);
             if opacity > 0. {
                 paint_scrollbar(
                     bounds,
@@ -222,32 +370,41 @@ pub(crate) fn card_scrollbar(state: CardCarouselState, card_pitch: f32) -> impl 
                     cx,
                 );
             }
-            // Drive the idle fade without hover or drag activity: wake once
-            // when the hold window ends, then animate every frame until the
-            // thumb is hidden.
-            if let Some(elapsed) = elapsed.filter(|_| !hovered && !dragging) {
-                if elapsed < CARD_SCROLLBAR_FADE_OUT_DELAY {
-                    schedule_scrollbar_fade_wakeup(
-                        &show_state,
-                        CARD_SCROLLBAR_FADE_OUT_DELAY - elapsed,
-                        window,
-                        cx,
-                    );
-                } else if opacity > 0. {
-                    window.request_animation_frame();
+            if available {
+                register_handlers(
+                    paint_data,
+                    event_state.drag.clone(),
+                    event_state.scroll_handle.clone(),
+                    event_state.snap_epoch.clone(),
+                    event_state.pending_target.clone(),
+                    card_pitch,
+                    cursor_owner,
+                    show_state.clone(),
+                    window,
+                );
+            }
+            // Drive the shared fade without hover or drag activity: wake
+            // once when the hold window ends, then animate every frame
+            // until the unit hides. States the paint has not driven yet
+            // skip this: skeleton carousels rebuild their state every
+            // render, and a settle must not arm an endless wakeup cycle.
+            if was_initialized && !hovered && !dragging {
+                if let Some(elapsed) = fade.idle_for(now) {
+                    if elapsed < CARD_SCROLLBAR_FADE_OUT_DELAY {
+                        schedule_scrollbar_fade_wakeup(
+                            &show_state,
+                            CARD_SCROLLBAR_FADE_OUT_DELAY - elapsed,
+                            window,
+                            cx,
+                        );
+                    } else if opacity > 0. {
+                        window.request_animation_frame();
+                    }
                 }
             }
-            register_handlers(
-                paint_data,
-                event_state.drag.clone(),
-                event_state.scroll_handle.clone(),
-                event_state.snap_epoch.clone(),
-                event_state.pending_target.clone(),
-                card_pitch,
-                cursor_owner,
-                show_state.clone(),
-                window,
-            );
+            if animating || needs_render_sync {
+                window.request_animation_frame();
+            }
         },
     )
     .absolute()
@@ -380,7 +537,13 @@ fn register_handlers(
             return;
         }
         match event.button {
-            MouseButton::Left if down_track.is_hovered(window) => {
+            MouseButton::Left => {
+                // The track only exists while the shared controls are
+                // shown; a hidden scrollbar ignores clicks on its lane.
+                let Some(track) = down_track.as_ref().filter(|track| track.is_hovered(window))
+                else {
+                    return;
+                };
                 carousel_motion::cancel(&down_snap_epoch, &down_pending_target);
                 if down_paint.max_extent <= 0. || down_paint.thumb_travel <= 0. {
                     return;
@@ -391,13 +554,13 @@ fn register_handlers(
                     || pointer_x > f32::from(thumb.right())
                 {
                     (pointer_x - f32::from(thumb.size.width) * 0.5).clamp(
-                        f32::from(down_paint.track_hitbox.bounds.origin.x),
-                        f32::from(down_paint.track_hitbox.bounds.right() - thumb.size.width),
+                        f32::from(track.bounds.origin.x),
+                        f32::from(track.bounds.right() - thumb.size.width),
                     )
                 } else {
                     f32::from(thumb.origin.x)
                 };
-                let progress = ((thumb_left - f32::from(down_paint.track_hitbox.bounds.origin.x))
+                let progress = ((thumb_left - f32::from(track.bounds.origin.x))
                     / down_paint.thumb_travel)
                     .clamp(0., 1.);
                 let start_offset = -down_paint.max_extent * progress;
@@ -408,7 +571,7 @@ fn register_handlers(
                     scale: down_paint.max_extent / down_paint.thumb_travel,
                     mode: CarouselDragMode::Scrollbar,
                 }));
-                window.capture_pointer(down_track.id);
+                window.capture_pointer(track.id);
                 window.prevent_default();
                 window.refresh();
                 cx.stop_propagation();
@@ -444,7 +607,9 @@ fn register_handlers(
         }
         if update_scrollbar_hover(
             &move_hover.hovered,
-            move_track.is_hovered(window),
+            move_track
+                .as_ref()
+                .is_some_and(|track| track.is_hovered(window)),
             move_drag.get().is_some(),
         ) {
             window.refresh();
@@ -518,7 +683,13 @@ fn register_handlers(
                     cx,
                     true,
                 );
-                if update_scrollbar_hover(&up_hover.hovered, up_track.is_hovered(window), false) {
+                if update_scrollbar_hover(
+                    &up_hover.hovered,
+                    up_track
+                        .as_ref()
+                        .is_some_and(|track| track.is_hovered(window)),
+                    false,
+                ) {
                     window.refresh();
                 }
             }
@@ -583,15 +754,15 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use gpui::{TestAppContext, prelude::*};
-    use gpui_component::ActiveTheme;
-
     use super::{
         CARD_SCROLLBAR_FADE_OUT_DELAY, CARD_SCROLLBAR_FADE_OUT_DURATION, CardScrollbarShowState,
-        ScrollbarThumbState, active_carousel_cursor_state, card_scrollbar_show_state,
-        refresh_scrollbar_activity, scrollbar_fade_opacity, scrollbar_is_available,
-        scrollbar_thumb_color, update_scrollbar_hover,
+        CarouselControlsFade, ScrollbarThumbState, active_carousel_cursor_state,
+        scrollbar_activity, scrollbar_fade_opacity, scrollbar_is_available, scrollbar_thumb_color,
+        update_scrollbar_hover,
     };
+    use crate::motion::CAROUSEL_CONTROLS_FADE_DURATION;
+    use gpui::{TestAppContext, prelude::*};
+    use gpui_component::ActiveTheme;
 
     #[test]
     fn only_middle_button_viewport_drags_own_the_closed_hand() {
@@ -670,37 +841,139 @@ mod tests {
     }
 
     #[test]
-    fn scrollbar_activity_refreshes_on_offset_hover_and_drag() {
+    fn scrollbar_activity_comes_from_offset_hover_and_drag() {
         let show_state = CardScrollbarShowState {
             owner: Weak::new(),
             hovered: Cell::new(false),
             last_scroll_offset: Cell::new(0.),
-            last_scroll_time: Cell::new(None),
             fade_wakeup_scheduled: Cell::new(false),
         };
-        let t0 = Instant::now();
 
         // A still, unhovered row is not activity.
-        refresh_scrollbar_activity(&show_state, 0., false, false, t0);
-        assert_eq!(show_state.last_scroll_time.get(), None);
-
+        assert!(!scrollbar_activity(&show_state, 0., false, false));
         // Any offset change refreshes the show window.
-        refresh_scrollbar_activity(&show_state, -40., false, false, t0);
-        assert_eq!(show_state.last_scroll_time.get(), Some(t0));
-        assert_eq!(show_state.last_scroll_offset.get(), -40.);
+        assert!(scrollbar_activity(&show_state, -40., false, false));
+        show_state.last_scroll_offset.set(-40.);
+        assert!(!scrollbar_activity(&show_state, -40., false, false));
+        // Hover and drags hold the controls visible without offset changes.
+        assert!(scrollbar_activity(&show_state, -40., true, false));
+        assert!(scrollbar_activity(&show_state, -40., false, true));
+    }
 
-        // Hover and drags hold the thumb visible without offset changes.
-        let t1 = t0 + Duration::from_secs(5);
-        refresh_scrollbar_activity(&show_state, -40., true, false, t1);
-        assert_eq!(show_state.last_scroll_time.get(), Some(t1));
-        let t2 = t1 + Duration::from_secs(5);
-        refresh_scrollbar_activity(&show_state, -40., false, true, t2);
-        assert_eq!(show_state.last_scroll_time.get(), Some(t2));
+    #[test]
+    fn controls_fade_settles_on_the_first_update() {
+        let now = Instant::now();
 
-        // Going idle again leaves the show window to age out.
-        let t3 = t2 + Duration::from_secs(5);
-        refresh_scrollbar_activity(&show_state, -40., false, false, t3);
-        assert_eq!(show_state.last_scroll_time.get(), Some(t2));
+        // A freshly measured overflowing row shows its controls right away,
+        // without starting a fade: skeleton carousels rebuild their state
+        // every render and must neither flicker nor drive frames.
+        let mut shown = CarouselControlsFade::default();
+        assert_eq!(shown.render_opacity(now, true), 1.);
+        assert_eq!(shown.render_opacity(now, false), 0.);
+        shown.update(true, false, now, false);
+        assert_eq!(shown.opacity_at(now), 1.);
+        assert!(!shown.is_animating(now));
+        assert!(!shown.needs_render_sync());
+
+        // A freshly measured row that fits stays hidden.
+        let mut hidden = CarouselControlsFade::default();
+        hidden.update(false, false, now, false);
+        assert_eq!(hidden.opacity_at(now), 0.);
+        assert!(!hidden.is_animating(now));
+        assert!(!hidden.needs_render_sync());
+
+        // Once the paint drives the state, render consumers follow it
+        // instead of the caller's estimate.
+        assert_eq!(shown.render_opacity(now, false), 1.);
+        assert_eq!(hidden.render_opacity(now, true), 0.);
+    }
+
+    #[test]
+    fn controls_fade_animates_the_overflow_flip_together() {
+        let now = Instant::now();
+        let mut fade = CarouselControlsFade::default();
+        fade.update(false, false, now, false);
+        assert_eq!(fade.opacity_at(now), 0.);
+
+        // Becoming scrollable fades the whole unit in from hidden.
+        fade.update(true, false, now, false);
+        assert!(fade.is_animating(now));
+        assert_eq!(fade.opacity_at(now), 0.);
+        let midpoint = now + CAROUSEL_CONTROLS_FADE_DURATION / 2;
+        assert!((fade.opacity_at(midpoint) - 0.5).abs() < 1e-3);
+        let done = now + CAROUSEL_CONTROLS_FADE_DURATION;
+        assert_eq!(fade.opacity_at(done), 1.);
+        assert!(!fade.is_animating(done));
+        // The settling frame still owes one render sync.
+        fade.update(true, false, done, false);
+        assert_eq!(fade.opacity_at(done), 1.);
+        assert!(!fade.is_animating(done));
+        assert!(fade.needs_render_sync());
+        fade.update(true, false, done, false);
+        assert!(!fade.needs_render_sync());
+
+        // Stopping the overflow fades the unit out from shown, even while
+        // the row is still being interacted with.
+        fade.update(false, true, done, false);
+        assert!(fade.is_animating(done));
+        assert_eq!(fade.opacity_at(done), 1.);
+        let out_mid = done + CAROUSEL_CONTROLS_FADE_DURATION / 2;
+        assert!((fade.opacity_at(out_mid) - 0.5).abs() < 1e-3);
+        let out_done = done + CAROUSEL_CONTROLS_FADE_DURATION;
+        assert_eq!(fade.opacity_at(out_done), 0.);
+    }
+
+    #[test]
+    fn controls_fade_snaps_under_reduced_motion() {
+        let now = Instant::now();
+        let mut fade = CarouselControlsFade::default();
+        fade.update(false, false, now, false);
+
+        fade.update(true, false, now, true);
+        assert_eq!(fade.opacity_at(now), 1.);
+        assert!(!fade.is_animating(now));
+        assert!(fade.needs_render_sync());
+
+        fade.update(false, false, now, true);
+        assert_eq!(fade.opacity_at(now), 0.);
+        assert!(!fade.is_animating(now));
+    }
+
+    #[test]
+    fn controls_fade_composes_with_the_activity_window() {
+        let now = Instant::now();
+        let mut fade = CarouselControlsFade::default();
+        fade.update(true, false, now, false);
+        assert_eq!(fade.opacity_at(now), 1.);
+
+        // Going idle past the hold window fades the unit out while the
+        // row keeps overflowing.
+        let idle = now + Duration::from_secs_f32(CARD_SCROLLBAR_FADE_OUT_DELAY + 0.5);
+        fade.update(true, false, idle, false);
+        let tail = fade.opacity_at(idle);
+        assert!(tail > 0. && tail < 1.);
+
+        // Scroll activity brings the whole unit back.
+        fade.update(true, true, idle, false);
+        assert_eq!(fade.opacity_at(idle), 1.);
+
+        // The overflow gate wins over activity: losing the overflow fades
+        // the unit out regardless.
+        fade.update(false, true, idle, false);
+        assert!(fade.is_animating(idle));
+        let gone = idle + CAROUSEL_CONTROLS_FADE_DURATION;
+        assert_eq!(fade.opacity_at(gone), 0.);
+        // Fully hidden means the controls owe one render sync so the
+        // arrows can drop to their inert shells.
+        fade.update(false, false, gone, false);
+        assert!(fade.needs_render_sync());
+        assert_eq!(fade.opacity_at(gone), 0.);
+    }
+
+    #[test]
+    fn controls_fade_duration_stays_in_the_polish_range() {
+        assert!(CAROUSEL_CONTROLS_FADE_DURATION >= Duration::from_millis(150));
+        assert!(CAROUSEL_CONTROLS_FADE_DURATION <= Duration::from_millis(250));
     }
 
     #[gpui::test]
@@ -734,7 +1007,6 @@ mod tests {
         }
 
         let state = super::CardCarouselState::new();
-        let show_state = card_scrollbar_show_state(&state.drag);
         let view = cx.update(|_, cx| cx.new(|_| CarouselHost(state.clone())));
         let draw = |cx: &mut gpui::VisualTestContext, view: &gpui::Entity<CarouselHost>| {
             cx.draw(
@@ -747,22 +1019,130 @@ mod tests {
             );
         };
 
-        // A fresh row has not scrolled, so the thumb stays hidden.
+        // A fresh overflowing row settles its controls shown right away.
         draw(cx, &view);
-        assert_eq!(show_state.last_scroll_time.get(), None);
+        let fade = state.controls_fade.get();
+        assert!(fade.is_initialized());
+        assert_eq!(fade.opacity_at(Instant::now()), 1.);
 
-        // Scrolling counts as activity and holds the thumb fully visible.
+        // Scrolling counts as activity and refreshes the show window.
         let extent = f32::from(state.scroll_handle.max_offset().x);
         assert!(extent > 0.);
         state
             .scroll_handle
             .set_offset(gpui::point(gpui::px(-(extent - 20.)), gpui::px(0.)));
         draw(cx, &view);
-        let elapsed = show_state
-            .last_scroll_time
-            .get()
-            .map(|last| last.elapsed().as_secs_f32());
-        assert!(elapsed.is_some());
-        assert_eq!(scrollbar_fade_opacity(elapsed, false), 1.);
+        let fade = state.controls_fade.get();
+        let elapsed = fade.idle_for(Instant::now()).expect("activity recorded");
+        assert!(elapsed < CARD_SCROLLBAR_FADE_OUT_DELAY);
+        assert_eq!(fade.opacity_at(Instant::now()), 1.);
+    }
+
+    #[gpui::test]
+    fn controls_fade_follows_the_rendered_overflow_flip(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::configure_component_theme(cx);
+        });
+
+        // The host derives the caller's overflow estimate from the live
+        // viewport width exactly like the real callers, so resizing the
+        // window drives the whole flip.
+        struct CarouselHost(super::CardCarouselState);
+        impl gpui::Render for CarouselHost {
+            fn render(
+                &mut self,
+                window: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                let width = f32::from(window.viewport_size().width);
+                crate::music_ui::card_carousel(
+                    "controls-fade-wiring",
+                    self.0.clone(),
+                    150.,
+                    12.,
+                    crate::music_ui::card_carousel_has_overflow(8, 150., 12., width, 0.),
+                    gpui::div()
+                        .flex()
+                        .flex_none()
+                        .children((0..8).map(|_| gpui::div().w(gpui::px(150.)).h(gpui::px(196.))))
+                        .into_any_element(),
+                )
+            }
+        }
+
+        // Eight cards need 1284 pixels, so the row only overflows below
+        // that width.
+        let state = super::CardCarouselState::new();
+        let window = cx.add_window({
+            let state = state.clone();
+            move |_, _| CarouselHost(state)
+        });
+        let cx = &mut gpui::VisualTestContext::from_window(gpui::AnyWindowHandle::from(window), cx);
+        let resize = |cx: &mut gpui::VisualTestContext, width: f32| {
+            cx.simulate_resize(gpui::size(gpui::px(width), gpui::px(300.)));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+        };
+        let fade_opacity =
+            |state: &super::CardCarouselState| state.controls_fade.get().opacity_at(Instant::now());
+        let click_next_arrow = |cx: &mut gpui::VisualTestContext, width: f32| {
+            cx.simulate_click(
+                gpui::point(gpui::px(width - 5.), gpui::px(295.)),
+                gpui::Modifiers::default(),
+            );
+        };
+
+        // Wide enough to fit: whatever the opening size measured, resizing
+        // wide settles the controls hidden.
+        resize(cx, 1600.);
+        std::thread::sleep(CAROUSEL_CONTROLS_FADE_DURATION + Duration::from_millis(50));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(fade_opacity(&state), 0.);
+        assert!(!state.controls_fade.get().is_animating(Instant::now()));
+        click_next_arrow(cx, 1600.);
+        assert_eq!(state.pending_target.get(), None);
+
+        // Resizing across the overflow boundary fades the controls in
+        // instead of snapping them visible.
+        resize(cx, 400.);
+        assert!(state.controls_fade.get().is_animating(Instant::now()));
+        assert!(fade_opacity(&state) < 0.5);
+
+        // The fade progresses frame by frame and settles shown.
+        std::thread::sleep(CAROUSEL_CONTROLS_FADE_DURATION + Duration::from_millis(50));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(fade_opacity(&state), 1.);
+        assert!(!state.controls_fade.get().is_animating(Instant::now()));
+
+        // While shown, the arrow is a real button: clicking it scrolls.
+        state.pending_target.set(None);
+        click_next_arrow(cx, 400.);
+        assert_eq!(state.pending_target.get(), Some(-162.));
+
+        // Resizing back across the boundary fades the controls out
+        // instead of snapping them hidden.
+        resize(cx, 1600.);
+        assert!(state.controls_fade.get().is_animating(Instant::now()));
+        assert!(fade_opacity(&state) > 0.5);
+
+        // Once fully hidden, the arrow lane intercepts nothing again.
+        std::thread::sleep(CAROUSEL_CONTROLS_FADE_DURATION + Duration::from_millis(50));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(fade_opacity(&state), 0.);
+        state.pending_target.set(None);
+        click_next_arrow(cx, 1600.);
+        assert_eq!(state.pending_target.get(), None);
     }
 }

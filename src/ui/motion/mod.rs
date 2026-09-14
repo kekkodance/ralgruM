@@ -21,9 +21,9 @@ pub(crate) const SKELETON_LOOP_DURATION: Duration = Duration::from_millis(1400);
 /// How long a freshly loaded artwork image takes to fade in. The placeholder
 /// beneath it stays visible for the whole window.
 pub(crate) const ARTWORK_REVEAL_DURATION: Duration = Duration::from_millis(180);
-/// How long a carousel edge darkening takes to fade in or out once its edge
-/// appears or disappears while scrolling.
-pub(crate) const CAROUSEL_EDGE_FADE_DURATION: Duration = Duration::from_millis(180);
+/// How long the carousel's horizontal scrollbar and both arrows take to
+/// fade in or out together once the row starts or stops overflowing.
+pub(crate) const CAROUSEL_CONTROLS_FADE_DURATION: Duration = Duration::from_millis(180);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ResponsiveModeVisual {
