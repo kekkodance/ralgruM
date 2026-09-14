@@ -204,13 +204,12 @@ pub(super) fn render_tracks(
                     &fixed_scroll,
                     narrow,
                 )),
-            list_state,
+            fixed_scroll.clone(),
             cx,
-        )
-        .into_any_element();
+        );
         return browser_scroll_surface(
             "search-track-list-scroll",
-            content,
+            content.into_any_element(),
             BrowserScrollTarget::FixedList(fixed_scroll),
             browser_scroll,
         );
@@ -228,7 +227,7 @@ pub(super) fn render_tracks(
 
 fn playlist_drag_surface(
     surface: gpui::Div,
-    list_state: gpui::ListState,
+    scroll: FixedListScrollHandle,
     cx: &mut Context<SearchView>,
 ) -> gpui::Div {
     surface
@@ -243,7 +242,7 @@ fn playlist_drag_surface(
             }
         })
         .on_drag_move::<PlaylistTrackDrag>(cx.listener(move |this, event, window, cx| {
-            this.update_playlist_drag_autoscroll(event, list_state.clone(), cx);
+            this.update_playlist_drag_autoscroll(event, scroll.clone(), cx);
             set_drag_cursor_owned(
                 window,
                 DragCursorState::Grabbing,

@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use crate::{
     assets::{LocalIcon, local_icon},
-    browser_scroll::{BrowserScrollState, BrowserScrollTarget, browser_scroll_surface},
+    browser_scroll::{
+        BrowserScrollState, BrowserScrollTarget, FixedListScrollHandle, browser_scroll_surface,
+    },
     drag_cursor::{DragCursorOwner, DragCursorState, grabbing_cursor, set_drag_cursor_owned},
     library::{FavoriteKey, FavoriteKind, FavoriteState, LibraryView, flow_controls},
     search::SearchView,
@@ -17,8 +19,8 @@ use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use super::{
     PlaybackContext, PlaybackModel,
     queue_list::{
-        QueueListChange, QueueListIdentity, QueueRowSnapshot, clamp_drag_offset, list_change,
-        should_extend, track_index_for_list_item,
+        QueueListChange, QueueListIdentity, QueueRowSnapshot, list_change, should_extend,
+        track_index_for_list_item,
     },
     queue_rows::row,
 };
@@ -112,7 +114,7 @@ fn request_extension_if_needed(
     playback.read(cx).extension_in_flight()
 }
 
-fn queue_scrollbar_lane(list_state: &ListState, narrow: bool) -> impl IntoElement {
+fn queue_scrollbar_lane(scroll: &FixedListScrollHandle, narrow: bool) -> impl IntoElement {
     div()
         .absolute()
         .top_0()
@@ -123,7 +125,7 @@ fn queue_scrollbar_lane(list_state: &ListState, narrow: bool) -> impl IntoElemen
         .left_0()
         .when(narrow, |this| this.right_0())
         .when(!narrow, |this| this.right(px(-24.)))
-        .child(Scrollbar::vertical(list_state).scrollbar_show(ScrollbarShow::Hover))
+        .child(Scrollbar::vertical(scroll).scrollbar_show(ScrollbarShow::Hover))
 }
 
 pub(crate) struct QueuePanel {
@@ -229,14 +231,33 @@ impl QueuePanel {
         } else {
             return true;
         };
-        let current_offset = self.list_state.scroll_px_offset_for_scrollbar();
-        let max_offset = self.list_state.max_offset_for_scrollbar();
-        let target_y =
-            clamp_drag_offset(f32::from(current_offset.y), f32::from(max_offset.y), delta);
-        self.list_state
-            .set_offset_from_scrollbar(point(current_offset.x, px(target_y)));
+        let scroll = self.fixed_scroll_handle();
+        let target_y = (scroll.position() + delta).clamp(0., scroll.maximum());
+        scroll.set_position(target_y);
         cx.notify();
         true
+    }
+
+    /// Exact scroll math for the queue list. Queue rows are all the same fixed
+    /// height, so the fixed-height adapter keeps the scrollbar thumb, wheel
+    /// bounds, and drag autoscroll clamps exact even while gpui has discarded
+    /// the list's cached heights and size hints after a width change.
+    fn fixed_scroll_handle(&self) -> FixedListScrollHandle {
+        FixedListScrollHandle::new(
+            self.list_state.clone(),
+            self.list_identity.item_count(),
+            px(QUEUE_ITEM_HEIGHT_PX),
+        )
+        .with_tail_padding(px(QUEUE_BOTTOM_PADDING_PX))
+    }
+
+    /// Whether the queue sits at the very bottom of its scroll range, using the
+    /// fixed-height math so the answer stays exact even when gpui has
+    /// discarded the list's cached heights and size hints. The one pixel
+    /// tolerance mirrors gpui's own scrollbar end-of-drag check.
+    fn is_scrolled_to_end(&self) -> bool {
+        let scroll = self.fixed_scroll_handle();
+        scroll.maximum() > 0. && scroll.position() >= scroll.maximum() - 1.
     }
 
     /// Keeps scrolling while the pointer rests near an edge, not only while it
@@ -500,13 +521,10 @@ impl Render for QueuePanel {
 
         let extension_started = if context_infinite && count == 0 && !extend_in_flight {
             self.request_extension(cx)
-        } else if context_infinite
-            && count > 0
-            && !extend_in_flight
-            && self.list_state.is_scrolled_to_end() == Some(true)
-        {
-            // Scrollbar drags do not emit wheel events. Consult ListState after
-            // layout so reaching the exact end still extends the queue.
+        } else if context_infinite && count > 0 && !extend_in_flight && self.is_scrolled_to_end() {
+            // Scrollbar drags do not emit wheel events. Consult the scroll
+            // state after layout so reaching the exact end still extends the
+            // queue.
             self.request_extension(cx)
         } else {
             false
@@ -609,10 +627,15 @@ impl Render for QueuePanel {
         };
         let queue_scroll =
             queue_scroll.when(narrow, |this| this.pr(px(QUEUE_NARROW_CONTENT_INSET_PX)));
+        // The fixed-height adapter gives the scrollbar and the wheel math an
+        // exact extent: gpui discards the list's size hints after a width
+        // change, which would otherwise leave unmeasured rows at zero height
+        // and make the thumb drift while scrolling a large queue.
+        let fixed_scroll = self.fixed_scroll_handle();
         let queue_scroll = browser_scroll_surface(
             "queue-browser-scroll",
             queue_scroll.into_any_element(),
-            BrowserScrollTarget::List(self.list_state.clone()),
+            BrowserScrollTarget::FixedList(fixed_scroll.clone()),
             self.browser_scroll.clone(),
         );
 
@@ -707,7 +730,7 @@ impl Render for QueuePanel {
                     .flex_1()
                     .min_h_0()
                     .child(queue_scroll)
-                    .child(queue_scrollbar_lane(&self.list_state, narrow)),
+                    .child(queue_scrollbar_lane(&fixed_scroll, narrow)),
             )
     }
 }
@@ -768,6 +791,90 @@ fn empty_queue_state(extend_in_flight: bool) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn queue_scroll_math_stays_exact_across_gpui_hint_discards(cx: &mut gpui::TestAppContext) {
+        use gpui_component::scroll::ScrollbarHandle;
+
+        // Mirrors the queue list: fixed-height rows with a uniform height
+        // hint, tail padding inside the scrollable content, and the
+        // fixed-height scroll handle the panel uses for scrollbar and wheel
+        // math. gpui discards cached heights and size hints on the first
+        // layout and on every width change, which leaves unmeasured rows at
+        // zero height in the raw ListState; the handle must stay exact.
+        struct QueueListProbe(gpui::ListState);
+        impl gpui::Render for QueueListProbe {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div().size_full().child(
+                    gpui::list(self.0.clone(), |_, _, _| {
+                        gpui::div()
+                            .w_full()
+                            .h(px(QUEUE_ITEM_HEIGHT_PX))
+                            .flex_none()
+                            .into_any_element()
+                    })
+                    .w_full()
+                    .h_full()
+                    .pb(px(QUEUE_BOTTOM_PADDING_PX)),
+                )
+            }
+        }
+
+        const ROWS: usize = 120;
+        let content_height = ROWS as f32 * QUEUE_ITEM_HEIGHT_PX + QUEUE_BOTTOM_PADDING_PX;
+        let state =
+            gpui::ListState::new(ROWS, gpui::ListAlignment::Top, px(QUEUE_LIST_OVERDRAW_PX))
+                .with_uniform_item_height(px(QUEUE_ITEM_HEIGHT_PX));
+        let scroll = FixedListScrollHandle::new(state.clone(), ROWS, px(QUEUE_ITEM_HEIGHT_PX))
+            .with_tail_padding(px(QUEUE_BOTTOM_PADDING_PX));
+        let window = cx.add_window({
+            let state = state.clone();
+            |_, _| QueueListProbe(state)
+        });
+        let mut visual =
+            gpui::VisualTestContext::from_window(gpui::AnyWindowHandle::from(window), cx);
+        visual.simulate_resize(gpui::size(px(320.), px(600.)));
+        visual.run_until_parked();
+
+        // First layout: the raw extent only counts measured rows while the
+        // handle reports the exact content size from the first frame.
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(f32::from(scroll.content_size().height), content_height);
+        assert_eq!(scroll.maximum(), content_height - 600.);
+
+        // Wheel scrolling deep into the list maps to exact item positions.
+        scroll.set_position(3000.);
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(scroll.position(), 3000.);
+        assert_eq!(
+            state.logical_scroll_top().item_ix,
+            (3000. / QUEUE_ITEM_HEIGHT_PX) as usize
+        );
+
+        // A width change (sidebar animation, window resize) discards the
+        // list's cached heights, but the handle keeps both bounds and the
+        // current position exact.
+        visual.simulate_resize(gpui::size(px(300.), px(600.)));
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(f32::from(scroll.content_size().height), content_height);
+        assert_eq!(scroll.maximum(), content_height - 600.);
+        assert_eq!(scroll.position(), 3000.);
+
+        // Dragging the thumb to the very bottom reaches the exact end, which
+        // is what re-arms infinite queue extension.
+        scroll.set_position(f32::INFINITY);
+        assert_eq!(scroll.position(), scroll.maximum());
+    }
 
     #[test]
     fn queue_title_reflects_playback_context() {
@@ -858,7 +965,7 @@ mod tests {
             .expect("queue header should be present");
         let viewport_wrapper = implementation
             .find(
-                ".child(\n                div()\n                    .relative()\n                    .flex()\n                    .flex_col()\n                    .flex_1()\n                    .min_h_0()\n                    .child(queue_scroll)\n                    .child(queue_scrollbar_lane(&self.list_state, narrow)),\n            )",
+                ".child(\n                div()\n                    .relative()\n                    .flex()\n                    .flex_col()\n                    .flex_1()\n                    .min_h_0()\n                    .child(queue_scroll)\n                    .child(queue_scrollbar_lane(&fixed_scroll, narrow)),\n            )",
             )
             .expect("scrollbar and queue should share a viewport wrapper");
         assert!(header < viewport_wrapper);
@@ -871,7 +978,15 @@ mod tests {
         assert!(implementation.contains(".pb(px(QUEUE_BOTTOM_PADDING_PX))"));
         assert!(implementation.contains(".right(px(-24.))"));
         assert!(implementation.contains(".right_0()"));
-        assert!(implementation.contains("Scrollbar::vertical(list_state)"));
+        // The lane must read the fixed-height handle, never the raw
+        // ListState: gpui discards size hints on width changes, which would
+        // make unmeasured rows count as zero height.
+        assert!(
+            implementation
+                .contains("fn queue_scrollbar_lane(scroll: &FixedListScrollHandle, narrow: bool)")
+        );
+        assert!(implementation.contains("Scrollbar::vertical(scroll)"));
+        assert!(implementation.contains(".with_tail_padding(px(QUEUE_BOTTOM_PADDING_PX))"));
         assert!(implementation.contains("ScrollbarShow::Hover"));
 
         // Outer scroll container must not carry persistent bottom padding.
@@ -979,7 +1094,7 @@ mod tests {
             .find(".child(queue_scroll)")
             .map(|offset| wrapper_end + offset)
             .expect("browser scroll should wrap content before it is rendered");
-        let viewport_marker = ".child(\n                div()\n                    .relative()\n                    .flex()\n                    .flex_col()\n                    .flex_1()\n                    .min_h_0()\n                    .child(queue_scroll)\n                    .child(queue_scrollbar_lane(&self.list_state, narrow)),";
+        let viewport_marker = ".child(\n                div()\n                    .relative()\n                    .flex()\n                    .flex_col()\n                    .flex_1()\n                    .min_h_0()\n                    .child(queue_scroll)\n                    .child(queue_scrollbar_lane(&fixed_scroll, narrow)),";
         let viewport_start = render
             .find(viewport_marker)
             .expect("browser scroll should be scoped to the list viewport");
@@ -988,7 +1103,7 @@ mod tests {
         assert!(wrapper_end < queue_scroll_child);
 
         assert!(wrapper.contains("queue_scroll.into_any_element()"));
-        assert!(wrapper.contains("BrowserScrollTarget::List(self.list_state.clone())"));
+        assert!(wrapper.contains("BrowserScrollTarget::FixedList(fixed_scroll.clone())"));
         assert!(wrapper.contains("self.browser_scroll.clone()"));
         assert!(!wrapper.contains("queue_scrollbar_lane"));
 
@@ -996,7 +1111,7 @@ mod tests {
             .find(".child(queue_scroll)")
             .expect("queue scroll should be a viewport child");
         let viewport_scrollbar_lane = viewport
-            .find(".child(queue_scrollbar_lane(&self.list_state, narrow))")
+            .find(".child(queue_scrollbar_lane(&fixed_scroll, narrow))")
             .expect("scrollbar lane should be a viewport child");
         assert!(viewport_queue_scroll < viewport_scrollbar_lane);
     }

@@ -78,10 +78,6 @@ pub(super) fn track_index_for_list_item(item_index: usize, track_count: usize) -
     (item_index < track_count).then_some(item_index)
 }
 
-pub(super) fn clamp_drag_offset(current_offset_px: f32, max_offset_px: f32, delta_px: f32) -> f32 {
-    (current_offset_px - delta_px).clamp(-max_offset_px.max(0.0), 0.0)
-}
-
 /// Decide whether a list scroll event is close enough to the tail to extend an
 /// infinite queue. The end of the visible range is exact when it reaches the
 /// track count, while the row threshold preserves the old pixel-based trigger.
@@ -172,12 +168,5 @@ mod tests {
         assert!(should_extend(9..10, 10, 59.0, 180.0, true, false));
         assert!(!should_extend(9..10, 10, 59.0, 180.0, false, false));
         assert!(!should_extend(9..10, 10, 59.0, 180.0, true, true));
-    }
-
-    #[test]
-    fn drag_offset_clamps_at_both_scroll_bounds() {
-        assert_eq!(clamp_drag_offset(-100.0, 120.0, 20.0), -120.0);
-        assert_eq!(clamp_drag_offset(-120.0, 120.0, 20.0), -120.0);
-        assert_eq!(clamp_drag_offset(-1.0, 100.0, -20.0), 0.0);
     }
 }

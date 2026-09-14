@@ -307,7 +307,7 @@ pub(super) fn tracks(
                     &fixed_scroll,
                     narrow,
                 )),
-            list_state,
+            fixed_scroll.clone(),
             cx,
         )
         .into_any_element();

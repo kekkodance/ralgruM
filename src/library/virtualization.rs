@@ -188,12 +188,21 @@ where
         .into_any_element()
 }
 
-pub(crate) fn page_list(
+/// Render a virtualized page of mixed items with its scrollbar lane.
+///
+/// The `scroll` handle feeds the scrollbar. Callers with fixed-height rows
+/// pass a `FixedListScrollHandle` so the thumb stays exact when gpui discards
+/// size hints; callers whose list state measures all rows can pass the raw
+/// `ListState` because its extent is already exact.
+pub(crate) fn page_list<H>(
     state: ListState,
+    scroll: H,
     builders: Rc<Vec<PageItemBuilder>>,
     narrow: bool,
-) -> AnyElement {
-    let scrollbar_state = state.clone();
+) -> AnyElement
+where
+    H: gpui_component::scroll::ScrollbarHandle + Clone,
+{
     let list = gpui::list(state, move |index, window, app| {
         builders[index](window, app)
     });
@@ -203,7 +212,7 @@ pub(crate) fn page_list(
         .min_h_0()
         .relative()
         .child(list.w_full().h_full().min_h_0())
-        .child(library_vertical_scrollbar(&scrollbar_state, narrow))
+        .child(library_vertical_scrollbar(&scroll, narrow))
         .into_any_element()
 }
 

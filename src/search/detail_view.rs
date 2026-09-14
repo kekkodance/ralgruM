@@ -501,11 +501,19 @@ fn render_artist_section_list(
     let identity = crate::library::virtualization::content_identity(&route_key, "", ordered_rows);
     let layout =
         crate::library::virtualization::TrackListLayout::new(narrow, provider_icon_only, true);
-    let state = view.track_list_state(&identity, builders.len(), layout);
+    // The artist page mixes natural-height rows (section headings, card grid
+    // rows, track slots), so the state measures every row up front: the raw
+    // list state then reports exact extents to the scrollbar and wheel math.
+    let state = view.measured_track_list_state(&identity, builders.len(), layout);
     let browser_scroll = view.track_list_browser_scroll(&identity);
     browser_scroll_surface(
         "search-artist-section-list-scroll",
-        crate::library::virtualization::page_list(state.clone(), Rc::new(builders), narrow),
+        crate::library::virtualization::page_list(
+            state.clone(),
+            state.clone(),
+            Rc::new(builders),
+            narrow,
+        ),
         BrowserScrollTarget::List(state),
         browser_scroll,
     )
@@ -1083,6 +1091,24 @@ mod layout_tests {
         assert!(implementation.contains("tracks_only,"));
         assert!(implementation.contains("if tracks_only { None } else { expanded }"));
         assert!(implementation.contains("render_shared_artist_section_header"));
+    }
+
+    #[test]
+    fn artist_section_list_measures_all_rows_for_exact_scroll_extents() {
+        let implementation = include_str!("detail_view.rs")
+            .split_once("#[cfg(test)]")
+            .map_or_else(
+                || panic!("detail view implementation section is missing"),
+                |(implementation, _)| implementation,
+            );
+        // Natural-height rows (headings, card grid rows, track slots) need
+        // the measured-all state: lazily measured rows would leave the
+        // scrollbar extent growing as rows scroll into view.
+        assert!(
+            implementation
+                .contains("view.measured_track_list_state(&identity, builders.len(), layout)")
+        );
+        assert!(implementation.contains("BrowserScrollTarget::List(state)"));
     }
 
     #[test]

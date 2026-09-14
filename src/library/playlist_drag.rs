@@ -1,10 +1,8 @@
 use std::time::Duration;
 
-use gpui::{
-    Bounds, Context, DragMoveEvent, IntoElement, ListState, Pixels, Render, Window, div, point,
-    prelude::*, px,
-};
+use gpui::{Bounds, Context, DragMoveEvent, Pixels, Render, Window, div, prelude::*, px};
 
+use crate::browser_scroll::FixedListScrollHandle;
 use crate::drag_cursor::{
     DragCursorOwner, DragCursorState, grabbing_cursor, set_drag_cursor_owned,
 };
@@ -28,18 +26,18 @@ pub(crate) struct PlaylistTrackDragGhost {
 pub(crate) struct PlaylistDragAutoScroll {
     pointer_y: Pixels,
     viewport: Bounds<Pixels>,
-    list_state: ListState,
+    scroll: FixedListScrollHandle,
 }
 
 impl PlaylistDragAutoScroll {
     pub(crate) fn from_event(
         event: &DragMoveEvent<PlaylistTrackDrag>,
-        list_state: ListState,
+        scroll: FixedListScrollHandle,
     ) -> Self {
         Self {
             pointer_y: event.event.position.y,
             viewport: event.bounds,
-            list_state,
+            scroll,
         }
     }
 
@@ -48,12 +46,10 @@ impl PlaylistDragAutoScroll {
         if delta == 0. {
             return;
         }
-        let current_offset = self.list_state.scroll_px_offset_for_scrollbar();
-        let max_offset = self.list_state.max_offset_for_scrollbar();
-        let target_y =
-            clamp_drag_offset(f32::from(current_offset.y), f32::from(max_offset.y), delta);
-        self.list_state
-            .set_offset_from_scrollbar(point(current_offset.x, px(target_y)));
+        // Fixed-height math keeps the bounds exact even while gpui has
+        // discarded the list's cached heights and size hints.
+        let target_y = (self.scroll.position() + delta).clamp(0., self.scroll.maximum());
+        self.scroll.set_position(target_y);
     }
 }
 
@@ -67,18 +63,14 @@ fn drag_scroll_delta(pointer_y: Pixels, viewport: Bounds<Pixels>) -> f32 {
     }
 }
 
-fn clamp_drag_offset(current_offset_px: f32, max_offset_px: f32, delta_px: f32) -> f32 {
-    (current_offset_px - delta_px).clamp(-max_offset_px.max(0.), 0.)
-}
-
 impl LibraryView {
     pub(super) fn update_playlist_drag_autoscroll(
         &mut self,
         event: &DragMoveEvent<PlaylistTrackDrag>,
-        list_state: ListState,
+        scroll: FixedListScrollHandle,
         cx: &mut Context<Self>,
     ) {
-        self.playlist_drag_scroll = Some(PlaylistDragAutoScroll::from_event(event, list_state));
+        self.playlist_drag_scroll = Some(PlaylistDragAutoScroll::from_event(event, scroll));
         self.run_playlist_drag_autoscroll(cx);
     }
 
@@ -132,7 +124,7 @@ impl Render for PlaylistTrackDragGhost {
 
 pub(super) fn playlist_drag_surface(
     surface: gpui::Stateful<gpui::Div>,
-    list_state: ListState,
+    scroll: FixedListScrollHandle,
     cx: &mut Context<LibraryView>,
 ) -> gpui::Stateful<gpui::Div> {
     surface
@@ -147,7 +139,7 @@ pub(super) fn playlist_drag_surface(
             }
         })
         .on_drag_move::<PlaylistTrackDrag>(cx.listener(move |this, event, window, cx| {
-            this.update_playlist_drag_autoscroll(event, list_state.clone(), cx);
+            this.update_playlist_drag_autoscroll(event, scroll.clone(), cx);
             set_drag_cursor_owned(
                 window,
                 DragCursorState::Grabbing,
@@ -160,6 +152,7 @@ pub(super) fn playlist_drag_surface(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::point;
 
     #[test]
     fn drag_edges_match_the_queue_autoscroll_contract() {
@@ -170,12 +163,5 @@ mod tests {
         assert_eq!(drag_scroll_delta(px(120.), viewport), -20.);
         assert_eq!(drag_scroll_delta(px(300.), viewport), 0.);
         assert_eq!(drag_scroll_delta(px(480.), viewport), 20.);
-    }
-
-    #[test]
-    fn drag_scroll_offset_stays_inside_the_list() {
-        assert_eq!(clamp_drag_offset(0., 200., -20.), 0.);
-        assert_eq!(clamp_drag_offset(0., 200., 20.), -20.);
-        assert_eq!(clamp_drag_offset(-190., 200., 20.), -200.);
     }
 }

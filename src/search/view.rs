@@ -494,6 +494,43 @@ impl SearchView {
         state
     }
 
+    /// Cached measured-all list state for pages whose rows have natural
+    /// heights, such as the artist section page. `measure_all` lays out every
+    /// row in the first prepaint, and gpui re-arms that pass on every width
+    /// change, so the scrollbar extent stays exact without pinning row
+    /// heights.
+    pub(super) fn measured_track_list_state(
+        &self,
+        identity: &str,
+        count: usize,
+        layout: TrackListLayout,
+    ) -> ListState {
+        let mut states = self.track_list_states.borrow_mut();
+        if let Some(cache) = states.get_mut(identity) {
+            if virtualization::list_state_needs_reset(Some(cache.shape), count, layout) {
+                cache.state.reset(count);
+                cache.shape = (count, layout);
+            }
+            return cache.state.clone();
+        }
+        if states.len() >= MAX_TRACK_LIST_STATES
+            && let Some(oldest) = states.keys().next().cloned()
+        {
+            states.remove(&oldest);
+        }
+        let state =
+            ListState::new(count, ListAlignment::Top, virtualization::overdraw()).measure_all();
+        states.insert(
+            identity.to_owned(),
+            TrackListCache {
+                state: state.clone(),
+                browser_scroll: BrowserScrollState::new(),
+                shape: (count, layout),
+            },
+        );
+        state
+    }
+
     pub(super) fn track_list_browser_scroll(&self, identity: &str) -> BrowserScrollState {
         self.track_list_states
             .borrow()
@@ -505,12 +542,11 @@ impl SearchView {
     pub(super) fn update_playlist_drag_autoscroll(
         &mut self,
         event: &DragMoveEvent<crate::library::playlist_drag::PlaylistTrackDrag>,
-        list_state: ListState,
+        scroll: crate::browser_scroll::FixedListScrollHandle,
         cx: &mut Context<Self>,
     ) {
-        self.playlist_drag_scroll = Some(
-            crate::library::playlist_drag::PlaylistDragAutoScroll::from_event(event, list_state),
-        );
+        self.playlist_drag_scroll =
+            Some(crate::library::playlist_drag::PlaylistDragAutoScroll::from_event(event, scroll));
         self.run_playlist_drag_autoscroll(cx);
     }
 
@@ -656,7 +692,9 @@ impl SearchView {
         // the rows measure. GPUI re-arms the measure pass on every width
         // change, re-measuring all rows at the new width within the same
         // prepaint, so the extent never collapses during a resize.
-        let state = ListState::new(item_count, ListAlignment::Top, overdraw).measure_all();
+        let state = ListState::new(item_count, ListAlignment::Top, overdraw)
+            .measure_all()
+            .width_independent_heights();
         let browser_scroll = BrowserScrollState::new();
         states.insert(
             identity.to_owned(),

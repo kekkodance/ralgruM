@@ -38,6 +38,9 @@ pub(crate) struct FixedListScrollHandle {
     state: ListState,
     item_count: usize,
     item_height: Pixels,
+    /// Scrollable space below the last row, such as bottom padding that lives
+    /// inside the list and scrolls with the tail.
+    tail_padding: Pixels,
 }
 
 impl FixedListScrollHandle {
@@ -46,7 +49,15 @@ impl FixedListScrollHandle {
             state,
             item_count,
             item_height: px(f32::from(item_height).max(1.)),
+            tail_padding: px(0.),
         }
+    }
+
+    /// Count extra scrollable space below the last row so the thumb can still
+    /// reach the fully scrolled state when the list carries tail padding.
+    pub(crate) fn with_tail_padding(mut self, padding: Pixels) -> Self {
+        self.tail_padding = padding.max(px(0.));
+        self
     }
 
     fn viewport_size(&self) -> Size<Pixels> {
@@ -54,21 +65,21 @@ impl FixedListScrollHandle {
     }
 
     fn content_height(&self) -> Pixels {
-        px(self.item_count as f32 * f32::from(self.item_height))
+        px(self.item_count as f32 * f32::from(self.item_height) + f32::from(self.tail_padding))
     }
 
-    fn position(&self) -> f32 {
+    pub(crate) fn position(&self) -> f32 {
         let offset = self.state.logical_scroll_top();
         (offset.item_ix.min(self.item_count) as f32 * f32::from(self.item_height)
             + f32::from(offset.offset_in_item).max(0.))
         .clamp(0., self.maximum())
     }
 
-    fn maximum(&self) -> f32 {
+    pub(crate) fn maximum(&self) -> f32 {
         (f32::from(self.content_height()) - f32::from(self.viewport_size().height)).max(0.)
     }
 
-    fn set_position(&self, position: f32) {
+    pub(crate) fn set_position(&self, position: f32) {
         let position = position.clamp(0., self.maximum());
         let item_height = f32::from(self.item_height);
         let item_ix = ((position / item_height).floor() as usize).min(self.item_count);
@@ -872,6 +883,23 @@ mod tests {
         assert_eq!(state.logical_scroll_top().item_ix, 99);
         assert_eq!(f32::from(state.logical_scroll_top().offset_in_item), 8.);
         assert_eq!(fixed.position(), 5750.);
+    }
+
+    #[test]
+    fn fixed_list_tail_padding_extends_the_scroll_range() {
+        use gpui_component::scroll::ScrollbarHandle;
+
+        let state =
+            ListState::new(100, ListAlignment::Top, px(0.)).with_uniform_item_height(px(58.));
+        let fixed = FixedListScrollHandle::new(state, 100, px(58.)).with_tail_padding(px(16.));
+
+        // The tail padding scrolls with the content, so the scrollbar sees
+        // the full extent and positions inside the rows stay exact.
+        assert_eq!(f32::from(fixed.content_size().height), 5816.);
+        assert_eq!(fixed.maximum(), 5816.);
+        fixed.set_position(5750.);
+        assert_eq!(fixed.position(), 5750.);
+        assert_eq!(fixed.scroll_offset(), point(px(0.), px(-5750.)));
     }
 
     #[gpui::test]

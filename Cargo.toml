@@ -82,5 +82,18 @@ opt-level = 3
 strip = true
 
 [patch."https://github.com/zed-industries/zed"]
+# Vendored gpui (pinned Zed checkout 5a9b955) with the retained-heights patch
+# in list.rs: a width change keeps measured item sizes so sidebar width
+# animations reflow per frame without re-rendering a measured-all feed.
+gpui = { path = "vendor/gpui" }
 # Keep this small Windows backend patch until GPUI handles stale atlas batches upstream.
 gpui_windows = { path = "vendor/gpui_windows" }
+
+[workspace]
+# The vendored gpui joins the workspace so `cargo test -p gpui --lib` can run
+# its list regression tests against the pinned lockfile. Plain cargo commands
+# stay scoped to the app itself. The other vendored crates keep their own
+# workspace roots (or no inheritance at all), so they must stay excluded.
+members = ["vendor/gpui"]
+default-members = ["."]
+exclude = ["vendor/gpui-component", "vendor/gpui_windows"]

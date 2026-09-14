@@ -11,7 +11,7 @@ use crate::{
     app_button::{primary_button, secondary_page_action_button_with_disabled},
     app_tooltip::AppTooltipExt,
     assets::{LocalIcon, local_icon},
-    browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
+    browser_scroll::{BrowserScrollTarget, FixedListScrollHandle, browser_scroll_surface},
     collection_detail::{
         ArtistHeaderSpec, DETAIL_SECTION_GAP_PX, LocalPlaylistHeaderSpec, ProviderHeaderSpec,
         render_artist_header as render_shared_artist_header,
@@ -1574,10 +1574,18 @@ fn render_section_page_list(
         let browser_scroll = view.track_list_browser_scroll(&content_key);
         (state, browser_scroll)
     };
+    // The section page mixes row kinds (headers, track slots, card grid
+    // rows), so the scroll math uses the aggregate page height: the average
+    // is exact in total because it is derived from the same per-kind
+    // heights. The raw ListState cannot feed the scrollbar because gpui
+    // discards size hints on width changes, which would leave unmeasured
+    // rows at zero height.
+    let page_height = super::virtualization::page_item_uniform_height(&page_items, card_layout);
+    let fixed_scroll = FixedListScrollHandle::new(state.clone(), page_items.len(), page_height);
     browser_scroll_surface(
         "library-section-page-list-scroll",
-        super::virtualization::page_list(state.clone(), Rc::new(builders), narrow),
-        BrowserScrollTarget::List(state),
+        super::virtualization::page_list(state, fixed_scroll.clone(), Rc::new(builders), narrow),
+        BrowserScrollTarget::FixedList(fixed_scroll),
         browser_scroll,
     )
 }
@@ -2382,6 +2390,28 @@ mod render_contract_tests {
 
         assert!(playlist_control.contains(".relative()"));
         assert!(playlist_control.contains(".top(px(PLAYLIST_CREATE_OPTICAL_OFFSET_PX))"));
+    }
+
+    #[test]
+    fn section_page_list_feeds_the_scrollbar_from_the_aggregate_height() {
+        let source = include_str!("content_view.rs");
+        let section_list = source
+            .split("fn render_section_page_list(")
+            .nth(1)
+            .and_then(|body| body.split("\nfn render_section_header(").next())
+            .expect("section page list renderer should be present");
+
+        // Mixed row kinds need aggregate-height scroll math through the
+        // fixed-height adapter: the raw ListState loses its size hints on
+        // width changes, which would leave unmeasured rows at zero height.
+        assert!(section_list.contains("page_item_uniform_height(&page_items, card_layout)"));
+        assert!(
+            section_list.contains(
+                "FixedListScrollHandle::new(state.clone(), page_items.len(), page_height)"
+            )
+        );
+        assert!(section_list.contains("BrowserScrollTarget::FixedList(fixed_scroll)"));
+        assert!(!section_list.contains("BrowserScrollTarget::List(state)"));
     }
 
     #[test]
