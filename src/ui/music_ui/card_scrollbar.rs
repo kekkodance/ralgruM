@@ -7,6 +7,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::{Rc, Weak},
+    time::{Duration, Instant},
 };
 
 use super::{
@@ -19,6 +20,12 @@ use crate::drag_cursor::{
 };
 
 const MIN_THUMB_WIDTH: f32 = 18.;
+/// Idle fade timing for the horizontal scrollbar, matching the vertical
+/// scrollbar (FADE_OUT_DELAY and FADE_OUT_DURATION in gpui-component's
+/// Scrollbar): the thumb holds for the delay after the last activity, then
+/// fades out over the final second.
+const CARD_SCROLLBAR_FADE_OUT_DELAY: f32 = 2.;
+const CARD_SCROLLBAR_FADE_OUT_DURATION: f32 = 3.;
 #[derive(Clone, Copy)]
 enum ScrollbarThumbState {
     Idle,
@@ -35,29 +42,35 @@ fn scrollbar_thumb_color(cx: &App, state: ScrollbarThumbState) -> gpui::Backgrou
     }
 }
 
-struct CardScrollbarHoverState {
+/// Persistent visual state for one carousel scrollbar: hover plus the idle
+/// fade timing that mirrors the vertical scrollbar.
+struct CardScrollbarShowState {
     owner: Weak<Cell<Option<CarouselDrag>>>,
     hovered: Cell<bool>,
+    last_scroll_offset: Cell<f32>,
+    last_scroll_time: Cell<Option<Instant>>,
+    fade_wakeup_scheduled: Cell<bool>,
 }
 
 thread_local! {
-    static CARD_SCROLLBAR_HOVER_STATES: RefCell<HashMap<usize, Rc<CardScrollbarHoverState>>> =
+    static CARD_SCROLLBAR_SHOW_STATES: RefCell<HashMap<usize, Rc<CardScrollbarShowState>>> =
         RefCell::new(HashMap::new());
 }
 
-fn card_scrollbar_hover_state(
-    drag: &Rc<Cell<Option<CarouselDrag>>>,
-) -> Rc<CardScrollbarHoverState> {
+fn card_scrollbar_show_state(drag: &Rc<Cell<Option<CarouselDrag>>>) -> Rc<CardScrollbarShowState> {
     let key = Rc::as_ptr(drag) as usize;
-    CARD_SCROLLBAR_HOVER_STATES.with(|states| {
+    CARD_SCROLLBAR_SHOW_STATES.with(|states| {
         let mut states = states.borrow_mut();
         states.retain(|_, state| state.owner.upgrade().is_some());
         states
             .entry(key)
             .or_insert_with(|| {
-                Rc::new(CardScrollbarHoverState {
+                Rc::new(CardScrollbarShowState {
                     owner: Rc::downgrade(drag),
                     hovered: Cell::new(false),
+                    last_scroll_offset: Cell::new(0.),
+                    last_scroll_time: Cell::new(None),
+                    fade_wakeup_scheduled: Cell::new(false),
                 })
             })
             .clone()
@@ -71,8 +84,66 @@ fn update_scrollbar_hover(state: &Cell<bool>, track_hovered: bool, dragging: boo
     changed
 }
 
+/// Refresh the scrollbar's show window from live interaction, matching the
+/// vertical scrollbar: any offset change, hover, or drag counts as activity
+/// and holds the thumb fully visible.
+fn refresh_scrollbar_activity(
+    show_state: &CardScrollbarShowState,
+    offset: f32,
+    hovered: bool,
+    dragging: bool,
+    now: Instant,
+) {
+    if hovered || dragging || offset != show_state.last_scroll_offset.get() {
+        show_state.last_scroll_offset.set(offset);
+        show_state.last_scroll_time.set(Some(now));
+    }
+}
+
 fn scrollbar_is_available(max_extent: f32) -> bool {
     super::card_row_has_more(0., max_extent)
+}
+
+/// Thumb opacity `elapsed` seconds after the scrollbar's last activity.
+/// Mirrors the vertical scrollbar's idle fade: fully visible through the
+/// delay window, then a one-second ease to hidden. Reduced motion skips the
+/// animated tail and hides as soon as the delay elapses.
+fn scrollbar_fade_opacity(elapsed: Option<f32>, reduced_motion: bool) -> f32 {
+    let Some(elapsed) = elapsed else {
+        return 0.;
+    };
+    if elapsed < CARD_SCROLLBAR_FADE_OUT_DELAY {
+        1.
+    } else if !reduced_motion && elapsed < CARD_SCROLLBAR_FADE_OUT_DURATION {
+        1. - (elapsed - CARD_SCROLLBAR_FADE_OUT_DELAY).powi(10)
+    } else {
+        0.
+    }
+}
+
+/// Wake the window once the scrollbar's hold window ends so the idle fade can
+/// start without further input, mirroring the vertical scrollbar's idle
+/// timer.
+fn schedule_scrollbar_fade_wakeup(
+    show_state: &Rc<CardScrollbarShowState>,
+    delay: f32,
+    window: &mut Window,
+    cx: &App,
+) {
+    if show_state.fade_wakeup_scheduled.get() {
+        return;
+    }
+    show_state.fade_wakeup_scheduled.set(true);
+    let show_state = show_state.clone();
+    window
+        .spawn(cx, async move |cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(delay.max(0.)))
+                .await;
+            show_state.fade_wakeup_scheduled.set(false);
+            cx.update(|window, _| window.refresh()).ok();
+        })
+        .detach();
 }
 
 #[derive(Clone)]
@@ -89,9 +160,10 @@ pub(crate) fn card_scrollbar(state: CardCarouselState, card_pitch: f32) -> impl 
     let event_state = state.clone();
     let cursor_owner = DragCursorOwner::carousel(std::rc::Rc::as_ptr(&event_state.drag) as usize);
     // The carousel is rebuilt when Window::refresh bypasses view caching. Keying
-    // this state by CardCarouselState's persistent drag Rc keeps hover across
-    // those rebuilds without adding a field outside this module.
-    let hover_state = card_scrollbar_hover_state(&event_state.drag);
+    // this state by CardCarouselState's persistent drag Rc keeps the hover and
+    // fade timing across those rebuilds without adding a field outside this
+    // module.
+    let show_state = card_scrollbar_show_state(&event_state.drag);
     canvas(
         move |bounds, window, _cx| {
             let viewport_bounds = viewport_bounds(&prepaint_state.scroll_handle);
@@ -116,18 +188,55 @@ pub(crate) fn card_scrollbar(state: CardCarouselState, card_pitch: f32) -> impl 
                     window.release_pointer();
                     set_drag_cursor_owned(window, DragCursorState::Reset, cursor_owner);
                 }
-                hover_state.hovered.set(false);
+                show_state.hovered.set(false);
+                // A row that stops overflowing restarts its show window hidden.
+                show_state
+                    .last_scroll_offset
+                    .set(f32::from(event_state.scroll_handle.offset().x));
+                show_state.last_scroll_time.set(None);
                 return;
             }
+            let now = Instant::now();
             let dragging = event_state.drag.get().is_some();
-            paint_scrollbar(
-                bounds,
-                paint_data.thumb_bounds,
-                hover_state.hovered.get(),
+            let hovered = show_state.hovered.get();
+            refresh_scrollbar_activity(
+                &show_state,
+                f32::from(event_state.scroll_handle.offset().x),
+                hovered,
                 dragging,
-                window,
-                cx,
+                now,
             );
+            let elapsed = show_state
+                .last_scroll_time
+                .get()
+                .map(|last| now.saturating_duration_since(last).as_secs_f32());
+            let opacity = scrollbar_fade_opacity(elapsed, cx.reduce_motion());
+            if opacity > 0. {
+                paint_scrollbar(
+                    bounds,
+                    paint_data.thumb_bounds,
+                    hovered,
+                    dragging,
+                    opacity,
+                    window,
+                    cx,
+                );
+            }
+            // Drive the idle fade without hover or drag activity: wake once
+            // when the hold window ends, then animate every frame until the
+            // thumb is hidden.
+            if let Some(elapsed) = elapsed.filter(|_| !hovered && !dragging) {
+                if elapsed < CARD_SCROLLBAR_FADE_OUT_DELAY {
+                    schedule_scrollbar_fade_wakeup(
+                        &show_state,
+                        CARD_SCROLLBAR_FADE_OUT_DELAY - elapsed,
+                        window,
+                        cx,
+                    );
+                } else if opacity > 0. {
+                    window.request_animation_frame();
+                }
+            }
             register_handlers(
                 paint_data,
                 event_state.drag.clone(),
@@ -136,7 +245,7 @@ pub(crate) fn card_scrollbar(state: CardCarouselState, card_pitch: f32) -> impl 
                 event_state.pending_target.clone(),
                 card_pitch,
                 cursor_owner,
-                hover_state.clone(),
+                show_state.clone(),
                 window,
             );
         },
@@ -210,6 +319,7 @@ fn paint_scrollbar(
     thumb_bounds: Bounds<Pixels>,
     hovered: bool,
     dragging: bool,
+    opacity: f32,
     window: &mut Window,
     cx: &App,
 ) {
@@ -224,7 +334,7 @@ fn paint_scrollbar(
     } else {
         ScrollbarThumbState::Idle
     };
-    let thumb_color = scrollbar_thumb_color(cx, thumb_state);
+    let thumb_color = scrollbar_thumb_color(cx, thumb_state).opacity(opacity);
     window
         .paint_quad(fill(thumb_bounds, thumb_color).corner_radii(px(CAROUSEL_THUMB_HEIGHT * 0.5)));
 }
@@ -241,7 +351,7 @@ fn register_handlers(
     pending_target: Rc<Cell<Option<f32>>>,
     card_pitch: f32,
     cursor_owner: DragCursorOwner,
-    hover_state: Rc<CardScrollbarHoverState>,
+    show_state: Rc<CardScrollbarShowState>,
     window: &mut Window,
 ) {
     let window_active = window.is_window_active();
@@ -327,7 +437,7 @@ fn register_handlers(
     let move_pending_target = pending_target.clone();
     let move_owner = cursor_owner;
     let move_track = track_hitbox.clone();
-    let move_hover = hover_state.clone();
+    let move_hover = show_state.clone();
     window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
         if !phase.bubble() {
             return;
@@ -386,7 +496,7 @@ fn register_handlers(
     let up_pending_target = pending_target.clone();
     let up_owner = cursor_owner;
     let up_track = track_hitbox.clone();
-    let up_hover = hover_state.clone();
+    let up_hover = show_state.clone();
     window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
         if phase.bubble() {
             let Some(drag_state) = up_drag.get() else {
@@ -467,13 +577,19 @@ fn finish_drag(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::{
+        cell::Cell,
+        rc::Weak,
+        time::{Duration, Instant},
+    };
 
-    use gpui::TestAppContext;
+    use gpui::{TestAppContext, prelude::*};
     use gpui_component::ActiveTheme;
 
     use super::{
-        ScrollbarThumbState, active_carousel_cursor_state, scrollbar_is_available,
+        CARD_SCROLLBAR_FADE_OUT_DELAY, CARD_SCROLLBAR_FADE_OUT_DURATION, CardScrollbarShowState,
+        ScrollbarThumbState, active_carousel_cursor_state, card_scrollbar_show_state,
+        refresh_scrollbar_activity, scrollbar_fade_opacity, scrollbar_is_available,
         scrollbar_thumb_color, update_scrollbar_hover,
     };
 
@@ -528,5 +644,125 @@ mod tests {
         assert!(!scrollbar_is_available(2.));
         assert!(scrollbar_is_available(2.1));
         assert!(scrollbar_is_available(-20.));
+    }
+    #[test]
+    fn scrollbar_fade_holds_then_eases_to_hidden_like_the_vertical_scrollbar() {
+        assert_eq!(CARD_SCROLLBAR_FADE_OUT_DELAY, 2.);
+        assert_eq!(CARD_SCROLLBAR_FADE_OUT_DURATION, 3.);
+
+        // Never shown: hidden.
+        assert_eq!(scrollbar_fade_opacity(None, false), 0.);
+        // Activity holds the thumb fully visible through the delay window.
+        assert_eq!(scrollbar_fade_opacity(Some(0.), false), 1.);
+        assert_eq!(scrollbar_fade_opacity(Some(1.999), false), 1.);
+        // The final second eases toward hidden.
+        let fading = scrollbar_fade_opacity(Some(2.5), false);
+        assert!(fading > 0.9 && fading < 1.);
+        assert_eq!(scrollbar_fade_opacity(Some(3.), false), 0.);
+        assert_eq!(scrollbar_fade_opacity(Some(4.), false), 0.);
+    }
+
+    #[test]
+    fn scrollbar_fade_skips_the_animated_tail_under_reduced_motion() {
+        assert_eq!(scrollbar_fade_opacity(Some(1.999), true), 1.);
+        assert_eq!(scrollbar_fade_opacity(Some(2.), true), 0.);
+        assert_eq!(scrollbar_fade_opacity(Some(2.5), true), 0.);
+    }
+
+    #[test]
+    fn scrollbar_activity_refreshes_on_offset_hover_and_drag() {
+        let show_state = CardScrollbarShowState {
+            owner: Weak::new(),
+            hovered: Cell::new(false),
+            last_scroll_offset: Cell::new(0.),
+            last_scroll_time: Cell::new(None),
+            fade_wakeup_scheduled: Cell::new(false),
+        };
+        let t0 = Instant::now();
+
+        // A still, unhovered row is not activity.
+        refresh_scrollbar_activity(&show_state, 0., false, false, t0);
+        assert_eq!(show_state.last_scroll_time.get(), None);
+
+        // Any offset change refreshes the show window.
+        refresh_scrollbar_activity(&show_state, -40., false, false, t0);
+        assert_eq!(show_state.last_scroll_time.get(), Some(t0));
+        assert_eq!(show_state.last_scroll_offset.get(), -40.);
+
+        // Hover and drags hold the thumb visible without offset changes.
+        let t1 = t0 + Duration::from_secs(5);
+        refresh_scrollbar_activity(&show_state, -40., true, false, t1);
+        assert_eq!(show_state.last_scroll_time.get(), Some(t1));
+        let t2 = t1 + Duration::from_secs(5);
+        refresh_scrollbar_activity(&show_state, -40., false, true, t2);
+        assert_eq!(show_state.last_scroll_time.get(), Some(t2));
+
+        // Going idle again leaves the show window to age out.
+        let t3 = t2 + Duration::from_secs(5);
+        refresh_scrollbar_activity(&show_state, -40., false, false, t3);
+        assert_eq!(show_state.last_scroll_time.get(), Some(t2));
+    }
+
+    #[gpui::test]
+    fn scrollbar_show_window_follows_the_rendered_scroll_activity(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::configure_component_theme(cx);
+        });
+        let cx = cx.add_empty_window();
+
+        struct CarouselHost(super::CardCarouselState);
+        impl gpui::Render for CarouselHost {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                crate::music_ui::card_carousel(
+                    "scrollbar-show-wiring",
+                    self.0.clone(),
+                    150.,
+                    12.,
+                    true,
+                    gpui::div()
+                        .flex()
+                        .flex_none()
+                        .children((0..8).map(|_| gpui::div().w(gpui::px(150.)).h(gpui::px(196.))))
+                        .into_any_element(),
+                )
+            }
+        }
+
+        let state = super::CardCarouselState::new();
+        let show_state = card_scrollbar_show_state(&state.drag);
+        let view = cx.update(|_, cx| cx.new(|_| CarouselHost(state.clone())));
+        let draw = |cx: &mut gpui::VisualTestContext, view: &gpui::Entity<CarouselHost>| {
+            cx.draw(
+                gpui::point(gpui::px(0.), gpui::px(0.)),
+                gpui::size(gpui::px(400.), gpui::px(300.)),
+                {
+                    let view = view.clone();
+                    move |_, _| view.into_any_element()
+                },
+            );
+        };
+
+        // A fresh row has not scrolled, so the thumb stays hidden.
+        draw(cx, &view);
+        assert_eq!(show_state.last_scroll_time.get(), None);
+
+        // Scrolling counts as activity and holds the thumb fully visible.
+        let extent = f32::from(state.scroll_handle.max_offset().x);
+        assert!(extent > 0.);
+        state
+            .scroll_handle
+            .set_offset(gpui::point(gpui::px(-(extent - 20.)), gpui::px(0.)));
+        draw(cx, &view);
+        let elapsed = show_state
+            .last_scroll_time
+            .get()
+            .map(|last| last.elapsed().as_secs_f32());
+        assert!(elapsed.is_some());
+        assert_eq!(scrollbar_fade_opacity(elapsed, false), 1.);
     }
 }

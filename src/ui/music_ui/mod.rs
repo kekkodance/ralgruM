@@ -1,8 +1,8 @@
 use gpui::{
-    AnimationExt as _, AnyElement, App, ClickEvent, CursorStyle, Div, ElementId, FontWeight,
-    HighlightStyle, ImageSource, InteractiveText, ScrollHandle, ScrollWheelEvent, SharedString,
-    StyledText, TextAlign, UnderlineStyle, Window, canvas, div, fill, prelude::*, px, rgb, rgba,
-    svg,
+    AnimationExt as _, AnyElement, App, Bounds, ClickEvent, CursorStyle, Div, ElementId,
+    FontWeight, HighlightStyle, ImageSource, InteractiveText, Pixels, ScrollHandle,
+    ScrollWheelEvent, SharedString, StyledText, TextAlign, UnderlineStyle, Window, canvas, div,
+    fill, point, prelude::*, px, rgb, rgba, size, svg,
 };
 use std::{
     cell::Cell,
@@ -324,6 +324,16 @@ pub(crate) const CAROUSEL_THUMB_HEIGHT: f32 = 6.;
 pub(crate) const CAROUSEL_CARD_ROW_BOTTOM_GAP: f32 = 8.;
 pub(crate) const CAROUSEL_CONTENT_BOTTOM_PADDING: f32 =
     CAROUSEL_CARD_ROW_BOTTOM_GAP + CAROUSEL_CONTROL_HEIGHT;
+const CAROUSEL_EDGE_FADE_WIDTH: f32 = 52.;
+const CAROUSEL_EDGE_TOP_INSET: f32 = 2.;
+/// Fraction of a card pitch an edge darkening keeps as lead room: the
+/// darkening starts dissolving while that much scrollable content still
+/// remains beyond the edge, instead of clinging to the final pixels.
+const CAROUSEL_EDGE_TRIGGER_PITCH_RATIO: f32 = 0.5;
+/// Lower bound for the edge trigger, matching the overflow tolerance shared
+/// with `card_row_has_more`.
+const CAROUSEL_EDGE_MIN_TRIGGER: f32 = 2.;
+
 pub(crate) const CAROUSEL_STABLE_CARD_LIMIT: usize = 64;
 
 pub(crate) fn card_carousel_display_count(item_count: usize, base_limit: usize) -> usize {
@@ -336,6 +346,7 @@ pub(crate) struct CardCarouselState {
     pub(crate) drag: Rc<Cell<Option<CarouselDrag>>>,
     pub(crate) pending_target: Rc<Cell<Option<f32>>>,
     pub(crate) snap_epoch: Rc<Cell<u64>>,
+    pub(crate) edge_fades: Rc<Cell<CarouselEdgeFades>>,
 }
 
 impl CardCarouselState {
@@ -345,6 +356,7 @@ impl CardCarouselState {
             drag: Rc::new(Cell::new(None)),
             pending_target: Rc::new(Cell::new(None)),
             snap_epoch: Rc::new(Cell::new(0)),
+            edge_fades: Rc::new(Cell::new(CarouselEdgeFades::default())),
         }
     }
 }
@@ -363,35 +375,189 @@ pub(crate) enum CarouselDragMode {
     Scrollbar,
 }
 
-/// Paint the original card-row right-edge fade from the live scroll bounds.
-/// Keeping this in the shared carousel means search, library, and detail card
-/// sections all use the same boundary behavior.
-fn card_row_fade(scroll_handle: ScrollHandle) -> impl IntoElement {
+/// Scrollable travel, in pixels, that keeps an edge darkening switched on.
+/// Half a card of lead room gives the darkening comfortable space to dissolve
+/// before the row reaches its end, and rows that barely overflow scale the
+/// trigger down so short carousels keep the affordance.
+pub(crate) fn carousel_edge_trigger(card_pitch: f32, max_offset: f32) -> f32 {
+    let extent = max_offset.abs().max(0.);
+    let lead = card_pitch.max(0.) * CAROUSEL_EDGE_TRIGGER_PITCH_RATIO;
+    (extent * 0.5).min(lead).max(CAROUSEL_EDGE_MIN_TRIGGER)
+}
+
+/// Whether one carousel edge still has a comfortable stretch of scrollable
+/// content beyond it. `travel` is how far the row can still move toward that
+/// edge; both edges share one trigger so they mirror each other.
+pub(crate) fn carousel_edge_active(travel: f32, trigger: f32) -> bool {
+    travel > trigger
+}
+
+/// One carousel edge darkening's animated opacity. The decision logic is
+/// pure: `prepare` maps what the edge showed plus a new target to the next
+/// visual, and `opacity_at` samples it at an instant, so the transitions are
+/// testable without a window.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct CarouselEdgeFade {
+    initialized: bool,
+    from: f32,
+    to: f32,
+    started_at: Option<Instant>,
+}
+
+impl CarouselEdgeFade {
+    /// Sample the opacity the edge is showing at `now`.
+    pub(crate) fn opacity_at(&self, now: Instant) -> f32 {
+        if !self.initialized {
+            return self.to;
+        }
+        let Some(started_at) = self.started_at else {
+            return self.to;
+        };
+        let elapsed = now.saturating_duration_since(started_at);
+        if elapsed >= crate::motion::CAROUSEL_EDGE_FADE_DURATION {
+            return self.to;
+        }
+        let duration = crate::motion::CAROUSEL_EDGE_FADE_DURATION.as_secs_f32();
+        let progress = if duration == 0. {
+            1.
+        } else {
+            (elapsed.as_secs_f32() / duration).clamp(0., 1.)
+        };
+        crate::motion::lerp(self.from, self.to, gpui::ease_in_out(progress))
+    }
+
+    /// Transition toward `active`, restarting from whatever opacity the edge
+    /// currently shows. The first sample settles immediately (skeleton
+    /// carousels rebuild their state every frame), and reduced motion snaps
+    /// instead of animating.
+    pub(crate) fn prepare(&mut self, active: bool, now: Instant, reduced_motion: bool) {
+        let target = if active { 1. } else { 0. };
+        if !self.initialized {
+            self.initialized = true;
+            self.from = target;
+            self.to = target;
+            self.started_at = None;
+        } else if self.to != target {
+            self.from = self.opacity_at(now);
+            self.to = target;
+            self.started_at = (!reduced_motion).then_some(now);
+        }
+        if reduced_motion {
+            self.from = self.to;
+            self.started_at = None;
+        } else if let Some(started_at) = self.started_at
+            && now.saturating_duration_since(started_at)
+                >= crate::motion::CAROUSEL_EDGE_FADE_DURATION
+        {
+            self.from = self.to;
+            self.started_at = None;
+        }
+    }
+
+    /// Whether the edge still owes the window animation frames.
+    pub(crate) fn is_animating(&self, now: Instant) -> bool {
+        self.started_at.is_some_and(|started_at| {
+            now.saturating_duration_since(started_at) < crate::motion::CAROUSEL_EDGE_FADE_DURATION
+        })
+    }
+}
+
+/// Animated opacity for both carousel edge darkenings. Kept in the shared
+/// carousel state so the values survive view rebuilds.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct CarouselEdgeFades {
+    pub(crate) left: CarouselEdgeFade,
+    pub(crate) right: CarouselEdgeFade,
+}
+
+/// The darkening gradient for one carousel edge: opaque page background at
+/// the viewport edge, fading to transparent over the cards.
+fn card_row_edge_gradient(background_at_start: bool) -> gpui::Background {
+    let (start, end) = if background_at_start {
+        (
+            gpui::linear_color_stop(rgb(BACKGROUND), 0.),
+            gpui::linear_color_stop(gpui::transparent_black(), 1.),
+        )
+    } else {
+        (
+            gpui::linear_color_stop(gpui::transparent_black(), 0.),
+            gpui::linear_color_stop(rgb(BACKGROUND), 1.),
+        )
+    };
+    gpui::linear_gradient(90., start, end)
+}
+
+/// Paint the card-row edge darkenings from the live scroll bounds. Keeping
+/// this in the shared carousel means search, library, and detail card
+/// sections all use the same boundary behavior. Both edges share one fade
+/// and one trigger so they mirror each other: each darkening dissolves while
+/// a comfortable stretch of content still remains beyond its edge, and eases
+/// back in once the row scrolls away again.
+fn card_row_fade(state: CardCarouselState, card_pitch: f32) -> impl IntoElement {
     canvas(
-        move |_, _, _| {
-            card_row_has_more(
-                f32::from(scroll_handle.offset().x),
-                f32::from(scroll_handle.max_offset().x),
-            )
-        },
-        |bounds, has_more, window, _| {
-            if has_more {
-                window.paint_quad(fill(
-                    bounds,
-                    gpui::linear_gradient(
-                        90.,
-                        gpui::linear_color_stop(gpui::transparent_black(), 0.),
-                        gpui::linear_color_stop(rgb(BACKGROUND), 1.),
-                    ),
-                ));
-            }
+        move |_, _, _| (state, card_pitch),
+        |bounds, (state, card_pitch), window, cx| {
+            paint_card_row_edge_fades(bounds, &state, card_pitch, window, cx);
         },
     )
     .absolute()
-    .top(px(2.))
-    .right(px(0.))
-    .bottom(px(CAROUSEL_CARD_ROW_BOTTOM_GAP))
-    .w(px(52.))
+    .inset_0()
+}
+
+fn paint_card_row_edge_fades(
+    bounds: Bounds<Pixels>,
+    state: &CardCarouselState,
+    card_pitch: f32,
+    window: &mut Window,
+    cx: &App,
+) {
+    let offset = f32::from(state.scroll_handle.offset().x);
+    let extent = f32::from(state.scroll_handle.max_offset().x).abs();
+    let scrolled = (-offset).clamp(0., extent);
+    let trigger = carousel_edge_trigger(card_pitch, extent);
+    let now = Instant::now();
+    let reduced_motion = cx.reduce_motion();
+    let mut fades = state.edge_fades.get();
+    fades
+        .left
+        .prepare(carousel_edge_active(scrolled, trigger), now, reduced_motion);
+    fades.right.prepare(
+        carousel_edge_active(extent - scrolled, trigger),
+        now,
+        reduced_motion,
+    );
+    state.edge_fades.set(fades);
+
+    let height =
+        f32::from(bounds.size.height) - CAROUSEL_EDGE_TOP_INSET - CAROUSEL_CARD_ROW_BOTTOM_GAP;
+    let width = f32::from(bounds.size.width);
+    if height > 0. && width >= CAROUSEL_EDGE_FADE_WIDTH {
+        let fade_size = size(px(CAROUSEL_EDGE_FADE_WIDTH), px(height));
+        let top = bounds.origin.y + px(CAROUSEL_EDGE_TOP_INSET);
+        let left_opacity = fades.left.opacity_at(now);
+        if left_opacity > 0. {
+            window.paint_quad(fill(
+                Bounds {
+                    origin: point(bounds.origin.x, top),
+                    size: fade_size,
+                },
+                card_row_edge_gradient(true).opacity(left_opacity),
+            ));
+        }
+        let right_opacity = fades.right.opacity_at(now);
+        if right_opacity > 0. {
+            window.paint_quad(fill(
+                Bounds {
+                    origin: point(bounds.origin.x + px(width - CAROUSEL_EDGE_FADE_WIDTH), top),
+                    size: fade_size,
+                },
+                card_row_edge_gradient(false).opacity(right_opacity),
+            ));
+        }
+    }
+    if fades.left.is_animating(now) || fades.right.is_animating(now) {
+        window.request_animation_frame();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -504,9 +670,11 @@ pub(crate) fn carousel_drag_offset(start_offset: f32, pointer_delta: f32, max_of
     (start_offset + pointer_delta).clamp(-extent, 0.)
 }
 
-/// Render a card row with a persistent horizontal scrollbar and native-like
-/// arrow controls at each end of the track. The caller owns the handle so it
-/// survives view updates and can be shared by the scrollbar and arrows.
+/// Render a card row with a horizontal scrollbar and native-like arrow
+/// controls at each end of the track. The scrollbar appears on scroll
+/// activity and hover, then fades out like the app's vertical scrollbars.
+/// The caller owns the handle so it survives view updates and can be shared
+/// by the scrollbar and arrows.
 pub(crate) fn card_carousel(
     id: impl Into<String>,
     state: CardCarouselState,
@@ -549,7 +717,7 @@ pub(crate) fn card_carousel(
                 })
                 .child(content),
         )
-        .child(card_row_fade(state.scroll_handle.clone()))
+        .child(card_row_fade(state.clone(), pitch))
         .child(card_scrollbar::card_scrollbar(state.clone(), pitch))
         .when(controls_available, |this| this.child(previous).child(next))
         .into_any_element()
@@ -1920,9 +2088,17 @@ fn provider_logo(provider: Provider) -> gpui::Svg {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, time::Instant};
+    use std::{
+        cell::Cell,
+        time::{Duration, Instant},
+    };
 
-    use crate::{assets::LocalIcon, motion::ResponsiveModeMotion, search::Provider};
+    use gpui::prelude::*;
+
+    use crate::{
+        assets::LocalIcon, motion::CAROUSEL_EDGE_FADE_DURATION, motion::ResponsiveModeMotion,
+        search::Provider,
+    };
 
     use super::{
         ArtistHoverKey, CAROUSEL_ARROW_TRACK_GAP, CAROUSEL_ARROW_WIDTH,
@@ -1930,21 +2106,23 @@ mod tests {
         CAROUSEL_THUMB_HEIGHT, CAROUSEL_TRACK_INSET, CATEGORY_LABEL_FIT_BUFFER,
         CATEGORY_TAB_ICON_WIDTH, COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX,
         COLLECTION_CARD_TITLE_LINE_HEIGHT_PX, COLLECTION_PRIVACY_ICON_GAP,
-        COLLECTION_PRIVACY_ICON_SIZE, COLLECTION_PRIVACY_OPTICAL_OFFSET_PX, CarouselDirection,
-        MAIN_CONTENT_INSET, MOBILE_MAX, MenuRoute, MenuRouteKind, NARROW_MAIN_CONTENT_INSET,
-        TOOLBAR_STACK_MAX, TRACK_PROVIDER_COMPACT_COLUMN_WIDTH, TRACK_PROVIDER_DURATION_GAP_PX,
+        COLLECTION_PRIVACY_ICON_SIZE, COLLECTION_PRIVACY_OPTICAL_OFFSET_PX, CardCarouselState,
+        CarouselDirection, CarouselEdgeFade, MAIN_CONTENT_INSET, MOBILE_MAX, MenuRoute,
+        MenuRouteKind, NARROW_MAIN_CONTENT_INSET, TOOLBAR_STACK_MAX,
+        TRACK_PROVIDER_COMPACT_COLUMN_WIDTH, TRACK_PROVIDER_DURATION_GAP_PX,
         TRACK_PROVIDER_FULL_COLUMN_WIDTH, TRACK_PROVIDER_ICON_OPTICAL_OFFSET_PX,
         TRACK_PROVIDER_LABEL_MIN_WIDTH, TRACK_TITLE_ARTIST_GAP_PX, artist_hover,
-        artist_hover_registry, artist_route_at, artist_text_and_ranges,
+        artist_hover_registry, artist_route_at, artist_text_and_ranges, card_carousel,
         card_carousel_display_count, card_carousel_has_overflow, card_grid_skeleton_count,
         card_row_has_more, card_row_metrics, carousel_arrow_target_from_pending,
-        carousel_drag_offset, carousel_snap_offset, carousel_target_offset, category_tab_tooltip,
-        category_tabs_icon_only, category_tabs_label_width, compact_desktop_viewport,
-        compact_track_provider, effective_content_width, fitted_columns, horizontal_scroll_id,
-        main_content_inset, narrow_content_viewport, playlist_privacy_icon, row_action_cursor,
-        set_artist_hover, shell_metrics, shell_metrics_for_viewport,
-        should_consume_horizontal_scroll, show_search_result_count, track_artist_text_and_ranges,
-        track_artwork_url, track_provider_column_endpoints, visible_preview_cards,
+        carousel_drag_offset, carousel_edge_active, carousel_edge_trigger, carousel_snap_offset,
+        carousel_target_offset, category_tab_tooltip, category_tabs_icon_only,
+        category_tabs_label_width, compact_desktop_viewport, compact_track_provider,
+        effective_content_width, fitted_columns, horizontal_scroll_id, main_content_inset,
+        narrow_content_viewport, playlist_privacy_icon, row_action_cursor, set_artist_hover,
+        shell_metrics, shell_metrics_for_viewport, should_consume_horizontal_scroll,
+        show_search_result_count, track_artist_text_and_ranges, track_artwork_url,
+        track_provider_column_endpoints, visible_preview_cards,
     };
 
     #[test]
@@ -2143,11 +2321,181 @@ mod tests {
     }
 
     #[test]
-    fn card_row_fade_disappears_at_the_right_endpoint_with_tolerance() {
+    fn card_row_has_more_tolerates_a_two_pixel_endpoint() {
         assert!(card_row_has_more(0., 500.));
         assert!(card_row_has_more(-497., 500.));
         assert!(!card_row_has_more(-498., 500.));
         assert!(!card_row_has_more(-500., 500.));
+    }
+
+    #[test]
+    fn carousel_edge_trigger_keeps_half_a_card_of_lead_room() {
+        // Full size rows start dissolving the darkening half a card before
+        // the end instead of clinging to the final pixels.
+        assert_eq!(carousel_edge_trigger(162., 500.), 81.);
+        // Narrow cards scale the lead room with the card pitch.
+        assert_eq!(carousel_edge_trigger(135., 500.), 67.5);
+        // Rows that barely overflow scale the trigger down so the darkening
+        // survives, but never below the shared overflow tolerance.
+        assert_eq!(carousel_edge_trigger(162., 100.), 50.);
+        assert_eq!(carousel_edge_trigger(162., 30.), 15.);
+        assert_eq!(carousel_edge_trigger(162., 3.), 2.);
+        assert_eq!(carousel_edge_trigger(162., 0.), 2.);
+        // Degenerate pitches fall back to the overflow tolerance.
+        assert_eq!(carousel_edge_trigger(0., 500.), 2.);
+    }
+
+    #[test]
+    fn carousel_edges_mirror_each_others_triggers() {
+        let trigger = carousel_edge_trigger(162., 500.);
+
+        // A fresh row has content ahead on the right and nothing behind.
+        assert!(carousel_edge_active(500., trigger));
+        assert!(!carousel_edge_active(0., trigger));
+        // One card in, both edges are darkened.
+        assert!(carousel_edge_active(338., trigger));
+        assert!(carousel_edge_active(162., trigger));
+        // Inside either edge's lead room the darkening is off.
+        assert!(!carousel_edge_active(81., trigger));
+        assert!(!carousel_edge_active(80., trigger));
+    }
+
+    #[test]
+    fn carousel_edge_fades_settle_on_the_first_sample() {
+        let now = Instant::now();
+        let mut fade = CarouselEdgeFade::default();
+
+        // Skeleton carousels rebuild their state every frame, so the first
+        // sample must settle instead of starting a fade.
+        fade.prepare(true, now, false);
+        assert_eq!(fade.opacity_at(now), 1.);
+        assert!(!fade.is_animating(now));
+
+        let mut hidden = CarouselEdgeFade::default();
+        hidden.prepare(false, now, false);
+        assert_eq!(hidden.opacity_at(now), 0.);
+        assert!(!hidden.is_animating(now));
+    }
+
+    #[test]
+    fn carousel_edge_fades_ease_between_hidden_and_shown() {
+        let now = Instant::now();
+        let mut fade = CarouselEdgeFade::default();
+        fade.prepare(true, now, false);
+
+        fade.prepare(false, now, false);
+        assert!(fade.is_animating(now));
+        assert_eq!(fade.opacity_at(now), 1.);
+        let midpoint = now + CAROUSEL_EDGE_FADE_DURATION / 2;
+        assert!((fade.opacity_at(midpoint) - 0.5).abs() < 1e-3);
+        let done = now + CAROUSEL_EDGE_FADE_DURATION;
+        assert_eq!(fade.opacity_at(done), 0.);
+        assert!(!fade.is_animating(done));
+
+        // Repeating the same target never restarts the running fade.
+        fade.prepare(true, now, false);
+        fade.prepare(false, now, false);
+        fade.prepare(false, midpoint, false);
+        assert_eq!(fade.started_at, Some(now));
+    }
+
+    #[test]
+    fn carousel_edge_fades_restart_from_the_live_opacity() {
+        let now = Instant::now();
+        let mut fade = CarouselEdgeFade::default();
+        fade.prepare(true, now, false);
+        fade.prepare(false, now, false);
+
+        let quarter = now + CAROUSEL_EDGE_FADE_DURATION / 4;
+        let shown = fade.opacity_at(quarter);
+        fade.prepare(true, quarter, false);
+        assert_eq!(fade.opacity_at(quarter), shown);
+        assert!(fade.is_animating(quarter));
+        assert_eq!(fade.opacity_at(quarter + CAROUSEL_EDGE_FADE_DURATION), 1.);
+    }
+
+    #[test]
+    fn carousel_edge_fades_snap_under_reduced_motion() {
+        let now = Instant::now();
+        let mut fade = CarouselEdgeFade::default();
+        fade.prepare(true, now, false);
+        fade.prepare(false, now, true);
+        assert_eq!(fade.opacity_at(now), 0.);
+        assert!(!fade.is_animating(now));
+        assert_eq!(fade.started_at, None);
+    }
+
+    #[test]
+    fn carousel_edge_fade_duration_stays_in_the_polish_range() {
+        assert!(CAROUSEL_EDGE_FADE_DURATION >= Duration::from_millis(150));
+        assert!(CAROUSEL_EDGE_FADE_DURATION <= Duration::from_millis(250));
+    }
+
+    #[gpui::test]
+    fn carousel_edge_fades_follow_the_rendered_scroll_bounds(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::configure_component_theme(cx);
+        });
+        let cx = cx.add_empty_window();
+
+        struct CarouselHost(CardCarouselState);
+        impl gpui::Render for CarouselHost {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                card_carousel(
+                    "edge-fade-wiring",
+                    self.0.clone(),
+                    150.,
+                    12.,
+                    true,
+                    gpui::div()
+                        .flex()
+                        .flex_none()
+                        .gap(gpui::px(12.))
+                        .children((0..8).map(|_| gpui::div().w(gpui::px(150.)).h(gpui::px(196.))))
+                        .into_any_element(),
+                )
+            }
+        }
+
+        let state = CardCarouselState::new();
+        let view = cx.update(|_, cx| cx.new(|_| CarouselHost(state.clone())));
+        let draw = |cx: &mut gpui::VisualTestContext, view: &gpui::Entity<CarouselHost>| {
+            cx.draw(
+                gpui::point(gpui::px(0.), gpui::px(0.)),
+                gpui::size(gpui::px(400.), gpui::px(300.)),
+                {
+                    let view = view.clone();
+                    move |_, _| view.into_any_element()
+                },
+            );
+        };
+
+        // A fresh overflowing row settles darkened on the right and clean on
+        // the left, without starting a fade.
+        draw(cx, &view);
+        let fades = state.edge_fades.get();
+        assert_eq!(fades.right.to, 1.);
+        assert_eq!(fades.left.to, 0.);
+        assert_eq!(fades.right.started_at, None);
+
+        // Scrolling into the final lead room dissolves the right darkening
+        // and eases in the mirrored left one.
+        let extent = f32::from(state.scroll_handle.max_offset().x);
+        assert!(extent > 0.);
+        state
+            .scroll_handle
+            .set_offset(gpui::point(gpui::px(-(extent - 20.)), gpui::px(0.)));
+        draw(cx, &view);
+        let fades = state.edge_fades.get();
+        assert_eq!(fades.right.to, 0.);
+        assert!(fades.right.started_at.is_some());
+        assert_eq!(fades.left.to, 1.);
+        assert!(fades.left.started_at.is_some());
     }
 
     #[test]
