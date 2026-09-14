@@ -6,10 +6,7 @@ use crate::{
     service_auth::{self, Service},
     theme::{BORDER, DANGER, DEEZER, FOREGROUND, MUTED, SOUNDCLOUD},
 };
-use gpui::{
-    Context, Div, FontWeight, IntoElement, ObjectFit, SharedString, div, img, prelude::*, px, rgb,
-    rgba,
-};
+use gpui::{Context, Div, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, rgba};
 use gpui_component::input::Input;
 
 use super::{
@@ -597,7 +594,7 @@ fn service_identity_row(
 }
 
 fn service_avatar(icon: LocalIcon, avatar_url: Option<String>, accent: u32) -> Div {
-    let fallback = div()
+    let service_icon = div()
         .size(px(38.))
         .rounded_full()
         .flex()
@@ -611,15 +608,15 @@ fn service_avatar(icon: LocalIcon, avatar_url: Option<String>, accent: u32) -> D
         .rounded_full()
         .overflow_hidden()
         .flex_none()
-        .child(fallback)
+        // The accent tile with the service glyph is the stable placeholder;
+        // the reveal element fades the avatar in over it.
+        .child(service_icon)
         .when_some(avatar_url, |this, url| {
+            let reveal_id = format!("service-avatar-reveal-{url}");
             this.child(
-                div().absolute().inset_0().child(
-                    img(url)
-                        .size_full()
-                        .rounded_full()
-                        .object_fit(ObjectFit::Cover),
-                ),
+                crate::artwork_reveal::artwork_reveal(reveal_id, url)
+                    .size_full()
+                    .rounded_full(),
             )
         })
 }

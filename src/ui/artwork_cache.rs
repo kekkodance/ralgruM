@@ -11,9 +11,9 @@ use std::{
 
 use futures::FutureExt;
 use gpui::{
-    App, AppContext, Asset, AssetLogger, Entity, Image, ImageAssetLoader, ImageCache,
+    App, AppContext, Asset, AssetLogger, Entity, Global, Image, ImageAssetLoader, ImageCache,
     ImageCacheError, ImageCacheItem, ImageFormat, ImageLoadingTask, RenderImage, Resource,
-    SvgRenderer, Window,
+    SvgRenderer, WeakEntity, Window,
 };
 use reqwest::Client;
 use sha2::{Digest, Sha256};
@@ -53,8 +53,9 @@ impl ArtworkCache {
         }
     }
 
-    /// Construct the application artwork cache and register image cleanup.
-    pub(crate) fn new_entity(runtime: Arc<Runtime>, cx: &mut App) -> Entity<Self> {
+    /// Construct the application artwork cache with release cleanup, without
+    /// registering it globally.
+    fn new_entity_unregistered(runtime: Arc<Runtime>, cx: &mut App) -> Entity<Self> {
         let cache_dir = crate::paths::cache_dir().join(ARTWORK_CACHE_DIR);
         let client = Client::builder()
             .user_agent("ralgrum-gpui-artwork")
@@ -65,6 +66,14 @@ impl ArtworkCache {
         let cache = cx.new(|_| Self::new(cache_dir, runtime, client));
         cx.observe_release(&cache, |cache, cx| cache.release(cx))
             .detach();
+        cache
+    }
+
+    /// Construct the application artwork cache and register it globally so any
+    /// element can poll artwork readiness during render.
+    pub(crate) fn new_entity(runtime: Arc<Runtime>, cx: &mut App) -> Entity<Self> {
+        let cache = Self::new_entity_unregistered(runtime, cx);
+        set_global(cx, &cache);
         cache
     }
 
@@ -107,6 +116,22 @@ impl ArtworkCache {
             })
             .detach();
         None
+    }
+
+    /// Report whether `source` has finished loading, without starting a new
+    /// load and without mutating the cache. Elements that need artwork
+    /// readiness (the reveal fade) poll this each render; the ambient img
+    /// elements drive the actual loading and promote Loading entries to
+    /// Loaded.
+    pub(crate) fn is_loaded(&self, source: &Resource) -> bool {
+        match self.items.get(source) {
+            // A finished load counts as loaded even when it finished with an
+            // error: the img element renders nothing for errors either way, so
+            // the placeholder beneath it stays visible.
+            Some(ImageCacheItem::Loading(task)) => task.clone().now_or_never().is_some(),
+            Some(ImageCacheItem::Loaded(_)) => true,
+            None => false,
+        }
     }
 
     fn trim_memory_cache(
@@ -216,6 +241,23 @@ impl ImageCache for ArtworkCache {
             }
         }
     }
+}
+
+struct ArtworkCacheGlobal(WeakEntity<ArtworkCache>);
+
+impl Global for ArtworkCacheGlobal {}
+
+/// Register the shell's artwork cache so any element can poll artwork
+/// readiness during render, the same way ambient img elements resolve through
+/// the shell's image_cache wrapper.
+pub(crate) fn set_global(cx: &mut App, cache: &Entity<ArtworkCache>) {
+    cx.set_global(ArtworkCacheGlobal(cache.downgrade()));
+}
+
+/// The registered artwork cache, if the shell has mounted one.
+pub(crate) fn global_cache(cx: &App) -> Option<Entity<ArtworkCache>> {
+    cx.try_global::<ArtworkCacheGlobal>()
+        .and_then(|cache| cache.0.upgrade())
 }
 
 #[derive(Debug)]

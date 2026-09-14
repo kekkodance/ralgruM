@@ -722,6 +722,7 @@ impl RalgrumApp {
                 library.clone(),
                 favorites.clone(),
                 favorite_controller.clone(),
+                artwork_cache.clone(),
                 cx,
             )
         });

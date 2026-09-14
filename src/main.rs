@@ -26,9 +26,9 @@ pub(crate) use platform::{browser_link, external_url, media_control, tray};
 #[cfg(windows)]
 pub(crate) use platform::{windows_chrome, windows_protocol, windows_taskbar};
 pub(crate) use ui::{
-    app_button, app_tooltip, artwork_cache, assets, browser_scroll, browser_scroll_cursor,
-    collection_detail, collection_empty, dialog_layout, drag_cursor, empty_state, motion, music_ui,
-    playing_indicator, tab_keyboard, theme, toast,
+    app_button, app_tooltip, artwork_cache, artwork_reveal, assets, browser_scroll,
+    browser_scroll_cursor, collection_detail, collection_empty, dialog_layout, drag_cursor,
+    empty_state, motion, music_ui, playing_indicator, tab_keyboard, theme, toast,
 };
 
 use std::sync::Arc;

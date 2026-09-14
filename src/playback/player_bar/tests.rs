@@ -10,17 +10,17 @@ use super::{
     VOLUME_SLIDER_CONTROL_HEIGHT_PX, VOLUME_SLIDER_WIDTH_PX, VOLUME_THUMB_DIAMETER_PX,
     VOLUME_TRACK_HEIGHT_PX, VolumeIconLevel, VolumeMotion, VolumeMotionMode, VolumePointerPhase,
     VolumePointerRelease, VolumePointerState, WIDE_VOLUME_INSET_PX, accessibility_seek_fraction,
-    artist_routes_for_track, bare_action_visual, close_player_tooltip_gap, current_block_width,
-    current_favorite_key, current_subtitle, current_text_available_width,
+    artist_routes_for_track, artwork_resource, bare_action_visual, close_player_tooltip_gap,
+    current_block_width, current_favorite_key, current_subtitle, current_text_available_width,
     current_text_width_for_layout, current_track_title, desktop_player_geometry,
     download_available, fade_motion_geometry, fade_motion_opacity, favorite_feedback_opacity,
     favorite_left_for_text_width, favorite_top, finish_volume_pointer_interaction,
     pointer_seek_fraction, quality_badge_animation_key, quality_badge_opacity_endpoints,
     quality_text_animation_key, quality_text_opacity_endpoints, rendered_artist_text,
-    rendered_current_artist_text, search_provider_for_playback, seekbar_display_progress,
-    update_last_quality_label, update_quality_label_for_generation, volume_container_offsets,
-    volume_icon_dimensions, volume_icon_speaker_offset, volume_logical_bounds,
-    volume_motion_mode_for_render, wide_volume_inset,
+    rendered_current_artist_text, resolve_artwork, search_provider_for_playback,
+    seekbar_display_progress, update_last_quality_label, update_quality_label_for_generation,
+    volume_container_offsets, volume_icon_dimensions, volume_icon_speaker_offset,
+    volume_logical_bounds, volume_motion_mode_for_render, wide_volume_inset,
 };
 use crate::{
     entity_navigation::{MenuRoute, MenuRouteKind},
@@ -29,10 +29,12 @@ use crate::{
     search::{Provider, TrackArtistRef},
     theme::{FOREGROUND, MUTED},
 };
-use gpui::{Bounds, point, px, size};
+use gpui::{Bounds, ImageCacheError, RenderImage, Resource, point, px, size};
+use image::{Frame, Rgba, RgbaImage};
 use std::{
     cell::Cell,
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -91,6 +93,113 @@ fn current_track_actions_match_provider_availability() {
         FavoriteKey::soundcloud(FavoriteKind::Track, "42".into())
     );
     assert!(current_favorite_key(None).is_none());
+}
+
+#[test]
+fn ready_artwork_paints_and_becomes_the_remembered_cover() {
+    let cover = test_cover();
+    let mut remembered = None;
+    match resolve_artwork(Some(Ok(cover.clone())), &mut remembered) {
+        Some(Ok(painted)) => assert!(Arc::ptr_eq(&painted, &cover)),
+        _ => panic!("a ready artwork must paint"),
+    }
+    assert!(
+        remembered
+            .as_ref()
+            .is_some_and(|image| Arc::ptr_eq(image, &cover))
+    );
+}
+
+#[test]
+fn loading_artwork_keeps_the_previous_cover_on_screen() {
+    let previous = test_cover();
+    let mut remembered = Some(previous.clone());
+    match resolve_artwork(None, &mut remembered) {
+        Some(Ok(painted)) => assert!(Arc::ptr_eq(&painted, &previous)),
+        _ => panic!("a loading artwork must keep the previous cover"),
+    }
+    assert!(
+        remembered
+            .as_ref()
+            .is_some_and(|image| Arc::ptr_eq(image, &previous))
+    );
+}
+
+#[test]
+fn loading_artwork_without_history_shows_the_placeholder() {
+    let mut remembered = None;
+    assert!(resolve_artwork(None, &mut remembered).is_none());
+    assert!(remembered.is_none());
+}
+
+#[test]
+fn failed_artwork_shows_the_placeholder_and_keeps_the_previous_cover() {
+    let previous = test_cover();
+    let mut remembered = Some(previous.clone());
+    match resolve_artwork(
+        Some(Err(ImageCacheError::Asset("cover unavailable".into()))),
+        &mut remembered,
+    ) {
+        Some(Err(_)) => {}
+        _ => panic!("a failed artwork must pass its error through"),
+    }
+    assert!(
+        remembered
+            .as_ref()
+            .is_some_and(|image| Arc::ptr_eq(image, &previous))
+    );
+}
+
+#[test]
+fn newer_ready_artwork_replaces_the_remembered_cover() {
+    let older = test_cover();
+    let newer = test_cover();
+    let mut remembered = Some(older);
+    match resolve_artwork(Some(Ok(newer.clone())), &mut remembered) {
+        Some(Ok(painted)) => assert!(Arc::ptr_eq(&painted, &newer)),
+        _ => panic!("a ready artwork must paint"),
+    }
+    assert!(
+        remembered
+            .as_ref()
+            .is_some_and(|image| Arc::ptr_eq(image, &newer))
+    );
+}
+
+#[test]
+fn rapid_switches_keep_the_last_ready_cover_until_one_loads() {
+    let first = test_cover();
+    let mut remembered = None;
+    resolve_artwork(Some(Ok(first.clone())), &mut remembered);
+    // Two skips in a row before any new artwork finishes loading.
+    assert!(matches!(
+        resolve_artwork(None, &mut remembered),
+        Some(Ok(painted)) if Arc::ptr_eq(&painted, &first)
+    ));
+    assert!(matches!(
+        resolve_artwork(None, &mut remembered),
+        Some(Ok(painted)) if Arc::ptr_eq(&painted, &first)
+    ));
+}
+
+#[test]
+fn artwork_urls_classify_like_plain_img_sources() {
+    assert!(matches!(
+        artwork_resource("https://cdn.example.test/cover.jpg".to_owned()),
+        Resource::Uri(_)
+    ));
+    assert!(matches!(
+        artwork_resource("icons/cover".to_owned()),
+        Resource::Embedded(_)
+    ));
+}
+
+fn test_cover() -> Arc<RenderImage> {
+    Arc::new(RenderImage::new([Frame::new(RgbaImage::from_pixel(
+        2,
+        2,
+        Rgba([24, 48, 96, 255]),
+    ))]))
 }
 
 #[test]

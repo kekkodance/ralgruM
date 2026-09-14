@@ -458,6 +458,7 @@ impl Render for PlaybackView {
         let current_block = match current.as_ref() {
             None => render_current(
                 None,
+                &self.artwork_hold,
                 status,
                 error.as_deref(),
                 loading_from_cache,
@@ -475,6 +476,7 @@ impl Render for PlaybackView {
             Some(track) => {
                 let rendered = render_current(
                     Some(track),
+                    &self.artwork_hold,
                     status,
                     error.as_deref(),
                     loading_from_cache,

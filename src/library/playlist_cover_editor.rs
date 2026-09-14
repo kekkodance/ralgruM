@@ -261,7 +261,13 @@ fn crop_preview<T: PlaylistCoverEditor>(
     let Some(cover) = dialog.cover() else {
         return preview
             .when_some(dialog.existing_cover_source(), |d, artwork| {
-                d.child(img(artwork).w_full().h_full().object_fit(ObjectFit::Cover))
+                d.child(
+                    crate::artwork_reveal::artwork_reveal(
+                        "playlist-cover-existing-reveal",
+                        artwork,
+                    )
+                    .size_full(),
+                )
             })
             .when(disabled, |d| d.opacity(0.6));
     };

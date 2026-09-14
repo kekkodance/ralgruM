@@ -68,9 +68,74 @@ pub(super) fn update_quality_label_for_generation(
     update_last_quality_label(last_label, resolved_quality);
 }
 
+/// Remembers the last artwork that finished loading so switching tracks keeps
+/// the previous cover on screen until the new one is ready.
+pub(super) struct ArtworkHold {
+    cache: AnyImageCache,
+    last_ready: Rc<RefCell<Option<Arc<RenderImage>>>>,
+}
+
+impl ArtworkHold {
+    pub(super) fn new(cache: Entity<ArtworkCache>) -> Self {
+        Self {
+            cache: cache.into(),
+            last_ready: Rc::default(),
+        }
+    }
+
+    /// Forget the remembered cover so a stale one cannot outlive its playback
+    /// session.
+    pub(super) fn clear(&self) {
+        self.last_ready.borrow_mut().take();
+    }
+
+    /// Build the player bar artwork source: the current track's cover once the
+    /// artwork cache has it, and the remembered previous cover while it is
+    /// still loading.
+    fn source(&self, url: String) -> ImageSource {
+        let cache = self.cache.clone();
+        let last_ready = self.last_ready.clone();
+        let resource = artwork_resource(url);
+        ImageSource::Custom(Arc::new(move |window: &mut Window, cx: &mut App| {
+            resolve_artwork(
+                cache.load(&resource, window, cx),
+                &mut last_ready.borrow_mut(),
+            )
+        }))
+    }
+}
+
+/// Classify an artwork string exactly like `img(url)` does, so the held
+/// artwork resolves through the same cache path as a plain image element.
+pub(super) fn artwork_resource(url: String) -> Resource {
+    match ImageSource::from(url) {
+        ImageSource::Resource(resource) => resource,
+        _ => unreachable!("string image sources always resolve to a resource"),
+    }
+}
+
+/// Choose what the artwork element paints and update the remembered cover: a
+/// ready artwork becomes the new memory, a still-loading one falls back to the
+/// previous cover instead of an empty frame, and errors pass through so failed
+/// covers keep showing the placeholder.
+pub(super) fn resolve_artwork(
+    current: Option<Result<Arc<RenderImage>, ImageCacheError>>,
+    remembered: &mut Option<Arc<RenderImage>>,
+) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+    match current {
+        Some(Ok(image)) => {
+            *remembered = Some(image.clone());
+            Some(Ok(image))
+        }
+        Some(Err(error)) => Some(Err(error)),
+        None => remembered.clone().map(Ok),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_current(
     track: Option<&PlaybackTrack>,
+    artwork_hold: &ArtworkHold,
     status: PlaybackStatus,
     error: Option<&str>,
     loading_from_cache: bool,
@@ -85,6 +150,11 @@ pub(super) fn render_current(
     favorite_interactive: Option<Rc<Cell<bool>>>,
     window: &mut Window,
 ) -> AnyElement {
+    if track.is_none() {
+        // No track means playback cleared or the player closed; forget the
+        // remembered cover so a stale one cannot return with the next session.
+        artwork_hold.clear();
+    }
     let block_width = desktop_layout.map_or(380., |layout| layout.side_width);
     let artwork = if narrow { 44. } else { 60. };
     let title = current_track_title(track, status);
@@ -216,7 +286,7 @@ pub(super) fn render_current(
                     track.filter(|track| !track.artwork.is_empty()),
                     |this, track| {
                         this.child(
-                            img(track.artwork.clone())
+                            img(artwork_hold.source(track.artwork.clone()))
                                 .id("player-bar-artwork")
                                 .size_full()
                                 .rounded(px(6.))

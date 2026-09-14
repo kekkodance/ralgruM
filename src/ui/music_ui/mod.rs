@@ -1,8 +1,8 @@
 use gpui::{
     AnimationExt as _, AnyElement, App, ClickEvent, CursorStyle, Div, ElementId, FontWeight,
-    HighlightStyle, InteractiveText, ObjectFit, ScrollHandle, ScrollWheelEvent, SharedString,
-    StyledText, TextAlign, UnderlineStyle, Window, canvas, div, fill, img, prelude::*, px, rgb,
-    rgba, svg,
+    HighlightStyle, ImageSource, InteractiveText, ScrollHandle, ScrollWheelEvent, SharedString,
+    StyledText, TextAlign, UnderlineStyle, Window, canvas, div, fill, prelude::*, px, rgb, rgba,
+    svg,
 };
 use std::{
     cell::Cell,
@@ -1008,7 +1008,7 @@ pub(crate) fn track_row_with_action(
                 playing_slot.unwrap_or_else(|| index_slot(index, playing, cx).into_any_element()),
             )
         })
-        .child(artwork_view(artwork))
+        .child(artwork_view(artwork, &provider_animation_key))
         .child(
             div()
                 .flex_1()
@@ -1694,9 +1694,9 @@ fn card_artwork(
         CardKind::Playlist => LocalIcon::ListUl,
         _ => LocalIcon::CompactDisc,
     };
-    let missing = match &artwork {
-        CardArtworkSource::Remote(artwork) => artwork.is_empty(),
-        CardArtworkSource::Local(path) => path.is_none(),
+    let image_source = match &artwork {
+        CardArtworkSource::Remote(artwork) => (!artwork.is_empty()).then(|| artwork.clone().into()),
+        CardArtworkSource::Local(path) => path.clone().map(ImageSource::from),
     };
     div()
         .relative()
@@ -1707,29 +1707,25 @@ fn card_artwork(
         .border_1()
         .border_color(rgb(BORDER))
         .bg(rgb(SURFACE_RAISED))
-        .when(missing, |this| {
+        // The kind icon is the stable placeholder card artwork shows while
+        // its image loads; the reveal element fades the image in over it.
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(local_icon(icon, 0x52525b).size(px(30.))),
+        )
+        .when_some(image_source, |this, image_source| {
             this.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(local_icon(icon, 0x52525b).size(px(30.))),
-            )
-        })
-        .when(!missing, |this| {
-            let image = match artwork {
-                CardArtworkSource::Remote(artwork) => img(artwork),
-                CardArtworkSource::Local(Some(path)) => img(path),
-                CardArtworkSource::Local(None) => unreachable!(),
-            };
-            this.child(
-                image
-                    .id(format!("collection-artwork-{id}"))
-                    .size_full()
-                    .rounded(px(8.))
-                    .object_fit(ObjectFit::Cover),
+                crate::artwork_reveal::artwork_reveal(
+                    format!("collection-artwork-{id}"),
+                    image_source,
+                )
+                .size_full()
+                .rounded(px(8.)),
             )
         })
         .when_some(provider, |this, provider| {
@@ -1831,21 +1827,24 @@ fn soundcloud_thumbnail_filename(filename: &str) -> Option<String> {
     None
 }
 
-fn artwork_view(artwork: &str) -> AnyElement {
+fn artwork_view(artwork: &str, reveal_key: &str) -> AnyElement {
     let artwork = track_artwork_url(artwork);
     div()
         .w(px(TRACK_ARTWORK_SIZE_PX))
         .h(px(TRACK_ARTWORK_SIZE_PX))
         .flex_none()
+        .relative()
         .overflow_hidden()
         .rounded(px(6.))
         .bg(rgb(SURFACE_RAISED))
         .when(!artwork.is_empty(), |this| {
             this.child(
-                img(artwork.clone())
-                    .size_full()
-                    .rounded(px(6.))
-                    .object_fit(ObjectFit::Cover),
+                crate::artwork_reveal::artwork_reveal(
+                    format!("track-artwork-reveal-{reveal_key}"),
+                    artwork,
+                )
+                .size_full()
+                .rounded(px(6.)),
             )
         })
         .into_any_element()
@@ -1974,6 +1973,35 @@ mod tests {
         assert!(card.contains(".top(px(COLLECTION_PRIVACY_OPTICAL_OFFSET_PX))"));
         assert!(!card.contains("LocalIcon::Globe"));
         assert!(source.contains("collection-artwork-"));
+    }
+
+    #[test]
+    fn card_and_track_artwork_appear_through_the_shared_reveal() {
+        // Every artwork surface must adopt the same placeholder-then-fade
+        // mechanism, so pin the reveal wrapper into the shared card and track
+        // artwork builders.
+        let source = include_str!("mod.rs");
+        let card_artwork = source
+            .split("fn card_artwork(")
+            .nth(1)
+            .unwrap()
+            .split("fn track_artwork_url(")
+            .next()
+            .unwrap();
+        assert!(card_artwork.contains("crate::artwork_reveal::artwork_reveal("));
+        // The placeholder icon stays mounted beneath the reveal element.
+        assert!(card_artwork.contains(".absolute()"));
+
+        let track_artwork = source
+            .split("fn artwork_view(")
+            .nth(1)
+            .unwrap()
+            .split("fn provider_badge(")
+            .next()
+            .unwrap();
+        assert!(track_artwork.contains("crate::artwork_reveal::artwork_reveal("));
+        assert!(track_artwork.contains(".relative()"));
+        assert!(!track_artwork.contains("img("));
     }
 
     #[test]

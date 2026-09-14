@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use gpui::{AnyElement, Div, FontWeight, ObjectFit, div, img, prelude::*, px, rgb};
+use gpui::{AnyElement, Div, FontWeight, div, prelude::*, px, rgb};
 
 use crate::{
     assets::{LocalIcon, local_icon},
@@ -503,7 +503,8 @@ pub(crate) fn render_artist_section_header(
 }
 
 fn artwork(url: &str, size: gpui::Pixels, radius: gpui::Pixels) -> AnyElement {
-    let base = div()
+    div()
+        .relative()
         .w(size)
         .h(size)
         .flex_none()
@@ -511,22 +512,23 @@ fn artwork(url: &str, size: gpui::Pixels, radius: gpui::Pixels) -> AnyElement {
         .rounded(radius)
         .border_1()
         .border_color(rgb(BORDER))
-        .bg(rgb(SURFACE_RAISED));
-    if url.is_empty() {
-        base.into_any_element()
-    } else {
-        base.child(
-            img(url.to_owned())
+        .bg(rgb(SURFACE_RAISED))
+        .when(!url.is_empty(), |this| {
+            this.child(
+                crate::artwork_reveal::artwork_reveal(
+                    format!("detail-header-artwork-{url}"),
+                    url.to_owned(),
+                )
                 .size_full()
-                .rounded(radius)
-                .object_fit(ObjectFit::Cover),
-        )
+                .rounded(radius),
+            )
+        })
         .into_any_element()
-    }
 }
 
 fn header_artwork(source: HeaderArtwork, size: gpui::Pixels, radius: gpui::Pixels) -> AnyElement {
     let base = div()
+        .relative()
         .w(size)
         .h(size)
         .flex_none()
@@ -534,30 +536,32 @@ fn header_artwork(source: HeaderArtwork, size: gpui::Pixels, radius: gpui::Pixel
         .rounded(radius)
         .border_1()
         .border_color(rgb(BORDER))
-        .bg(rgb(SURFACE_RAISED));
+        .bg(rgb(SURFACE_RAISED))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(local_icon(LocalIcon::ListUl, 0x52525b).size(px(24.)));
     match source {
+        // The list icon stays mounted as the stable placeholder; the reveal
+        // element fades the image in over it once the artwork is ready.
         HeaderArtwork::Remote(url) if !url.is_empty() => base
             .child(
-                img(url)
+                crate::artwork_reveal::artwork_reveal(format!("detail-header-artwork-{url}"), url)
                     .size_full()
-                    .rounded(radius)
-                    .object_fit(ObjectFit::Cover),
+                    .rounded(radius),
             )
             .into_any_element(),
         HeaderArtwork::Local(Some(path)) => base
             .child(
-                img(path.as_path())
-                    .size_full()
-                    .rounded(radius)
-                    .object_fit(ObjectFit::Cover),
+                crate::artwork_reveal::artwork_reveal(
+                    format!("detail-header-artwork-{}", path.display()),
+                    path.as_path(),
+                )
+                .size_full()
+                .rounded(radius),
             )
             .into_any_element(),
-        HeaderArtwork::Local(None) => base
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(local_icon(LocalIcon::ListUl, 0x52525b).size(px(24.)))
-            .into_any_element(),
+        HeaderArtwork::Local(None) => base.into_any_element(),
         HeaderArtwork::Remote(_) => base.into_any_element(),
     }
 }

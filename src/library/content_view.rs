@@ -1013,12 +1013,20 @@ fn render_page_header_snapshot(
         .gap(px(16.))
         .when(!page.artwork.is_empty(), |this| {
             this.child(
-                div().size(px(76.)).rounded(px(6.)).overflow_hidden().child(
-                    gpui::img(page.artwork.clone())
+                div()
+                    .relative()
+                    .size(px(76.))
+                    .rounded(px(6.))
+                    .overflow_hidden()
+                    .bg(rgb(SURFACE_RAISED))
+                    .child(
+                        crate::artwork_reveal::artwork_reveal(
+                            format!("page-header-artwork-{}", page.artwork),
+                            page.artwork.clone(),
+                        )
                         .size_full()
-                        .rounded(px(6.))
-                        .object_fit(gpui::ObjectFit::Cover),
-                ),
+                        .rounded(px(6.)),
+                    ),
             )
         })
         .child(

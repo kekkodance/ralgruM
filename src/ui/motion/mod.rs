@@ -18,6 +18,9 @@ pub(crate) const ANIMATION_FRAME_DURATION: Duration = Duration::from_millis(17);
 pub(crate) const PANEL_SETTLING_DURATION: Duration =
     PANEL_DURATION.saturating_add(ANIMATION_FRAME_DURATION);
 pub(crate) const SKELETON_LOOP_DURATION: Duration = Duration::from_millis(1400);
+/// How long a freshly loaded artwork image takes to fade in. The placeholder
+/// beneath it stays visible for the whole window.
+pub(crate) const ARTWORK_REVEAL_DURATION: Duration = Duration::from_millis(180);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ResponsiveModeVisual {

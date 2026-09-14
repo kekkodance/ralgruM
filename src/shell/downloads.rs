@@ -6,8 +6,8 @@ use crate::{
     theme::{BORDER, DANGER, FOREGROUND, MUTED, PRIMARY, SURFACE, SURFACE_RAISED},
 };
 use gpui::{
-    AnyElement, Context, FontWeight, IntoElement, ObjectFit, Role, SharedString, Window, div, img,
-    prelude::*, px, rgb, rgba,
+    AnyElement, Context, FontWeight, IntoElement, Role, SharedString, Window, div, prelude::*, px,
+    rgb, rgba,
 };
 use gpui_component::{progress::Progress, scroll::ScrollableElement};
 
@@ -179,7 +179,7 @@ fn render_job(
         .border_1()
         .border_color(rgba(0x00000000))
         .hover(|style| style.bg(rgb(SURFACE)).border_color(rgb(BORDER)))
-        .child(job_artwork(&job.track.artwork))
+        .child(job_artwork(id, &job.track.artwork))
         .child(
             div()
                 .flex_1()
@@ -211,8 +211,9 @@ fn render_job(
         .children(action_cell(id, &job.status, downloads, cx))
 }
 
-fn job_artwork(artwork: &str) -> impl IntoElement {
+fn job_artwork(id: u64, artwork: &str) -> impl IntoElement {
     div()
+        .relative()
         .w(px(40.))
         .h(px(40.))
         .flex_none()
@@ -220,13 +221,15 @@ fn job_artwork(artwork: &str) -> impl IntoElement {
         .rounded(px(6.))
         .border_1()
         .border_color(rgb(BORDER))
-        .when(artwork.is_empty(), |this| this.bg(rgb(SURFACE_RAISED)))
+        .bg(rgb(SURFACE_RAISED))
         .when(!artwork.is_empty(), |this| {
             this.child(
-                img(artwork.to_owned())
-                    .size_full()
-                    .rounded(px(6.))
-                    .object_fit(ObjectFit::Cover),
+                crate::artwork_reveal::artwork_reveal(
+                    ("download-artwork-reveal", id),
+                    artwork.to_owned(),
+                )
+                .size_full()
+                .rounded(px(6.)),
             )
         })
 }

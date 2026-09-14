@@ -11,8 +11,8 @@ use crate::{
     theme::{BORDER, DEEZER, MUTED, PRIMARY, SOUNDCLOUD, SURFACE_RAISED},
 };
 use gpui::{
-    AnyElement, Entity, FontWeight, IntoElement, KeyDownEvent, MouseButton, ObjectFit, Window, div,
-    img, prelude::*, px, rgb, rgba,
+    AnyElement, Entity, FontWeight, IntoElement, KeyDownEvent, MouseButton, Window, div,
+    prelude::*, px, rgb, rgba,
 };
 
 use super::{
@@ -126,6 +126,7 @@ pub(super) fn row(
         container
             .child(
                 div()
+                    .relative()
                     .size(px(40.))
                     .flex_none()
                     .overflow_hidden()
@@ -133,19 +134,22 @@ pub(super) fn row(
                     .border_1()
                     .border_color(rgb(BORDER))
                     .bg(rgb(SURFACE_RAISED))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    // The music note is the stable placeholder the row shows
+                    // while its artwork loads; the reveal element fades the
+                    // image in over it.
+                    .child(local_icon(LocalIcon::Music, MUTED).size(px(14.)))
                     .when(has_artwork, |this| {
-                        this.flex().child(
-                            img(artwork)
-                                .size_full()
-                                .rounded(px(5.))
-                                .object_fit(ObjectFit::Cover),
+                        this.child(
+                            crate::artwork_reveal::artwork_reveal(
+                                ("queue-artwork-reveal", ordinal),
+                                artwork,
+                            )
+                            .size_full()
+                            .rounded(px(5.)),
                         )
-                    })
-                    .when(!has_artwork, |this| {
-                        this.flex()
-                            .items_center()
-                            .justify_center()
-                            .child(local_icon(LocalIcon::Music, MUTED).size(px(14.)))
                     }),
             )
             .child(

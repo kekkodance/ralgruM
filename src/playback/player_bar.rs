@@ -2,14 +2,21 @@
 //! per-track action cluster. Extracted from the playback model module so the
 //! model stays free of rendering concerns.
 
-use std::{cell::Cell, rc::Rc, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+    time::Instant,
+};
 
 use gpui::{
-    AccessibleAction, AnimationExt, AnyElement, App, Bounds, ClickEvent, Context, Entity, Font,
-    FontWeight, Hitbox, HitboxBehavior, Hsla, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Render, Role, TextRun, Window,
-    canvas, div, img, point, prelude::*, px, relative, rgb, rgba, size,
+    AccessibleAction, AnimationExt, AnyElement, AnyImageCache, App, Bounds, ClickEvent, Context,
+    Entity, Font, FontWeight, Hitbox, HitboxBehavior, Hsla, ImageCacheError, ImageSource,
+    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ObjectFit, Pixels, Render, RenderImage, Resource, Role, TextRun, Window, canvas, div, img,
+    point, prelude::*, px, relative, rgb, rgba, size,
 };
+
 use gpui_component::slider::{Slider, SliderState, SliderValue};
 
 use crate::{
@@ -25,6 +32,7 @@ use crate::{
         BORDER, DANGER, FOREGROUND, MUTED, PRIMARY, SCROLLBAR_THUMB, SURFACE, SURFACE_RAISED,
         ui_font_family,
     },
+    ui::artwork_cache::ArtworkCache,
 };
 
 use super::view::SEEK_SLIDER_STEP;
@@ -84,6 +92,7 @@ pub(crate) struct PlaybackView {
     volume_offset_motion: RectMotion,
     last_quality_label: String,
     last_quality_generation: Option<u64>,
+    artwork_hold: ArtworkHold,
 }
 
 impl PlaybackView {
@@ -94,6 +103,7 @@ impl PlaybackView {
         library: Entity<LibraryView>,
         favorites: Entity<FavoriteState>,
         favorite_controller: Entity<FavoriteController>,
+        artwork_cache: Entity<ArtworkCache>,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
@@ -107,6 +117,7 @@ impl PlaybackView {
             library,
             favorites,
             favorite_controller,
+            artwork_hold: ArtworkHold::new(artwork_cache),
             external_track_navigation: None,
             seek_control_enabled: None,
             seek_pointer_state: Rc::new(Cell::new(SeekPointerState::default())),
