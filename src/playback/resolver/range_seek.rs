@@ -794,6 +794,48 @@ mod tests {
         (fetch, ranges)
     }
 
+    #[derive(Debug)]
+    struct FetchLog {
+        started: usize,
+        cancelled: usize,
+        completed: usize,
+    }
+
+    /// A range fetch with latency that honors cancellation, plus a log of
+    /// how every fetch ended. Superseded seek workers must observe their
+    /// cancellation instead of keeping the fetch alive.
+    fn delayed_cancellable_fetch(
+        bytes: Arc<Vec<u8>>,
+        delay: Duration,
+    ) -> (RangeFetch, Arc<Mutex<FetchLog>>) {
+        let log = Arc::new(Mutex::new(FetchLog {
+            started: 0,
+            cancelled: 0,
+            completed: 0,
+        }));
+        let recorded = log.clone();
+        let fetch: RangeFetch = Arc::new(move |start, end, cancellation| {
+            let bytes = bytes.clone();
+            let recorded = recorded.clone();
+            Box::pin(async move {
+                recorded.lock().unwrap().started += 1;
+                tokio::select! {
+                    _ = cancellation.cancelled() => {
+                        recorded.lock().unwrap().cancelled += 1;
+                        Err("Playback request cancelled".to_string())
+                    }
+                    _ = tokio::time::sleep(delay) => {
+                        recorded.lock().unwrap().completed += 1;
+                        let start = usize::try_from(start).expect("test range start fits");
+                        let end = usize::try_from(end).expect("test range end fits");
+                        Ok(bytes[start..=end].to_vec())
+                    }
+                }
+            })
+        });
+        (fetch, log)
+    }
+
     /// Mirrors the discard the engine applies to a timeline startup.
     fn discard_samples(decoder: &mut rodio::Decoder<ProgressiveReader>, position: Duration) {
         let target = position.as_nanos()
@@ -1286,6 +1328,174 @@ mod tests {
         assert!(
             position >= Duration::from_millis(3_400),
             "the FLAC seek must land at the target, was {position:?}"
+        );
+    }
+
+    /// Rapid seeks on a session-bearing source must never destroy the
+    /// buffer a newer seek needs. Every landed timeline seek retains one
+    /// suffix buffer, so a plain retention FIFO evicts the live track
+    /// buffer after two landed seeks; every later completed-buffer seek
+    /// then fails with an unopenable playback buffer. The spam must also
+    /// defer instantly, land only the final position, and cancel every
+    /// superseded fetch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn seek_spam_never_loses_the_live_track_buffer() {
+        use super::super::super::engine::{
+            AudioEngine, RodioEngine, RodioEngine as Engine, SeekOutcome,
+        };
+        use super::super::super::progressive::ProgressiveFile;
+        use super::super::super::standby::PreparedSource;
+        use super::super::ResolvedProgressiveAudio;
+        use tokio::io::AsyncWriteExt as _;
+
+        let Some(file) = make_mp3_tone_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping seek spam test");
+            return;
+        };
+        let bytes = std::fs::read(file.path()).unwrap();
+        let total = bytes.len() as u64;
+        let duration = Duration::from_secs(4);
+        let frontier =
+            super::super::super::progressive::startup_bytes(AudioFormat::Mp3, Some(total))
+                .min(total);
+        let buffer = ProgressiveFile::new(AudioFormat::Mp3, Some(total)).unwrap();
+        let buffer_path = buffer.path().to_owned();
+        let mut writer = buffer.writer().unwrap();
+        writer.write_all(&bytes[..frontier as usize]).await.unwrap();
+        writer.flush().await.unwrap();
+        let (fetch, log) =
+            delayed_cancellable_fetch(Arc::new(bytes.clone()), Duration::from_millis(30));
+        let session = Arc::new(RangeTimelineSession::new(
+            RangeSeekFormat::Mp3,
+            fetch,
+            total,
+            duration,
+            tokio::runtime::Handle::current(),
+            CancellationToken::new(),
+        ));
+        let audio = ResolvedProgressiveAudio {
+            reader: buffer.reader().unwrap(),
+            file: buffer.into_file(),
+            duration: Some(duration),
+            format: AudioFormat::Mp3,
+            total: Some(total),
+            timeline_size_unknown: false,
+            declared_bitrate: Some(128),
+            initial_downloaded: frontier,
+            initial_buffered_fraction: None,
+            fully_cached: false,
+            timeline_seek_session: Some(session),
+            worker: None,
+        };
+        let prepared = Engine::decode_progressive(audio).unwrap();
+        let (source, file, progressive_seek) = prepared.into_parts();
+        let prepared = PreparedSource::new(source, Some(duration), file)
+            .with_progressive_seek(progressive_seek.unwrap());
+
+        let Ok(mut engine) = RodioEngine::new() else {
+            eprintln!("no audio device; skipping seek spam test");
+            return;
+        };
+        engine.load(prepared, 1.0);
+
+        // Phase 1: fire seeks back to back with no polling between them,
+        // the way a dragged seekbar spams random positions. Each new seek
+        // supersedes the pending reload of the previous one.
+        for position_ms in [500_u64, 2_500, 1_500, 3_500, 1_000] {
+            let started = std::time::Instant::now();
+            let outcome = engine
+                .seek(Duration::from_millis(position_ms))
+                .expect("a rapid seek must defer without an error");
+            assert_eq!(outcome, SeekOutcome::Deferred);
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "the seek must defer instantly, took {:?}",
+                started.elapsed()
+            );
+        }
+        let mut applied = None;
+        for _ in 0..200 {
+            match engine
+                .apply_deferred_seek()
+                .expect("a superseded seek must never surface an error")
+            {
+                SeekOutcome::Applied | SeekOutcome::AppliedStandbyDropped => {
+                    applied = Some(engine.position());
+                    break;
+                }
+                SeekOutcome::Deferred => tokio::time::sleep(Duration::from_millis(25)).await,
+            }
+        }
+        let position = applied.expect("the final rapid seek must land");
+        assert!(
+            position >= Duration::from_millis(950) && position < Duration::from_millis(2_000),
+            "only the final rapid seek may land, position was {position:?}"
+        );
+
+        // Phase 2: keep seeking with each request landing, so several
+        // suffix buffers are retained while the track buffer is still
+        // downloading.
+        for position_ms in [3_000_u64, 800, 2_200, 1_200] {
+            let outcome = engine
+                .seek(Duration::from_millis(position_ms))
+                .expect("a landed-seek spam must defer without an error");
+            assert_eq!(outcome, SeekOutcome::Deferred);
+            let mut landed = None;
+            for _ in 0..200 {
+                match engine
+                    .apply_deferred_seek()
+                    .expect("a landed seek must never surface an error")
+                {
+                    SeekOutcome::Applied | SeekOutcome::AppliedStandbyDropped => {
+                        landed = Some(engine.position());
+                        break;
+                    }
+                    SeekOutcome::Deferred => tokio::time::sleep(Duration::from_millis(25)).await,
+                }
+            }
+            let landed = landed.expect("each spam seek must land");
+            assert!(
+                landed >= Duration::from_millis(position_ms.saturating_sub(100))
+                    && landed < Duration::from_millis(position_ms + 1_500),
+                "the seek to {position_ms}ms must land near its target, was {landed:?}"
+            );
+        }
+
+        // The live track buffer must still exist for the completed-buffer
+        // seek path that reopens it by path.
+        assert!(
+            buffer_path.exists(),
+            "the live track buffer must survive the seek spam"
+        );
+
+        // Complete the background download. A seek on the completed buffer
+        // must open the original buffer and land locally instead of
+        // failing with an unopenable playback buffer.
+        writer.write_all(&bytes[frontier as usize..]).await.unwrap();
+        writer.flush().await.unwrap();
+        writer.finish().await.unwrap();
+        let outcome = engine
+            .seek(Duration::from_millis(2_000))
+            .expect("a seek on the completed buffer must open the live buffer");
+        assert_eq!(outcome, SeekOutcome::Applied);
+        let position = engine.position();
+        assert!(
+            position >= Duration::from_millis(1_950) && position < Duration::from_millis(3_500),
+            "the completed-buffer seek must land at the target, was {position:?}"
+        );
+
+        // Every superseded fetch must have observed its cancellation and
+        // no fetch may outlive its request.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let log = log.lock().unwrap();
+        assert!(
+            log.cancelled >= 4,
+            "the superseded rapid seeks must cancel their fetches, log was {log:?}"
+        );
+        assert_eq!(
+            log.started,
+            log.cancelled + log.completed,
+            "every started fetch must end cancelled or completed, log was {log:?}"
         );
     }
 }

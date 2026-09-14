@@ -322,12 +322,47 @@ impl RodioEngine {
         self.position_base = position;
         self.pending_position = None;
         if let Some(file) = file {
-            self.retained_files.push(file);
-            if self.retained_files.len() > 2 {
-                self.retained_files.remove(0);
-            }
+            self.retain_playback_file(file);
         }
         standby_dropped
+    }
+
+    /// Buffer paths the live seek state still opens by name. Completed
+    /// buffer seeks and M4A reloads reopen these paths to build a fresh
+    /// decoder, so dropping the owning temp file would make every later
+    /// seek fail with an unopenable playback buffer.
+    fn live_seek_paths(&self) -> [Option<&Path>; 2] {
+        [
+            self.progressive_seek
+                .as_ref()
+                .map(|seek| seek.path.as_path()),
+            self.standby_progressive_seek
+                .as_ref()
+                .map(|seek| seek.path.as_path()),
+        ]
+    }
+
+    /// Retains a playback buffer file, evicting the oldest superseded one.
+    ///
+    /// Rapid mid-download seeks land one suffix buffer per request, so a
+    /// plain FIFO trim would evict the current track's buffer after two
+    /// landed seeks even though the engine still opens it by path. Only
+    /// files no live seek path names and that are not the newest buffer
+    /// feeding the sink are ever dropped.
+    fn retain_playback_file(&mut self, file: tempfile::NamedTempFile) {
+        self.retained_files.push(file);
+        while self.retained_files.len() > 2 {
+            let live = self.live_seek_paths();
+            let Some(index) = self
+                .retained_files
+                .iter()
+                .take(self.retained_files.len() - 1)
+                .position(|file| live.iter().flatten().all(|path| file.path() != *path))
+            else {
+                break;
+            };
+            self.retained_files.remove(index);
+        }
     }
 
     fn cancel_pending_progressive_reload(&mut self) {
@@ -741,10 +776,7 @@ impl AudioEngine for RodioEngine {
         self.set_playback_intent(true);
         self.sink.play();
         self.progressive_seek = progressive_seek;
-        self.retained_files.push(file);
-        if self.retained_files.len() > 2 {
-            self.retained_files.remove(0);
-        }
+        self.retain_playback_file(file);
         duration
     }
 
@@ -873,10 +905,7 @@ impl AudioEngine for RodioEngine {
         let (source, file, progressive_seek) = prepared.into_parts();
         self.sink.append(self.wrap_source(source));
         self.standby_progressive_seek = progressive_seek;
-        self.retained_files.push(file);
-        if self.retained_files.len() > 2 {
-            self.retained_files.remove(0);
-        }
+        self.retain_playback_file(file);
     }
     fn skip_to_standby(&mut self) {
         self.cancel_pending_progressive_reload();
