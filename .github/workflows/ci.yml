@@ -45,9 +45,13 @@ jobs:
       - name: Check Cargo metadata
         run: cargo metadata --locked --no-deps
 
+      - name: Reject source-text tests
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/check-test-quality.ps1
+
       # cargo test compiles all targets, so a separate cargo check would duplicate work.
       - name: Run tests
         run: cargo test --locked --all-targets
 
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets --no-deps
+        run: cargo clippy --locked --all-targets --no-deps -- -D clippy::correctness -D clippy::suspicious -D clippy::perf

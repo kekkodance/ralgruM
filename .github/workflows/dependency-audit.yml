@@ -27,7 +27,6 @@ jobs:
 
       - name: Run cargo audit
         id: audit
-        continue-on-error: true
         shell: bash
         run: cargo audit --locked --json > cargo-audit.json
 
@@ -38,7 +37,3 @@ jobs:
           name: cargo-audit-${{ github.run_id }}
           path: cargo-audit.json
           if-no-files-found: error
-
-      - name: Explain non-blocking audit result
-        if: steps.audit.outcome == 'failure'
-        run: echo "cargo audit reported advisories; see the uploaded JSON report."
