@@ -144,6 +144,12 @@ impl DiscoverState {
         self.skeleton_shapes.single_line(provider, index)
     }
 
+    /// How many section positions the provider's last loaded feed had, from
+    /// the remembered skeleton shapes.
+    pub(crate) fn skeleton_section_count(&self, provider: Provider) -> usize {
+        self.skeleton_shapes.section_count(provider)
+    }
+
     pub(crate) fn reset_account_scope(&mut self, account_scope: String) {
         if self.account_scope == account_scope {
             return;
@@ -927,6 +933,8 @@ mod tests {
         assert!(state.skeleton_single_line(Provider::Deezer, 0));
         assert!(!state.skeleton_single_line(Provider::Deezer, 1));
         assert!(!state.skeleton_single_line(Provider::Deezer, 2));
+        assert_eq!(state.skeleton_section_count(Provider::Deezer), 2);
+        assert_eq!(state.skeleton_section_count(Provider::SoundCloud), 0);
 
         let selections = section(Provider::SoundCloud, "selections");
         let (generation, scope) = state.start(Provider::SoundCloud).unwrap();
@@ -938,5 +946,6 @@ mod tests {
         ));
         assert!(state.skeleton_single_line(Provider::SoundCloud, 0));
         assert!(!state.skeleton_single_line(Provider::SoundCloud, 1));
+        assert_eq!(state.skeleton_section_count(Provider::SoundCloud), 1);
     }
 }

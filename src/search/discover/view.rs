@@ -184,25 +184,27 @@ pub(crate) fn render(
         &view.discover.provider(Provider::Deezer).status,
         &view.discover.provider(Provider::SoundCloud).status,
     );
-    for provider in source.providers() {
-        append_provider_entries(
-            view,
-            *provider,
-            defer_soundcloud_loading,
-            &mut entries,
-            &mut content_identity,
-        );
-    }
-
-    append_loading_overdraw(
+    let loading_blocks = plan_loading_blocks(
         view,
         source,
         available_height,
         narrow,
         defer_soundcloud_loading,
-        &mut entries,
-        &mut content_identity,
     );
+    for provider in source.providers() {
+        let planned_rows = loading_blocks
+            .iter()
+            .find(|(candidate, _)| candidate == provider)
+            .map(|(_, rows)| *rows);
+        append_provider_entries(
+            view,
+            *provider,
+            planned_rows,
+            defer_soundcloud_loading,
+            &mut entries,
+            &mut content_identity,
+        );
+    }
 
     render_feed(
         view,
@@ -263,16 +265,20 @@ fn render_feed(
     )
 }
 
-fn append_loading_overdraw(
+/// Stand-in row count for each loading provider. The loaded feed groups
+/// whole provider section blocks in provider order, so the skeleton must
+/// too: one contiguous block per loading provider, emitted at that
+/// provider's position, never interleaved rows. Each block uses the
+/// section count remembered for that provider so the rows can replay the
+/// remembered card shapes position by position.
+fn plan_loading_blocks(
     view: &SearchView,
     source: Source,
     available_height: f32,
     narrow: bool,
     defer_soundcloud_loading: bool,
-    entries: &mut Vec<DiscoverFeedEntry>,
-    content_identity: &mut String,
-) {
-    let loading_providers: Vec<_> = source
+) -> Vec<(Provider, usize)> {
+    let loading_providers: Vec<Provider> = source
         .providers()
         .iter()
         .copied()
@@ -284,49 +290,43 @@ fn append_loading_overdraw(
         })
         .collect();
     if loading_providers.is_empty() {
-        return;
+        return Vec::new();
     }
-    let target = loading_row_count(available_height, narrow);
-    let current = entries
+    let recorded: Vec<usize> = loading_providers
         .iter()
-        .filter(|entry| matches!(entry, DiscoverFeedEntry::Loading { .. }))
-        .count();
-    for index in current..target {
-        let provider = loading_providers[index % loading_providers.len()];
-        let ordinal = loading_occurrence_ordinal(entries, provider);
-        let single_line = view.discover.skeleton_single_line(provider, ordinal);
-        let scroll_id = format!("discover-loading-carousel-{provider:?}-{index}");
-        entries.push(DiscoverFeedEntry::Loading {
-            provider,
-            index,
-            single_line,
-            carousel: view.card_scroll_handle(&scroll_id),
-        });
-        content_identity.push_str(&format!("|loading:{provider:?}:{index}:{single_line}"));
-    }
+        .map(|provider| view.discover.skeleton_section_count(*provider))
+        .collect();
+    let target = loading_row_count(available_height, narrow);
+    loading_providers
+        .into_iter()
+        .zip(loading_block_plan(&recorded, target))
+        .collect()
 }
 
-/// How many loading stand-ins already exist for the provider. Each loading
-/// row stands in for the section at that position in the provider's feed,
-/// so the count is the position ordinal the next row represents.
-fn loading_occurrence_ordinal(entries: &[DiscoverFeedEntry], provider: Provider) -> usize {
-    entries
+/// Row count for each loading provider's stand-in block. Remembered section
+/// counts win when they exist; every loading provider keeps at least one
+/// row, and a shortfall against the viewport target is distributed in
+/// provider order so the blocks fill the page without interleaving.
+fn loading_block_plan(recorded: &[usize], target: usize) -> Vec<usize> {
+    let mut counts: Vec<usize> = recorded
         .iter()
-        .filter(|entry| {
-            matches!(
-                entry,
-                DiscoverFeedEntry::Loading {
-                    provider: candidate,
-                    ..
-                } if *candidate == provider
-            )
-        })
-        .count()
+        .map(|remembered| (*remembered).max(1))
+        .collect();
+    let mut total: usize = counts.iter().sum();
+    let mut next = 0;
+    while total < target {
+        let slot = next % counts.len();
+        counts[slot] += 1;
+        total += 1;
+        next += 1;
+    }
+    counts
 }
 
 fn append_provider_entries(
     view: &SearchView,
     provider: Provider,
+    planned_rows: Option<usize>,
     defer_soundcloud_loading: bool,
     entries: &mut Vec<DiscoverFeedEntry>,
     content_identity: &mut String,
@@ -350,16 +350,19 @@ fn append_provider_entries(
             append_sections(view, &state.sections, entries, content_identity);
         }
         DiscoverStatus::Loading | DiscoverStatus::Idle => {
-            let ordinal = loading_occurrence_ordinal(entries, provider);
-            let single_line = view.discover.skeleton_single_line(provider, ordinal);
-            content_identity.push_str(&format!("|{provider:?}:loading:{single_line}"));
-            let scroll_id = format!("discover-loading-carousel-{provider:?}-{ordinal}");
-            entries.push(DiscoverFeedEntry::Loading {
-                provider,
-                index: ordinal,
-                single_line,
-                carousel: view.card_scroll_handle(&scroll_id),
-            });
+            content_identity.push_str(&format!("|{provider:?}:loading"));
+            for ordinal in 0..planned_rows.unwrap_or(1) {
+                let single_line = view.discover.skeleton_single_line(provider, ordinal);
+                let scroll_id = format!("discover-loading-carousel-{provider:?}-{ordinal}");
+                entries.push(DiscoverFeedEntry::Loading {
+                    provider,
+                    index: ordinal,
+                    single_line,
+                    carousel: view.card_scroll_handle(&scroll_id),
+                });
+                content_identity
+                    .push_str(&format!("|loading:{provider:?}:{ordinal}:{single_line}"));
+            }
         }
         DiscoverStatus::AccountRequired => {
             content_identity.push_str(&format!("|{provider:?}:account"));
@@ -1261,52 +1264,26 @@ mod tests {
     }
 
     #[test]
-    fn loading_occurrence_ordinals_count_per_provider() {
-        let carousel = CardCarouselState::new();
-        let section = DiscoverFeedEntry::Section {
-            section: DiscoverSection {
-                id: "section".into(),
-                provider: Provider::Deezer,
-                title: "Made for you".into(),
-                subtitle: String::new(),
-                items: Vec::new(),
-            },
-            carousel: carousel.clone(),
-        };
-        let entries = vec![
-            section,
-            DiscoverFeedEntry::Loading {
-                provider: Provider::Deezer,
-                index: 0,
-                single_line: true,
-                carousel: carousel.clone(),
-            },
-            DiscoverFeedEntry::Loading {
-                provider: Provider::SoundCloud,
-                index: 1,
-                single_line: false,
-                carousel: carousel.clone(),
-            },
-            DiscoverFeedEntry::Loading {
-                provider: Provider::Deezer,
-                index: 2,
-                single_line: false,
-                carousel: carousel.clone(),
-            },
-            DiscoverFeedEntry::ChannelLoading {
-                provider: Provider::Deezer,
-                index: 0,
-                carousel: carousel.clone(),
-            },
-        ];
-        // Only the provider's own loading stand-ins count: sections and
-        // channel skeletons never advance a provider's ordinal.
-        assert_eq!(loading_occurrence_ordinal(&entries, Provider::Deezer), 2);
+    fn loading_blocks_stay_grouped_and_honor_remembered_counts() {
+        // Remembered section counts decide each provider's stand-in block,
+        // so the skeleton mirrors the grouped layout of the loaded feed.
         assert_eq!(
-            loading_occurrence_ordinal(&entries, Provider::SoundCloud),
-            1
+            loading_block_plan(&[6, 4], 8),
+            vec![6, 4],
+            "remembered counts already fill the target"
         );
-        assert_eq!(loading_occurrence_ordinal(&[], Provider::Deezer), 0);
+        assert_eq!(
+            loading_block_plan(&[6, 4], 12),
+            vec![7, 5],
+            "a shortfall is distributed in provider order"
+        );
+        // No memory yet: every loading provider keeps at least one row and
+        // the target splits across the blocks, Deezer's block first.
+        assert_eq!(loading_block_plan(&[0, 0], 8), vec![4, 4]);
+        assert_eq!(loading_block_plan(&[0, 0], 7), vec![4, 3]);
+        assert_eq!(loading_block_plan(&[0], 5), vec![5]);
+        // A remembered count below the minimum still shows the provider.
+        assert_eq!(loading_block_plan(&[0, 3], 3), vec![1, 3]);
     }
 
     #[test]

@@ -108,6 +108,15 @@ impl SkeletonShapesCache {
         flags.get(index).is_some_and(|flag| *flag)
     }
 
+    /// How many section positions were remembered for the provider, so a
+    /// loading skeleton can mirror the grouped feed layout block by block.
+    pub(crate) fn section_count(&self, provider: Provider) -> usize {
+        match provider {
+            Provider::Deezer => self.deezer.len(),
+            Provider::SoundCloud => self.soundcloud.len(),
+        }
+    }
+
     fn persist(&self) {
         let Some(path) = self.storage_path.clone() else {
             return;
