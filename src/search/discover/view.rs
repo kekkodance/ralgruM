@@ -21,7 +21,7 @@ use crate::search::{
     models::{Provider, Source},
 };
 
-const DISCOVER_CARD_PREVIEW_LIMIT: usize = 24;
+pub(super) const DISCOVER_CARD_PREVIEW_LIMIT: usize = 24;
 const DISCOVER_SECTION_GAP_PX: f32 = 22.;
 const DISCOVER_SECTION_TITLE_HEIGHT_PX: f32 = 20.;
 const DISCOVER_SECTION_SUBTITLE_HEIGHT_PX: f32 = 16.;
@@ -45,6 +45,7 @@ enum DiscoverFeedEntry {
     Loading {
         provider: Provider,
         index: usize,
+        single_line: bool,
         carousel: CardCarouselState,
     },
     AccountRequired {
@@ -292,14 +293,35 @@ fn append_loading_overdraw(
         .count();
     for index in current..target {
         let provider = loading_providers[index % loading_providers.len()];
+        let ordinal = loading_occurrence_ordinal(entries, provider);
+        let single_line = view.discover.skeleton_single_line(provider, ordinal);
         let scroll_id = format!("discover-loading-carousel-{provider:?}-{index}");
         entries.push(DiscoverFeedEntry::Loading {
             provider,
             index,
+            single_line,
             carousel: view.card_scroll_handle(&scroll_id),
         });
-        content_identity.push_str(&format!("|loading:{provider:?}:{index}"));
+        content_identity.push_str(&format!("|loading:{provider:?}:{index}:{single_line}"));
     }
+}
+
+/// How many loading stand-ins already exist for the provider. Each loading
+/// row stands in for the section at that position in the provider's feed,
+/// so the count is the position ordinal the next row represents.
+fn loading_occurrence_ordinal(entries: &[DiscoverFeedEntry], provider: Provider) -> usize {
+    entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry,
+                DiscoverFeedEntry::Loading {
+                    provider: candidate,
+                    ..
+                } if *candidate == provider
+            )
+        })
+        .count()
 }
 
 fn append_provider_entries(
@@ -328,11 +350,14 @@ fn append_provider_entries(
             append_sections(view, &state.sections, entries, content_identity);
         }
         DiscoverStatus::Loading | DiscoverStatus::Idle => {
-            content_identity.push_str(&format!("|{provider:?}:loading"));
-            let scroll_id = format!("discover-loading-carousel-{provider:?}-0");
+            let ordinal = loading_occurrence_ordinal(entries, provider);
+            let single_line = view.discover.skeleton_single_line(provider, ordinal);
+            content_identity.push_str(&format!("|{provider:?}:loading:{single_line}"));
+            let scroll_id = format!("discover-loading-carousel-{provider:?}-{ordinal}");
             entries.push(DiscoverFeedEntry::Loading {
                 provider,
-                index: 0,
+                index: ordinal,
+                single_line,
                 carousel: view.card_scroll_handle(&scroll_id),
             });
         }
@@ -417,8 +442,16 @@ fn render_entry(
         DiscoverFeedEntry::Loading {
             provider,
             index,
+            single_line,
             carousel,
-        } => render_loading(*provider, *index, narrow, available_width, carousel.clone()),
+        } => render_loading(
+            *provider,
+            *index,
+            *single_line,
+            narrow,
+            available_width,
+            carousel.clone(),
+        ),
         DiscoverFeedEntry::AccountRequired { provider } => render_account_required(*provider, host),
         DiscoverFeedEntry::ChannelLoading {
             provider,
@@ -583,6 +616,7 @@ fn provider_icon(provider: Provider) -> AnyElement {
 fn render_loading(
     provider: Provider,
     index: usize,
+    single_line: bool,
     narrow: bool,
     available_width: f32,
     carousel: CardCarouselState,
@@ -590,6 +624,10 @@ fn render_loading(
     let geometry = section_geometry(narrow);
     let card_width = geometry.card_width;
     let (_, row_gap) = music_ui::card_row_metrics(narrow);
+    // The recorded card shape decides the stand-in's line count: single
+    // line rows drop the subtitle row so the swap to real cards keeps
+    // the row height stable.
+    let single_line_cards = single_line;
     let cards = (0..DISCOVER_CARD_PREVIEW_LIMIT).map(|card_index| {
         let body = gpui::div()
             .id(format!(
@@ -615,19 +653,22 @@ fn render_loading(
                     .pb(px(3.))
                     .child(
                         gpui::div()
+                            .when(single_line_cards, |this| this.mx_auto())
                             .w(px(88.))
                             .h(px(music_ui::COLLECTION_CARD_TITLE_LINE_HEIGHT_PX))
                             .rounded(px(8.))
                             .bg(rgb(SURFACE_RAISED)),
                     )
-                    .child(
-                        gpui::div()
-                            .mt(px(2.))
-                            .w(px(70.))
-                            .h(px(music_ui::COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))
-                            .rounded(px(8.))
-                            .bg(rgb(SURFACE_RAISED)),
-                    ),
+                    .when(!single_line_cards, |this| {
+                        this.child(
+                            gpui::div()
+                                .mt(px(2.))
+                                .w(px(70.))
+                                .h(px(music_ui::COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX))
+                                .rounded(px(8.))
+                                .bg(rgb(SURFACE_RAISED)),
+                        )
+                    }),
             );
         collection_card_frame(true, narrow, body.into_any_element()).into_any_element()
     });
@@ -1161,14 +1202,14 @@ mod tests {
         let with_controls = measured_row_height(cx, 400., 3, {
             let carousel = carousel.clone();
             Rc::new(move |_: usize| {
-                render_loading(Provider::Deezer, 0, false, 400., carousel.clone())
+                render_loading(Provider::Deezer, 2, false, false, 400., carousel.clone())
                     .into_any_element()
             })
         });
         let without_controls = measured_row_height(cx, 4000., 3, {
             let carousel = carousel.clone();
             Rc::new(move |_: usize| {
-                render_loading(Provider::Deezer, 0, false, 4000., carousel.clone())
+                render_loading(Provider::Deezer, 2, false, false, 4000., carousel.clone())
                     .into_any_element()
             })
         });
@@ -1178,6 +1219,94 @@ mod tests {
         assert_eq!(with_controls, section_geometry(false).row_height);
         assert_eq!(without_controls, section_geometry(false).row_height);
         assert_eq!(with_controls, 286.);
+    }
+
+    #[gpui::test]
+    fn loading_rows_measure_their_recorded_card_line_count(cx: &mut gpui::TestAppContext) {
+        // A loading stand-in renders the card line count recorded for the
+        // section position it stands in for, for either provider and either
+        // layout: the single-line row drops exactly the subtitle chin (its
+        // top margin plus the subtitle row) from the card body, while the
+        // default two-line row keeps the full geometry.
+        let subtitle_row = music_ui::COLLECTION_CARD_SUBTITLE_ROW_HEIGHT_PX + 2.;
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::configure_component_theme(cx);
+        });
+        let cx = cx.add_empty_window();
+        let carousel = CardCarouselState::new();
+        for narrow in [false, true] {
+            for provider in [Provider::Deezer, Provider::SoundCloud] {
+                let single_line = measured_row_height(cx, 4000., 3, {
+                    let carousel = carousel.clone();
+                    Rc::new(move |_: usize| {
+                        render_loading(provider, 0, true, narrow, 4000., carousel.clone())
+                            .into_any_element()
+                    })
+                });
+                let two_line = measured_row_height(cx, 4000., 3, {
+                    let carousel = carousel.clone();
+                    Rc::new(move |_: usize| {
+                        render_loading(provider, 0, false, narrow, 4000., carousel.clone())
+                            .into_any_element()
+                    })
+                });
+                assert_eq!(two_line, section_geometry(narrow).row_height);
+                assert_eq!(
+                    single_line,
+                    section_geometry(narrow).row_height - subtitle_row
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loading_occurrence_ordinals_count_per_provider() {
+        let carousel = CardCarouselState::new();
+        let section = DiscoverFeedEntry::Section {
+            section: DiscoverSection {
+                id: "section".into(),
+                provider: Provider::Deezer,
+                title: "Made for you".into(),
+                subtitle: String::new(),
+                items: Vec::new(),
+            },
+            carousel: carousel.clone(),
+        };
+        let entries = vec![
+            section,
+            DiscoverFeedEntry::Loading {
+                provider: Provider::Deezer,
+                index: 0,
+                single_line: true,
+                carousel: carousel.clone(),
+            },
+            DiscoverFeedEntry::Loading {
+                provider: Provider::SoundCloud,
+                index: 1,
+                single_line: false,
+                carousel: carousel.clone(),
+            },
+            DiscoverFeedEntry::Loading {
+                provider: Provider::Deezer,
+                index: 2,
+                single_line: false,
+                carousel: carousel.clone(),
+            },
+            DiscoverFeedEntry::ChannelLoading {
+                provider: Provider::Deezer,
+                index: 0,
+                carousel: carousel.clone(),
+            },
+        ];
+        // Only the provider's own loading stand-ins count: sections and
+        // channel skeletons never advance a provider's ordinal.
+        assert_eq!(loading_occurrence_ordinal(&entries, Provider::Deezer), 2);
+        assert_eq!(
+            loading_occurrence_ordinal(&entries, Provider::SoundCloud),
+            1
+        );
+        assert_eq!(loading_occurrence_ordinal(&[], Provider::Deezer), 0);
     }
 
     #[test]

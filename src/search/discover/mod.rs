@@ -1,6 +1,7 @@
 mod client;
 mod deezer;
 mod model;
+mod skeleton_shapes;
 mod soundcloud;
 mod title_cache;
 mod view;

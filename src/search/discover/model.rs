@@ -4,6 +4,7 @@ use super::deezer::{MAX_SMART_MIX_ENRICHMENT_IDS, valid_smart_mix_id};
 use crate::search::models::{Card, Provider};
 use crate::smart_mix_title::specific_smart_mix_title;
 
+use super::skeleton_shapes::SkeletonShapesCache;
 use super::title_cache::SmartTitleCache;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,11 +105,13 @@ pub(crate) struct DiscoverState {
     channel_cache: HashMap<String, CachedChannel>,
     channel_cache_order: VecDeque<String>,
     smart_titles: SmartTitleCache,
+    skeleton_shapes: SkeletonShapesCache,
 }
 
 impl DiscoverState {
     pub(crate) fn new(account_scope: String) -> Self {
         let smart_titles = SmartTitleCache::load(&account_scope);
+        let skeleton_shapes = SkeletonShapesCache::load(&account_scope);
         Self {
             account_scope,
             next_generation: 0,
@@ -118,6 +121,7 @@ impl DiscoverState {
             channel_cache: HashMap::new(),
             channel_cache_order: VecDeque::new(),
             smart_titles,
+            skeleton_shapes,
         }
     }
 
@@ -133,6 +137,13 @@ impl DiscoverState {
             .then_some(self.provider(provider).generation)
     }
 
+    /// Whether the provider's section at this position renders single line
+    /// cards, from the shapes remembered the last time its feed loaded.
+    /// Unknown positions keep the two-line shape.
+    pub(crate) fn skeleton_single_line(&self, provider: Provider, index: usize) -> bool {
+        self.skeleton_shapes.single_line(provider, index)
+    }
+
     pub(crate) fn reset_account_scope(&mut self, account_scope: String) {
         if self.account_scope == account_scope {
             return;
@@ -145,6 +156,7 @@ impl DiscoverState {
         self.channel_cache.clear();
         self.channel_cache_order.clear();
         self.smart_titles = SmartTitleCache::load(&self.account_scope);
+        self.skeleton_shapes = SkeletonShapesCache::load(&self.account_scope);
     }
 
     pub(crate) fn channel_open(&self) -> bool {
@@ -344,6 +356,7 @@ impl DiscoverState {
                 if provider == Provider::Deezer {
                     self.smart_titles.apply(&mut sections);
                 }
+                self.skeleton_shapes.record(provider, &sections);
                 let state = self.provider_mut(provider);
                 state.sections = sections;
                 state.status = DiscoverStatus::Ready;
@@ -890,5 +903,40 @@ mod tests {
             state.channel_cache["dance"].sections[0].items[0].card.title,
             "Il Meglio del Mio Agosto"
         );
+    }
+
+    #[test]
+    fn complete_records_skeleton_shapes_per_provider() {
+        let mut state =
+            DiscoverState::new(format!("test-skeleton-shapes-{}", uuid::Uuid::new_v4()));
+        // Detach from the real cache directory: this test only checks the
+        // in-memory wiring.
+        state.skeleton_shapes = SkeletonShapesCache::default();
+
+        // A failed completion records nothing.
+        let (generation, scope) = state.start(Provider::Deezer).unwrap();
+        assert!(state.complete(Provider::Deezer, generation, &scope, Err("offline".into()),));
+        assert!(!state.skeleton_single_line(Provider::Deezer, 0));
+
+        assert!(state.retry(Provider::Deezer));
+        let flow = section(Provider::Deezer, "flow");
+        let mut albums = section(Provider::Deezer, "albums");
+        albums.items[0].card.subtitle = "Based on your listening".into();
+        let (generation, scope) = state.start(Provider::Deezer).unwrap();
+        assert!(state.complete(Provider::Deezer, generation, &scope, Ok(vec![flow, albums]),));
+        assert!(state.skeleton_single_line(Provider::Deezer, 0));
+        assert!(!state.skeleton_single_line(Provider::Deezer, 1));
+        assert!(!state.skeleton_single_line(Provider::Deezer, 2));
+
+        let selections = section(Provider::SoundCloud, "selections");
+        let (generation, scope) = state.start(Provider::SoundCloud).unwrap();
+        assert!(state.complete(
+            Provider::SoundCloud,
+            generation,
+            &scope,
+            Ok(vec![selections]),
+        ));
+        assert!(state.skeleton_single_line(Provider::SoundCloud, 0));
+        assert!(!state.skeleton_single_line(Provider::SoundCloud, 1));
     }
 }
