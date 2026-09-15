@@ -417,7 +417,7 @@ use format::{
 };
 use range::{
     aligned_range, cacheable_size, content_range_total, inline_range, prefetch_range, ranged_body,
-    read_response_range, trim_range,
+    read_response_range, trim_range, validate_download_range_response,
 };
 
 impl StreamResolver {

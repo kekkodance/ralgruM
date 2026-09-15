@@ -657,6 +657,49 @@ fn content_range_total_rejects_unknown_or_invalid_totals() {
 }
 
 #[test]
+fn download_range_response_requires_exact_partial_content() {
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header::CONTENT_RANGE, "bytes 10-19/100".parse().unwrap());
+    assert!(
+        validate_download_range_response(StatusCode::PARTIAL_CONTENT, &headers, 10, 19, 100)
+            .is_ok()
+    );
+    assert!(validate_download_range_response(StatusCode::OK, &headers, 10, 19, 100).is_err());
+
+    headers.insert(header::CONTENT_RANGE, "bytes 9-19/100".parse().unwrap());
+    assert!(
+        validate_download_range_response(StatusCode::PARTIAL_CONTENT, &headers, 10, 19, 100)
+            .is_err()
+    );
+    headers.insert(header::CONTENT_RANGE, "bytes 10-20/100".parse().unwrap());
+    assert!(
+        validate_download_range_response(StatusCode::PARTIAL_CONTENT, &headers, 10, 19, 100)
+            .is_err()
+    );
+    headers.insert(header::CONTENT_RANGE, "bytes 10-19/101".parse().unwrap());
+    assert!(
+        validate_download_range_response(StatusCode::PARTIAL_CONTENT, &headers, 10, 19, 100)
+            .is_err()
+    );
+}
+
+#[test]
+fn download_range_response_rejects_missing_or_malformed_header() {
+    let mut headers = header::HeaderMap::new();
+    assert!(
+        validate_download_range_response(StatusCode::PARTIAL_CONTENT, &headers, 10, 19, 100)
+            .is_err()
+    );
+    for value in ["bytes */100", "items 10-19/100", "bytes 10-19/*", "invalid"] {
+        headers.insert(header::CONTENT_RANGE, value.parse().unwrap());
+        assert!(
+            validate_download_range_response(StatusCode::PARTIAL_CONTENT, &headers, 10, 19, 100)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn remote_size_prefers_content_range_total_and_falls_back_to_success_length() {
     let mut headers = header::HeaderMap::new();
     headers.insert(header::CONTENT_RANGE, "bytes 0-0/123456".parse().unwrap());

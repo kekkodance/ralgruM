@@ -1139,16 +1139,26 @@ impl StreamResolver {
                     .await?;
                 validate_media_response_url(response.url(), remote.is_soundcloud)?;
                 let status = response.status();
-                let content_length = response.content_length();
                 if !status.is_success() {
                     return Err(PlaybackDownloadError::media_status(
                         "audio provider",
                         status,
                     ));
                 }
-                let bytes = response.bytes().await.map_err(request_error)?;
+                validate_download_range_response(
+                    status,
+                    response.headers(),
+                    start,
+                    end,
+                    remote.size,
+                )?;
+                let (_, content_length, mut bytes) = tokio::select! {
+                    _ = cancellation.cancelled() => {
+                        return Err("Playback request cancelled".into());
+                    }
+                    result = read_response_range(response, start, end) => result?,
+                };
                 log_response_diagnostics("audio range", status, content_length);
-                let mut bytes = ranged_body(status, &bytes, start, end)?;
                 if let Some(track_id) = remote.deezer_track_id.as_deref() {
                     decrypt_stripes(&mut bytes, track_id, start / STRIPE_SIZE as u64)?;
                 }

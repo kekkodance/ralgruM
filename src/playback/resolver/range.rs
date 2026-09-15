@@ -7,6 +7,53 @@ pub(super) fn content_range_total(headers: &header::HeaderMap) -> Option<u64> {
     (total > 0).then_some(total)
 }
 
+pub(super) fn validate_download_range_response(
+    status: StatusCode,
+    headers: &header::HeaderMap,
+    expected_start: u64,
+    expected_end: u64,
+    expected_total: u64,
+) -> Result<(), String> {
+    if status != StatusCode::PARTIAL_CONTENT {
+        return Err("The audio provider did not honor the byte range request".into());
+    }
+
+    let value = headers
+        .get(header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "The audio provider omitted the content range".to_string())?;
+    let (unit, value) = value
+        .trim()
+        .split_once(' ')
+        .ok_or_else(|| "The audio provider returned an invalid content range".to_string())?;
+    let (range, total) = value
+        .trim()
+        .split_once('/')
+        .ok_or_else(|| "The audio provider returned an invalid content range".to_string())?;
+    let (start, end) = range
+        .split_once('-')
+        .ok_or_else(|| "The audio provider returned an invalid content range".to_string())?;
+    let start = start
+        .parse::<u64>()
+        .map_err(|_| "The audio provider returned an invalid content range".to_string())?;
+    let end = end
+        .parse::<u64>()
+        .map_err(|_| "The audio provider returned an invalid content range".to_string())?;
+    let total = total
+        .parse::<u64>()
+        .map_err(|_| "The audio provider returned an invalid content range".to_string())?;
+
+    if !unit.eq_ignore_ascii_case("bytes")
+        || start != expected_start
+        || end != expected_end
+        || total != expected_total
+    {
+        return Err("The audio provider returned an unexpected content range".into());
+    }
+
+    Ok(())
+}
+
 pub(super) fn cacheable_size(size: u64, max_bytes: u64) -> Option<u64> {
     (size > 0).then_some(size).filter(|size| *size <= max_bytes)
 }
