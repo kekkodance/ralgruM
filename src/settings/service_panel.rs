@@ -79,7 +79,7 @@ impl SettingsView {
                     if account.library_scope() != scope {
                         account.cancel_service_identity(generation, Service::SoundCloud);
                     } else {
-                        account.complete_soundcloud_profile(generation, result);
+                        account.complete_soundcloud_profile(generation, result, cx);
                     }
                     cx.notify();
                 })
@@ -111,7 +111,7 @@ impl SettingsView {
                     if account.library_scope() != scope {
                         account.cancel_service_identity(generation, Service::Deezer);
                     } else {
-                        account.complete_deezer_profile(generation, result);
+                        account.complete_deezer_profile(generation, result, cx);
                     }
                     cx.notify();
                 })
@@ -156,7 +156,7 @@ impl SettingsView {
                 .unwrap_or_else(|error| Err(format!("The login task failed: {error}")));
             account
                 .update(cx, |account, cx| {
-                    account.complete_service_auth(generation, result, service);
+                    account.complete_service_auth(generation, result, service, cx);
                     cx.notify();
                 })
                 .ok();
@@ -195,7 +195,7 @@ impl SettingsView {
                 .unwrap_or_else(|error| Err(format!("The login task failed: {error}")));
             account
                 .update(cx, |account, cx| {
-                    account.complete_service_auth(generation, result, service);
+                    account.complete_service_auth(generation, result, service, cx);
                     cx.notify();
                 })
                 .ok();
@@ -205,7 +205,7 @@ impl SettingsView {
 
     fn logout_service(&mut self, service: Service, cx: &mut Context<Self>) {
         self.account.update(cx, |account, cx| {
-            account.logout_service(service);
+            account.logout_service(service, cx);
             cx.notify();
         });
     }

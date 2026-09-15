@@ -116,7 +116,7 @@ impl SettingsView {
                     .update(cx, |account, cx| {
                         let (profile, extras) = result
                             .unwrap_or_else(|error| (Err(error), MurglarClient::empty_extras()));
-                        let profile_changed = account.complete_profile(generation, profile);
+                        let profile_changed = account.complete_profile(generation, profile, cx);
                         let extras_changed = account.complete_extras(generation, extras);
                         if profile_changed || extras_changed {
                             cx.notify();
@@ -143,7 +143,7 @@ impl SettingsView {
         self.password
             .update(cx, |input, cx| input.set_value("", window, cx));
         let Some((generation, identity, logout_epoch)) = self.account.update(cx, |account, cx| {
-            let login = account.begin_login();
+            let login = account.begin_login(cx);
             cx.notify();
             login
         }) else {
@@ -165,7 +165,8 @@ impl SettingsView {
             };
             let persisted_token = account
                 .update(cx, |account, cx| {
-                    let token = account.complete_token_exchange(generation, logout_epoch, result);
+                    let token =
+                        account.complete_token_exchange(generation, logout_epoch, result, cx);
                     cx.notify();
                     token
                 })
@@ -186,7 +187,7 @@ impl SettingsView {
                 .update(cx, |account, cx| {
                     let (profile, extras) =
                         result.unwrap_or_else(|error| (Err(error), MurglarClient::empty_extras()));
-                    let profile_changed = account.complete_profile(generation, profile);
+                    let profile_changed = account.complete_profile(generation, profile, cx);
                     let extras_changed = account.complete_extras(generation, extras);
                     if profile_changed || extras_changed {
                         cx.notify();
@@ -199,7 +200,7 @@ impl SettingsView {
 
     fn logout(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.account.update(cx, |account, cx| {
-            account.logout();
+            account.logout(cx);
             cx.notify();
         });
     }

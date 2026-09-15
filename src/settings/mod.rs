@@ -668,7 +668,7 @@ impl SettingsView {
 
     pub(crate) fn logout_all(&mut self, cx: &mut Context<Self>) {
         self.account.update(cx, |account, cx| {
-            account.logout_all();
+            account.logout_all(cx);
             cx.notify();
         });
     }

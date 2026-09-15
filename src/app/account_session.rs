@@ -227,28 +227,50 @@ impl SessionStore {
         &mut self.session
     }
 
+    #[cfg(test)]
     pub(crate) fn persist(&self) -> Result<(), SessionError> {
-        fs::create_dir_all(&self.directory).map_err(|_| SessionError::Filesystem)?;
-        write_session_pair(
-            &self.directory.join(PRIMARY_FILE),
-            &self.directory.join(BACKUP_FILE),
-            &self.session,
-        )?;
-        remove_legacy_files(&self.directory, self.legacy_directory.as_deref())
+        self.prepare_write().persist()
     }
 
-    pub(crate) fn preflight_persist(&self) -> Result<(), SessionError> {
-        self.persist()
-    }
-
-    pub(crate) fn persist_murglar(&mut self, token: String) -> Result<(), SessionError> {
-        let previous = std::mem::replace(&mut self.session.murglar, token);
-        if let Err(error) = self.persist() {
-            self.session.murglar = previous;
-            let _ = self.persist();
-            return Err(error);
+    /// Captures the current in-memory session as a durable write the caller
+    /// can perform later, off the UI thread. Preparing only clones data: no
+    /// encryption or filesystem work happens here.
+    pub(crate) fn prepare_write(&self) -> SessionWrite {
+        SessionWrite {
+            directory: self.directory.clone(),
+            legacy_directory: self.legacy_directory.clone(),
+            session: self.session.clone(),
         }
-        Ok(())
+    }
+
+    /// Replaces the in-memory session, used to roll the store back to the
+    /// last known durable content after a failed write.
+    pub(crate) fn restore_session(&mut self, session: AuthSession) {
+        self.session = session;
+    }
+
+    #[cfg(test)]
+    fn commit(&mut self, previous: AuthSession, write: SessionWrite) -> Result<(), SessionError> {
+        match write.persist() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.session = previous;
+                let _ = self.persist();
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn stage_murglar(&mut self, token: String) -> SessionWrite {
+        self.session.murglar = token;
+        self.prepare_write()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn persist_murglar(&mut self, token: String) -> Result<(), SessionError> {
+        let previous = self.session.clone();
+        let write = self.stage_murglar(token);
+        self.commit(previous, write)
     }
 
     #[cfg(test)]
@@ -256,20 +278,33 @@ impl SessionStore {
         self.persist_murglar(String::new())
     }
 
+    /// Murglar sign-out is one durable transition: the token and the cached
+    /// profile summary disappear together or not at all.
+    pub(crate) fn stage_murglar_signout(&mut self) -> SessionWrite {
+        self.session.murglar = String::new();
+        self.session.murglar_profile_summary = None;
+        self.prepare_write()
+    }
+
+    pub(crate) fn stage_profile_summary(
+        &mut self,
+        summary: Option<MurglarProfileSummary>,
+    ) -> SessionWrite {
+        self.session.murglar_profile_summary = summary;
+        self.prepare_write()
+    }
+
+    #[cfg(test)]
     pub(crate) fn persist_profile_summary(
         &mut self,
         summary: Option<MurglarProfileSummary>,
     ) -> Result<(), SessionError> {
-        let previous = self.session.murglar_profile_summary.clone();
-        self.session.murglar_profile_summary = summary;
-        if let Err(error) = self.persist() {
-            self.session.murglar_profile_summary = previous;
-            let _ = self.persist();
-            return Err(error);
-        }
-        Ok(())
+        let previous = self.session.clone();
+        let write = self.stage_profile_summary(summary);
+        self.commit(previous, write)
     }
 
+    #[cfg(test)]
     pub(crate) fn persist_services(
         &mut self,
         murglar: Option<String>,
@@ -296,15 +331,11 @@ impl SessionStore {
                 self.session.soundcloud_profile = None;
             }
         }
-        if let Err(error) = self.persist() {
-            self.session = previous;
-            let _ = self.persist();
-            return Err(error);
-        }
-        Ok(())
+        let write = self.prepare_write();
+        self.commit(previous, write)
     }
 
-    pub(crate) fn persist_service_login(
+    pub(crate) fn stage_service_login(
         &mut self,
         service: crate::service_auth::Service,
         desktop: String,
@@ -313,8 +344,7 @@ impl SessionStore {
         deezer_cookies: Option<String>,
         deezer_user_id: Option<String>,
         profile: Option<ServiceIdentity>,
-    ) -> Result<(), SessionError> {
-        let previous = self.session.clone();
+    ) -> SessionWrite {
         match service {
             crate::service_auth::Service::Deezer => {
                 self.session.deezer = desktop;
@@ -329,66 +359,145 @@ impl SessionStore {
                 self.session.soundcloud_profile = profile;
             }
         }
-        if let Err(error) = self.persist() {
-            self.session = previous;
-            let _ = self.persist();
-            return Err(error);
-        }
-        Ok(())
+        self.prepare_write()
     }
 
-    pub(crate) fn persist_service_profile(
+    #[cfg(test)]
+    pub(crate) fn persist_service_login(
         &mut self,
         service: crate::service_auth::Service,
+        desktop: String,
+        mobile: Option<String>,
+        soundcloud_cookies: Option<String>,
+        deezer_cookies: Option<String>,
+        deezer_user_id: Option<String>,
         profile: Option<ServiceIdentity>,
     ) -> Result<(), SessionError> {
         let previous = self.session.clone();
+        let write = self.stage_service_login(
+            service,
+            desktop,
+            mobile,
+            soundcloud_cookies,
+            deezer_cookies,
+            deezer_user_id,
+            profile,
+        );
+        self.commit(previous, write)
+    }
+
+    pub(crate) fn stage_service_profile(
+        &mut self,
+        service: crate::service_auth::Service,
+        profile: Option<ServiceIdentity>,
+    ) -> SessionWrite {
         match service {
             crate::service_auth::Service::Deezer => self.session.deezer_profile = profile,
             crate::service_auth::Service::SoundCloud => self.session.soundcloud_profile = profile,
         }
-        if let Err(error) = self.persist() {
-            self.session = previous;
-            let _ = self.persist();
-            return Err(error);
-        }
-        Ok(())
+        self.prepare_write()
     }
 
-    pub(crate) fn persist_deezer_cookies(
+    /// Deezer identity is one durable transition: the profile and the
+    /// harvested cookies land together or not at all, so a failed write can
+    /// never leave a new profile paired with stale cookies on disk.
+    pub(crate) fn stage_deezer_identity(
         &mut self,
-        cookies: Option<String>,
-    ) -> Result<(), SessionError> {
-        let previous = self.session.deezer_cookies.clone();
-        self.session.deezer_cookies = cookies;
-        if let Err(error) = self.persist() {
-            self.session.deezer_cookies = previous;
-            let _ = self.persist();
-            return Err(error);
+        profile: Option<ServiceIdentity>,
+        harvested_cookies: Option<String>,
+    ) -> SessionWrite {
+        self.session.deezer_profile = profile;
+        if let Some(cookies) = harvested_cookies {
+            self.session.deezer_cookies = Some(cookies);
         }
-        Ok(())
+        self.prepare_write()
     }
 
+    #[cfg(test)]
+    pub(crate) fn persist_deezer_identity(
+        &mut self,
+        profile: Option<ServiceIdentity>,
+        harvested_cookies: Option<String>,
+    ) -> Result<(), SessionError> {
+        let previous = self.session.clone();
+        let write = self.stage_deezer_identity(profile, harvested_cookies);
+        self.commit(previous, write)
+    }
+
+    pub(crate) fn stage_service_clear(
+        &mut self,
+        service: crate::service_auth::Service,
+    ) -> SessionWrite {
+        match service {
+            crate::service_auth::Service::Deezer => {
+                self.session.deezer = String::new();
+                self.session.deezer_user_id = String::new();
+                self.session.deezer_profile = None;
+                self.session.deezer_cookies = None;
+            }
+            crate::service_auth::Service::SoundCloud => {
+                self.session.soundcloud = String::new();
+                self.session.soundcloud_mobile = String::new();
+                self.session.soundcloud_cookies.clear();
+                self.session.soundcloud_profile = None;
+            }
+        }
+        self.prepare_write()
+    }
+
+    #[cfg(test)]
     pub(crate) fn clear_service(
         &mut self,
         service: crate::service_auth::Service,
     ) -> Result<(), SessionError> {
-        match service {
-            crate::service_auth::Service::Deezer => {
-                self.persist_services(None, Some((String::new(), String::new())), None)
-            }
-            crate::service_auth::Service::SoundCloud => {
-                self.persist_services(None, None, Some((String::new(), Some(String::new()))))
-            }
-        }
+        let previous = self.session.clone();
+        let write = self.stage_service_clear(service);
+        self.commit(previous, write)
     }
 
+    pub(crate) fn stage_clear_all_services(&mut self) -> SessionWrite {
+        self.session.murglar = String::new();
+        self.session.deezer = String::new();
+        self.session.deezer_user_id = String::new();
+        self.session.deezer_profile = None;
+        self.session.deezer_cookies = None;
+        self.session.soundcloud = String::new();
+        self.session.soundcloud_mobile = String::new();
+        self.session.soundcloud_cookies.clear();
+        self.session.soundcloud_profile = None;
+        self.prepare_write()
+    }
+
+    #[cfg(test)]
     pub(crate) fn clear_all_services(&mut self) -> Result<(), SessionError> {
-        self.persist_services(
-            Some(String::new()),
-            Some((String::new(), String::new())),
-            Some((String::new(), Some(String::new()))),
-        )
+        let previous = self.session.clone();
+        let write = self.stage_clear_all_services();
+        self.commit(previous, write)
+    }
+}
+
+/// A durable session write captured on the caller thread and performed
+/// later. Preparing a write only clones the in-memory session, so the UI
+/// thread never pays for encryption or filesystem work.
+pub(crate) struct SessionWrite {
+    directory: PathBuf,
+    legacy_directory: Option<PathBuf>,
+    session: AuthSession,
+}
+
+impl SessionWrite {
+    pub(crate) fn session(&self) -> &AuthSession {
+        &self.session
+    }
+
+    pub(crate) fn persist(&self) -> Result<(), SessionError> {
+        fs::create_dir_all(&self.directory).map_err(|_| SessionError::Filesystem)?;
+        write_session_pair(
+            &self.directory.join(PRIMARY_FILE),
+            &self.directory.join(BACKUP_FILE),
+            &self.session,
+        )?;
+        remove_legacy_files(&self.directory, self.legacy_directory.as_deref())
     }
 }
 
@@ -584,8 +693,23 @@ fn write_session_pair(
     session: &AuthSession,
 ) -> Result<(), SessionError> {
     let protected = encode_protected(session)?;
-    atomic_write(primary_path, &protected)?;
-    atomic_write(backup_path, &protected)
+    // Stage both replacement files before renaming either target, so a
+    // failure while preparing leaves the previous pair fully intact.
+    let primary_temporary = stage_replacement(primary_path, &protected)?;
+    let backup_temporary = match stage_replacement(backup_path, &protected) {
+        Ok(temporary) => temporary,
+        Err(error) => {
+            let _ = fs::remove_file(&primary_temporary);
+            return Err(error);
+        }
+    };
+    // The primary file is authoritative: rename it first so a failure on the
+    // backup still leaves the session recoverable from the primary.
+    if atomic_rename(&primary_temporary, primary_path).is_err() {
+        let _ = fs::remove_file(&backup_temporary);
+        return Err(SessionError::Filesystem);
+    }
+    atomic_rename(&backup_temporary, backup_path).map_err(|_| SessionError::Filesystem)
 }
 
 fn read_legacy_deezer_sid(
@@ -631,6 +755,15 @@ fn remove_legacy_files(
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), SessionError> {
+    let temporary = stage_replacement(path, contents)?;
+    let result = atomic_rename(&temporary, path);
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(|_| SessionError::Filesystem)
+}
+
+fn stage_replacement(path: &Path, contents: &[u8]) -> Result<PathBuf, SessionError> {
     let parent = path.parent().ok_or(SessionError::Filesystem)?;
     let file_name = path
         .file_name()
@@ -639,13 +772,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), SessionError> {
     for _ in 0..8 {
         let temporary = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4().simple()));
         match write_new_synced(&temporary, contents) {
-            Ok(()) => {
-                let result = atomic_rename(&temporary, path);
-                if result.is_err() {
-                    let _ = fs::remove_file(&temporary);
-                }
-                return result.map_err(|_| SessionError::Filesystem);
-            }
+            Ok(()) => return Ok(temporary),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(_) => {
                 let _ = fs::remove_file(&temporary);

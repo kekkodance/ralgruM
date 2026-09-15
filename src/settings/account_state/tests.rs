@@ -4,10 +4,30 @@ use crate::murglar_backend::{
     AccountError, AccountExtras, PassStatus, PaymentPlans, ReferralStats,
 };
 use crate::service_auth::{Service, ValidatedCredentials};
+use gpui::AppContext;
 use serde_json::json;
 use std::fs;
 use std::sync::Arc;
 use tempfile::TempDir;
+
+/// Test persistence driver: performs every write synchronously, so tests
+/// observe the durable outcome immediately, exactly like the old inline
+/// persistence did.
+struct DirectPersistence;
+
+impl SessionPersistence for DirectPersistence {
+    fn write_session(
+        &mut self,
+        pending: PendingSessionWrite,
+        _previous: Option<gpui::Task<()>>,
+    ) -> SessionWriteDispatch {
+        let result = pending.write.persist();
+        SessionWriteDispatch::Completed {
+            result,
+            pending: Box::new(pending),
+        }
+    }
+}
 
 fn identity() -> DeviceIdentityStatus {
     DeviceIdentityStatus::Ready(Box::new(crate::murglar_backend::test_device_identity()))
@@ -128,7 +148,7 @@ fn stale_session_end_after_exchange_persists_without_exposing_token_or_profile()
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     state.end_settings_session();
 
     assert!(
@@ -136,7 +156,8 @@ fn stale_session_end_after_exchange_persists_without_exposing_token_or_profile()
             .complete_token_exchange(
                 generation,
                 logout_epoch,
-                Ok(AccessToken::new("token".into()))
+                Ok(AccessToken::new("token".into())),
+                &mut DirectPersistence,
             )
             .is_none()
     );
@@ -156,11 +177,13 @@ fn superseded_login_completion_is_rejected_before_persistence() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (first_generation, _, first_login_epoch) = state.begin_login().unwrap();
+    let (first_generation, _, first_login_epoch) =
+        state.begin_login(&mut DirectPersistence).unwrap();
 
     state.end_settings_session();
     state.begin_settings_session();
-    let (second_generation, _, second_login_epoch) = state.begin_login().unwrap();
+    let (second_generation, _, second_login_epoch) =
+        state.begin_login(&mut DirectPersistence).unwrap();
     assert_ne!(first_login_epoch, second_login_epoch);
 
     assert!(
@@ -169,6 +192,7 @@ fn superseded_login_completion_is_rejected_before_persistence() {
                 first_generation,
                 first_login_epoch,
                 Ok(AccessToken::new("stale-token".into())),
+                &mut DirectPersistence,
             )
             .is_none()
     );
@@ -182,6 +206,7 @@ fn superseded_login_completion_is_rejected_before_persistence() {
             second_generation,
             second_login_epoch,
             Ok(AccessToken::new("current-token".into())),
+            &mut DirectPersistence,
         ),
         Some("current-token".into())
     );
@@ -196,14 +221,15 @@ fn token_exchange_then_profile_success_updates_profile_and_token() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     let token = state.complete_token_exchange(
         generation,
         logout_epoch,
         Ok(AccessToken::new("token".into())),
+        &mut DirectPersistence,
     );
     assert_eq!(token.as_deref(), Some("token"));
-    assert!(state.complete_profile(generation, Ok(profile())));
+    assert!(state.complete_profile(generation, Ok(profile()), &mut DirectPersistence));
     assert_eq!(state.token.as_deref(), Some("token"));
     assert_eq!(state.profile.as_ref().unwrap().username, "listener");
     assert_eq!(
@@ -337,7 +363,11 @@ fn transient_profile_failure_keeps_startup_summary_entitlement_available() {
     state.begin_settings_session();
     let (generation, _, _) = state.refresh().unwrap();
 
-    assert!(state.complete_profile(generation, Err(AccountError::NetworkUnavailable)));
+    assert!(state.complete_profile(
+        generation,
+        Err(AccountError::NetworkUnavailable),
+        &mut DirectPersistence
+    ));
     assert!(state.profile.is_none());
     assert_media_credentials_at(&state, now);
     assert!(matches!(
@@ -354,7 +384,7 @@ fn replacement_login_suppresses_stored_entitlement_until_fresh_profile_is_accept
     assert_media_credentials_at(&state, now);
 
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     assert!(state.murglar_media_credentials_at(now).is_none());
     assert_eq!(state.sidebar_pass_at(now), SidebarPass::Inactive);
 
@@ -362,13 +392,14 @@ fn replacement_login_suppresses_stored_entitlement_until_fresh_profile_is_accept
         generation,
         logout_epoch,
         Ok(AccessToken::new("replacement-token".into())),
+        &mut DirectPersistence,
     );
     assert_eq!(profile_token.as_deref(), Some("replacement-token"));
     assert!(state.murglar_media_credentials_at(now).is_none());
 
     let mut fresh = profile();
     fresh.pass_expiration_millis = Some(now + 1);
-    assert!(state.complete_profile(generation, Ok(fresh)));
+    assert!(state.complete_profile(generation, Ok(fresh), &mut DirectPersistence));
     assert_media_credentials_at(&state, now);
 }
 
@@ -378,13 +409,14 @@ fn live_profile_survives_summary_persistence_failure_without_retrusting_fallback
     let now = 1_700_000_000_000;
     let mut state = account_state_with_saved_pass(&temp, now + 1);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     assert_eq!(
         state
             .complete_token_exchange(
                 generation,
                 logout_epoch,
                 Ok(AccessToken::new("replacement-token".into())),
+                &mut DirectPersistence,
             )
             .as_deref(),
         Some("replacement-token")
@@ -393,7 +425,7 @@ fn live_profile_survives_summary_persistence_failure_without_retrusting_fallback
 
     let mut fresh = profile();
     fresh.pass_expiration_millis = Some(now + 2);
-    assert!(state.complete_profile(generation, Ok(fresh)));
+    assert!(state.complete_profile(generation, Ok(fresh), &mut DirectPersistence));
     assert_media_credentials_at(&state, now);
     assert!(matches!(
         state.sidebar_pass_at(now),
@@ -407,7 +439,11 @@ fn live_profile_survives_summary_persistence_failure_without_retrusting_fallback
     );
 
     let (refresh_generation, _, _) = state.refresh().unwrap();
-    assert!(state.complete_profile(refresh_generation, Err(AccountError::NetworkUnavailable)));
+    assert!(state.complete_profile(
+        refresh_generation,
+        Err(AccountError::NetworkUnavailable),
+        &mut DirectPersistence
+    ));
     assert!(state.profile.is_none());
     assert!(state.murglar_media_credentials_at(now).is_none());
     assert_eq!(state.sidebar_pass_at(now), SidebarPass::Inactive);
@@ -421,7 +457,7 @@ fn accepting_a_profile_that_changes_media_eligibility_changes_credential_scope()
     let (generation, _, _) = state.refresh().unwrap();
     let before = state.credential_generation();
 
-    assert!(state.complete_profile(generation, Ok(profile())));
+    assert!(state.complete_profile(generation, Ok(profile()), &mut DirectPersistence));
 
     assert_ne!(state.credential_generation(), before);
     assert_media_credentials(&state);
@@ -433,7 +469,7 @@ fn murglar_scope_changes_again_after_token_commit() {
     let mut state = account_state(&temp);
     state.begin_settings_session();
     let before_login = state.credential_generation();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     let before_commit = state.credential_generation();
     assert_ne!(before_commit, before_login);
 
@@ -441,6 +477,7 @@ fn murglar_scope_changes_again_after_token_commit() {
         generation,
         logout_epoch,
         Ok(AccessToken::new("token".into())),
+        &mut DirectPersistence,
     );
 
     let after_commit = state.credential_generation();
@@ -477,7 +514,12 @@ fn service_scopes_change_again_after_deezer_and_soundcloud_commit() {
             },
         };
 
-        state.complete_service_auth(auth_generation, Ok(credentials), service);
+        state.complete_service_auth(
+            auth_generation,
+            Ok(credentials),
+            service,
+            &mut DirectPersistence,
+        );
 
         assert_ne!(state.credential_generation(), before_commit);
         assert_eq!(state.service_status_for(service), None);
@@ -501,6 +543,7 @@ fn service_auth_attempts_are_serial_and_completion_is_terminal() {
         first_generation,
         Err("first provider sign-in was cancelled".into()),
         Service::Deezer,
+        &mut DirectPersistence,
     );
     let second_generation = state.begin_service_auth(Service::Deezer).unwrap();
     assert_ne!(first_generation, second_generation);
@@ -516,6 +559,7 @@ fn service_auth_attempts_are_serial_and_completion_is_terminal() {
             identity: Some(ServiceIdentity::new("stale-user", None).unwrap()),
         }),
         Service::Deezer,
+        &mut DirectPersistence,
     );
     assert!(state.service_loading);
     assert_eq!(state.service_status_for(Service::Deezer), None);
@@ -549,6 +593,7 @@ fn service_auth_survives_closing_and_reopening_settings() {
             identity: Some(ServiceIdentity::new("fresh-user", None).unwrap()),
         }),
         Service::Deezer,
+        &mut DirectPersistence,
     );
     assert!(!state.service_loading_for(Service::Deezer));
     assert!(state.service_signed_in(Service::Deezer));
@@ -573,10 +618,15 @@ fn service_auth_invalidates_both_stale_identity_loaders() {
     assert!(!state.deezer_identity_loading);
     assert!(!state.soundcloud_identity_loading);
 
-    state.complete_deezer_profile(deezer_generation, Err("stale Deezer profile".into()));
+    state.complete_deezer_profile(
+        deezer_generation,
+        Err("stale Deezer profile".into()),
+        &mut DirectPersistence,
+    );
     state.complete_soundcloud_profile(
         soundcloud_generation,
         Err("stale SoundCloud profile".into()),
+        &mut DirectPersistence,
     );
     assert!(!state.deezer_identity_loading);
     assert!(!state.soundcloud_identity_loading);
@@ -595,6 +645,7 @@ fn provider_identity_refresh_is_serialized_for_the_combined_settings_page() {
     state.complete_deezer_profile(
         generation,
         Ok(ServiceIdentity::new("deezer-listener", None).unwrap()),
+        &mut DirectPersistence,
     );
     assert!(state.should_refresh_service_identity(Service::SoundCloud));
 }
@@ -606,7 +657,11 @@ fn provider_identity_failure_allows_the_other_provider_once_without_retrying() {
     state.begin_settings_session();
 
     let (deezer_generation, _) = state.begin_deezer_identity_with_generation().unwrap();
-    state.complete_deezer_profile(deezer_generation, Err("Deezer profile failed".into()));
+    state.complete_deezer_profile(
+        deezer_generation,
+        Err("Deezer profile failed".into()),
+        &mut DirectPersistence,
+    );
 
     assert!(!state.should_refresh_service_identity(Service::Deezer));
     assert!(state.should_refresh_service_identity(Service::SoundCloud));
@@ -615,6 +670,7 @@ fn provider_identity_failure_allows_the_other_provider_once_without_retrying() {
     state.complete_soundcloud_profile(
         soundcloud_generation,
         Err("SoundCloud profile failed".into()),
+        &mut DirectPersistence,
     );
 
     assert!(!state.should_refresh_service_identity(Service::Deezer));
@@ -632,6 +688,7 @@ fn successful_provider_identity_persistence_clears_its_scoped_storage_error() {
     state.complete_deezer_profile(
         generation,
         Ok(ServiceIdentity::new("deezer-listener", None).unwrap()),
+        &mut DirectPersistence,
     );
 
     assert_eq!(state.service_session_error_for(Service::Deezer), None);
@@ -657,6 +714,7 @@ fn provider_persistence_does_not_replace_a_global_murglar_error() {
             identity: Some(ServiceIdentity::new("deezer-user", None).unwrap()),
         }),
         Service::Deezer,
+        &mut DirectPersistence,
     );
 
     assert_eq!(
@@ -672,11 +730,16 @@ fn starting_new_provider_auth_resets_only_that_identity_attempt() {
     state.begin_settings_session();
 
     let (deezer_generation, _) = state.begin_deezer_identity_with_generation().unwrap();
-    state.complete_deezer_profile(deezer_generation, Err("Deezer profile failed".into()));
+    state.complete_deezer_profile(
+        deezer_generation,
+        Err("Deezer profile failed".into()),
+        &mut DirectPersistence,
+    );
     let (soundcloud_generation, _) = state.begin_soundcloud_identity_with_generation().unwrap();
     state.complete_soundcloud_profile(
         soundcloud_generation,
         Err("SoundCloud profile failed".into()),
+        &mut DirectPersistence,
     );
 
     assert!(state.begin_service_auth(Service::Deezer).is_some());
@@ -696,6 +759,7 @@ fn starting_new_provider_auth_resets_only_that_identity_attempt() {
             identity: None,
         }),
         Service::Deezer,
+        &mut DirectPersistence,
     );
     assert!(state.should_refresh_service_identity(Service::Deezer));
 }
@@ -714,6 +778,7 @@ fn provider_auth_loading_and_storage_errors_are_scoped_to_the_provider() {
         state.service_generation,
         Err("Deezer login failed".into()),
         Service::Deezer,
+        &mut DirectPersistence,
     );
     assert!(!state.service_loading_for(Service::Deezer));
     assert_eq!(state.service_session_error_for(Service::SoundCloud), None);
@@ -730,7 +795,11 @@ fn starting_a_cross_provider_identity_refresh_releases_the_stale_loader() {
     assert!(!state.deezer_identity_loading);
     assert!(state.soundcloud_identity_loading);
 
-    state.complete_deezer_profile(deezer_generation, Err("stale Deezer profile".into()));
+    state.complete_deezer_profile(
+        deezer_generation,
+        Err("stale Deezer profile".into()),
+        &mut DirectPersistence,
+    );
     assert!(!state.deezer_identity_loading);
     assert!(state.soundcloud_identity_loading);
 }
@@ -744,12 +813,13 @@ fn cross_provider_logout_releases_the_invalidated_identity_loader() {
     let (soundcloud_generation, _) = state.begin_soundcloud_identity_with_generation().unwrap();
     assert!(state.soundcloud_identity_loading);
 
-    state.logout_service(Service::Deezer);
+    state.logout_service(Service::Deezer, &mut DirectPersistence);
     assert!(!state.soundcloud_identity_loading);
 
     state.complete_soundcloud_profile(
         soundcloud_generation,
         Err("stale SoundCloud profile".into()),
+        &mut DirectPersistence,
     );
     assert!(!state.soundcloud_identity_loading);
 }
@@ -759,7 +829,7 @@ fn service_status_is_not_rendered_for_another_provider() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state_with_saved_accounts(&temp);
 
-    state.logout_service(Service::Deezer);
+    state.logout_service(Service::Deezer, &mut DirectPersistence);
 
     assert_eq!(
         state.service_status_for(Service::Deezer).as_deref(),
@@ -773,9 +843,9 @@ fn logout_all_rejects_late_murglar_exchange_before_persistence() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state_with_saved_accounts(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
 
-    state.logout_all();
+    state.logout_all(&mut DirectPersistence);
     let post_logout_scope = state.credential_generation();
 
     assert!(
@@ -784,6 +854,7 @@ fn logout_all_rejects_late_murglar_exchange_before_persistence() {
                 generation,
                 logout_epoch,
                 Ok(AccessToken::new("late-token".into())),
+                &mut DirectPersistence,
             )
             .is_none()
     );
@@ -800,9 +871,9 @@ fn murglar_logout_rejects_late_exchange_before_persistence() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state_with_saved_accounts(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
 
-    state.logout();
+    state.logout(&mut DirectPersistence);
     let post_logout_scope = state.credential_generation();
 
     assert!(
@@ -811,6 +882,7 @@ fn murglar_logout_rejects_late_exchange_before_persistence() {
                 generation,
                 logout_epoch,
                 Ok(AccessToken::new("late-token".into())),
+                &mut DirectPersistence,
             )
             .is_none()
     );
@@ -845,14 +917,15 @@ fn logout_clears_account_and_invalidates_pending_login() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     state.complete_token_exchange(
         generation,
         logout_epoch,
         Ok(AccessToken::new("token".into())),
+        &mut DirectPersistence,
     );
-    state.complete_profile(generation, Ok(profile()));
-    state.logout();
+    state.complete_profile(generation, Ok(profile()), &mut DirectPersistence);
+    state.logout(&mut DirectPersistence);
     assert!(state.token.is_none());
     assert!(state.profile.is_none());
     assert!(!state.loading);
@@ -867,13 +940,14 @@ fn device_limit_completion_sets_danger_state() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     assert!(
         state
             .complete_token_exchange(
                 generation,
                 logout_epoch,
-                Err(AccountError::DeviceLimitExceeded)
+                Err(AccountError::DeviceLimitExceeded),
+                &mut DirectPersistence,
             )
             .is_none()
     );
@@ -889,7 +963,7 @@ fn failed_new_login_cannot_leave_a_stale_account() {
     state.token = Some("old-token".into());
     state.profile = Some(profile());
 
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     assert!(state.token.is_none());
     assert!(state.profile.is_none());
     assert!(
@@ -897,7 +971,8 @@ fn failed_new_login_cannot_leave_a_stale_account() {
             .complete_token_exchange(
                 generation,
                 logout_epoch,
-                Err(AccountError::InvalidCredentials)
+                Err(AccountError::InvalidCredentials),
+                &mut DirectPersistence,
             )
             .is_none()
     );
@@ -912,13 +987,13 @@ fn login_without_writable_session_storage_stops_before_loading() {
     state.begin_settings_session();
     make_store_unwritable(&temp);
 
-    assert!(state.begin_login().is_none());
+    assert!(state.begin_login(&mut DirectPersistence).is_none());
     assert!(!state.loading);
     assert_eq!(state.session_error, Some(SessionError::Filesystem));
 
     let mut state = AccountState::new(identity(), Err(SessionError::Filesystem));
     state.begin_settings_session();
-    assert!(state.begin_login().is_none());
+    assert!(state.begin_login(&mut DirectPersistence).is_none());
     assert!(!state.loading);
     assert_eq!(state.session_error, Some(SessionError::Filesystem));
 }
@@ -936,7 +1011,7 @@ fn unrelated_legacy_session_blocks_login_without_replacing_recovery_material() {
         state.session_error,
         Some(SessionError::ExistingSessionInvalid)
     );
-    assert!(state.begin_login().is_none());
+    assert!(state.begin_login(&mut DirectPersistence).is_none());
     assert!(!state.loading);
     assert!(state.token.is_none());
     assert!(state.soundcloud_token().is_none());
@@ -960,13 +1035,14 @@ fn persistence_failure_prevents_profile_request_and_exposes_no_profile() {
     store.persist_murglar("previous-token".into()).unwrap();
     let mut state = AccountState::new(identity(), Ok(store));
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     make_store_unwritable(&temp);
 
     let profile_request_token = state.complete_token_exchange(
         generation,
         logout_epoch,
         Ok(AccessToken::new("new-secret-token".into())),
+        &mut DirectPersistence,
     );
     assert!(profile_request_token.is_none());
     assert!(state.token.is_none());
@@ -990,15 +1066,20 @@ fn profile_failure_retains_durably_persisted_token() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
 
     let profile_request_token = state.complete_token_exchange(
         generation,
         logout_epoch,
         Ok(AccessToken::new("saved-token".into())),
+        &mut DirectPersistence,
     );
     assert_eq!(profile_request_token.as_deref(), Some("saved-token"));
-    assert!(state.complete_profile(generation, Err(AccountError::NetworkUnavailable)));
+    assert!(state.complete_profile(
+        generation,
+        Err(AccountError::NetworkUnavailable),
+        &mut DirectPersistence
+    ));
 
     assert_eq!(state.token.as_deref(), Some("saved-token"));
     assert!(state.profile.is_none());
@@ -1020,7 +1101,7 @@ fn unauthorized_and_forbidden_profile_failures_clear_only_murglar_token() {
         state.profile = Some(profile());
         let credential_scope = state.credential_generation();
 
-        assert!(state.complete_profile(generation, Err(error.clone())));
+        assert!(state.complete_profile(generation, Err(error.clone()), &mut DirectPersistence));
 
         assert!(state.token.is_none());
         assert_ne!(state.credential_generation(), credential_scope);
@@ -1046,7 +1127,7 @@ fn failed_auth_invalidation_suppresses_persisted_media_entitlement() {
         let credential_scope = state.credential_generation();
         make_store_unwritable(&temp);
 
-        assert!(state.complete_profile(generation, Err(error)));
+        assert!(state.complete_profile(generation, Err(error), &mut DirectPersistence));
 
         assert_eq!(state.token.as_deref(), Some("saved-token"));
         assert!(state.profile.is_none());
@@ -1062,18 +1143,19 @@ fn failed_logout_keeps_token_state_but_clears_profile_for_privacy() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login().unwrap();
+    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
     state.complete_token_exchange(
         generation,
         logout_epoch,
         Ok(AccessToken::new("token".into())),
+        &mut DirectPersistence,
     );
-    state.complete_profile(generation, Ok(profile()));
+    state.complete_profile(generation, Ok(profile()), &mut DirectPersistence);
     let now = 1_700_000_000_000;
     assert_media_credentials_at(&state, now);
     make_store_unwritable(&temp);
 
-    state.logout();
+    state.logout(&mut DirectPersistence);
 
     assert_eq!(state.token.as_deref(), Some("token"));
     assert!(state.profile.is_none());
@@ -1116,13 +1198,13 @@ fn profile_refresh_exposes_loading_state_and_prevents_duplicate_loads() {
     let (generation, _, _) = state.refresh().unwrap();
     assert!(state.refresh().is_none());
     assert!(state.loading);
-    assert!(state.complete_profile(generation, Ok(profile())));
+    assert!(state.complete_profile(generation, Ok(profile()), &mut DirectPersistence));
     assert!(state.profile.is_some());
 
     let (refresh_generation, _, token) = state.refresh().unwrap();
     assert_eq!(token, "saved-token");
     assert!(state.loading);
-    assert!(state.complete_profile(refresh_generation, Ok(profile())));
+    assert!(state.complete_profile(refresh_generation, Ok(profile()), &mut DirectPersistence));
     assert!(!state.loading);
 }
 
@@ -1133,7 +1215,11 @@ fn profile_device_limit_keeps_saved_session_and_shows_warning_state() {
     state.begin_settings_session();
     let (generation, _, _) = state.refresh().unwrap();
 
-    assert!(state.complete_profile(generation, Err(AccountError::DeviceLimitExceeded)));
+    assert!(state.complete_profile(
+        generation,
+        Err(AccountError::DeviceLimitExceeded),
+        &mut DirectPersistence
+    ));
     assert_eq!(state.token.as_deref(), Some("saved-token"));
     assert!(state.profile.is_none());
     assert!(state.device_limit_exceeded);
@@ -1217,6 +1303,7 @@ fn stale_deezer_placeholder_does_not_block_profile_refresh() {
     state.complete_deezer_profile(
         generation,
         Ok(ServiceIdentity::new("actual-listener", None).unwrap()),
+        &mut DirectPersistence,
     );
 
     assert_eq!(
@@ -1230,10 +1317,11 @@ fn stale_provider_identity_completion_is_rejected_after_logout() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state_with_saved_accounts(&temp);
     let (generation, _) = state.begin_soundcloud_identity_with_generation().unwrap();
-    state.logout_service(Service::SoundCloud);
+    state.logout_service(Service::SoundCloud, &mut DirectPersistence);
     state.complete_soundcloud_profile(
         generation,
         Ok(ServiceIdentity::new("late-user", None).unwrap()),
+        &mut DirectPersistence,
     );
 
     assert!(state.service_username(Service::SoundCloud).is_none());
@@ -1245,10 +1333,11 @@ fn stale_deezer_identity_completion_is_rejected_after_logout() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state_with_saved_accounts(&temp);
     let (generation, _) = state.begin_deezer_identity_with_generation().unwrap();
-    state.logout_service(Service::Deezer);
+    state.logout_service(Service::Deezer, &mut DirectPersistence);
     state.complete_deezer_profile(
         generation,
         Ok(ServiceIdentity::new("late-user", None).unwrap()),
+        &mut DirectPersistence,
     );
 
     assert!(state.service_username(Service::Deezer).is_none());
@@ -1265,7 +1354,11 @@ fn ending_settings_session_invalidates_profile_work_without_clearing_sidebar_or_
 
     state.end_settings_session();
 
-    assert!(!state.complete_profile(generation, Err(AccountError::Unauthorized)));
+    assert!(!state.complete_profile(
+        generation,
+        Err(AccountError::Unauthorized),
+        &mut DirectPersistence
+    ));
     assert_eq!(state.sidebar_username(), "listener");
     assert_eq!(state.token.as_deref(), Some("saved-token"));
     assert_eq!(
@@ -1380,17 +1473,18 @@ fn logout_all_atomically_clears_every_service_and_invalidates_pending_work() {
     let (profile_generation, _, _) = state.refresh().unwrap();
     let service_generation = state.begin_service_auth(Service::SoundCloud).unwrap();
 
-    state.logout_all();
+    state.logout_all(&mut DirectPersistence);
 
     let session = SessionStore::load(temp.path()).unwrap();
     assert_eq!(session.session().murglar(), "");
     assert_eq!(session.session().soundcloud(), "");
     assert_eq!(session.session().deezer(), "");
-    assert!(!state.complete_profile(profile_generation, Ok(profile())));
+    assert!(!state.complete_profile(profile_generation, Ok(profile()), &mut DirectPersistence));
     state.complete_service_auth(
         service_generation,
         Err("late service result".into()),
         Service::SoundCloud,
+        &mut DirectPersistence,
     );
     assert_eq!(
         state.service_status_for(Service::Deezer).as_deref(),
@@ -1400,4 +1494,168 @@ fn logout_all_atomically_clears_every_service_and_invalidates_pending_work() {
         state.service_status_for(Service::SoundCloud).as_deref(),
         Some("All accounts are signed out.")
     );
+}
+
+#[test]
+fn failed_deezer_identity_persistence_keeps_the_stored_pair_and_mirror_consistent() {
+    let temp = TempDir::new().unwrap();
+    fs::write(
+        temp.path().join("auth_session.json"),
+        serde_json::to_vec(&json!({
+            "deezer": "saved-arl",
+            "deezerUserId": "42",
+            "deezerCookies": "sid=old"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut state = account_state(&temp);
+    state.begin_settings_session();
+    fs::remove_file(temp.path().join("auth_session.backup.dat")).unwrap();
+    fs::create_dir(temp.path().join("auth_session.backup.dat")).unwrap();
+    let (generation, _) = state.begin_deezer_identity_with_generation().unwrap();
+    // The webview harvested fresh cookies while the profile loaded.
+    state.deezer_cookie_jar = DeezerCookieJar::new(Some("sid=fresh; datadome=guard".into()));
+
+    state.complete_deezer_profile(
+        generation,
+        Ok(ServiceIdentity::new("fresh-listener", None).unwrap()),
+        &mut DirectPersistence,
+    );
+
+    assert_eq!(
+        state.service_session_error_for(Service::Deezer).as_deref(),
+        Some("The account session could not be stored.")
+    );
+    assert_eq!(state.service_username(Service::Deezer), None);
+    fs::remove_dir(temp.path().join("auth_session.backup.dat")).unwrap();
+    let persisted = SessionStore::load(temp.path()).unwrap();
+    assert_eq!(persisted.session().deezer_profile(), None);
+    assert_eq!(persisted.session().deezer_cookies(), Some("sid=old"));
+}
+
+#[gpui::test]
+fn session_persistence_returns_before_the_write_touches_disk(cx: &mut gpui::TestAppContext) {
+    let temp = TempDir::new().unwrap();
+    let account =
+        cx.update(|cx| cx.new(|_| AccountState::new(identity(), SessionStore::load(temp.path()))));
+    let (generation, login_epoch) = cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            account.begin_settings_session();
+            let (generation, _, login_epoch) = account.begin_login(cx).expect("login starts");
+            cx.notify();
+            (generation, login_epoch)
+        })
+    });
+
+    let token = cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            let token = account.complete_token_exchange(
+                generation,
+                login_epoch,
+                Ok(AccessToken::new("token".into())),
+                cx,
+            );
+            cx.notify();
+            token
+        })
+    });
+
+    // The entity accepted the token without waiting for the disk: the
+    // durable write has not even started yet.
+    assert_eq!(token.as_deref(), Some("token"));
+    assert_eq!(
+        SessionStore::load(temp.path()).unwrap().session().murglar(),
+        ""
+    );
+
+    cx.run_until_parked();
+
+    assert_eq!(
+        SessionStore::load(temp.path()).unwrap().session().murglar(),
+        "token"
+    );
+}
+
+#[gpui::test]
+fn queued_session_writes_reach_the_disk_in_submission_order(cx: &mut gpui::TestAppContext) {
+    let temp = TempDir::new().unwrap();
+    let account =
+        cx.update(|cx| cx.new(|_| AccountState::new(identity(), SessionStore::load(temp.path()))));
+    let (generation, login_epoch) = cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            account.begin_settings_session();
+            let (generation, _, login_epoch) = account.begin_login(cx).expect("login starts");
+            cx.notify();
+            (generation, login_epoch)
+        })
+    });
+    cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            account.complete_token_exchange(
+                generation,
+                login_epoch,
+                Ok(AccessToken::new("token".into())),
+                cx,
+            );
+            cx.notify();
+        })
+    });
+    // A second durable write supersedes the first before either touches disk.
+    cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            account.logout(cx);
+            cx.notify();
+        })
+    });
+
+    cx.run_until_parked();
+
+    // The disk ends at the newest staged session: the sign-in can never
+    // land after the sign-out that replaced it.
+    let persisted = SessionStore::load(temp.path()).unwrap();
+    assert_eq!(persisted.session().murglar(), "");
+    assert!(persisted.session().murglar_profile_summary().is_none());
+}
+
+#[gpui::test]
+fn failed_background_write_reverts_the_account_and_surfaces_the_error(
+    cx: &mut gpui::TestAppContext,
+) {
+    let temp = TempDir::new().unwrap();
+    let account =
+        cx.update(|cx| cx.new(|_| AccountState::new(identity(), SessionStore::load(temp.path()))));
+    let (generation, login_epoch) = cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            account.begin_settings_session();
+            let (generation, _, login_epoch) = account.begin_login(cx).expect("login starts");
+            cx.notify();
+            (generation, login_epoch)
+        })
+    });
+    make_store_unwritable(&temp);
+
+    let token = cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            let token = account.complete_token_exchange(
+                generation,
+                login_epoch,
+                Ok(AccessToken::new("secret-token".into())),
+                cx,
+            );
+            cx.notify();
+            token
+        })
+    });
+    // The UI thread did not block on the failing write.
+    assert_eq!(token.as_deref(), Some("secret-token"));
+
+    cx.run_until_parked();
+
+    cx.update(|cx| {
+        let state = account.read(cx);
+        assert_eq!(state.token, None);
+        assert_eq!(state.session_error, Some(SessionError::Filesystem));
+        assert!(!state.loading);
+    });
 }

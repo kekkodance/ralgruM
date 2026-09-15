@@ -711,3 +711,64 @@ fn same_directory_alias_does_not_prevent_safe_plaintext_cleanup() {
     assert_encrypted_pair(temp.path(), "legacy-token");
     assert_legacy_removed(temp.path());
 }
+
+#[test]
+fn deezer_identity_persists_profile_and_cookies_in_one_transition() {
+    let temp = TempDir::new().unwrap();
+    let mut store = SessionStore::load(temp.path()).unwrap();
+
+    store
+        .persist_deezer_identity(
+            Some(ServiceIdentity::new("deezer-listener", None).unwrap()),
+            Some("sid=fresh; datadome=guard".into()),
+        )
+        .unwrap();
+
+    let loaded = SessionStore::load(temp.path()).unwrap();
+    assert_eq!(
+        loaded.session().deezer_profile().unwrap().username,
+        "deezer-listener"
+    );
+    assert_eq!(
+        loaded.session().deezer_cookies(),
+        Some("sid=fresh; datadome=guard")
+    );
+}
+
+#[test]
+fn failed_deezer_identity_write_keeps_the_previous_pair_and_memory_intact() {
+    let temp = TempDir::new().unwrap();
+    let mut store = SessionStore::load(temp.path()).unwrap();
+    store
+        .persist_deezer_identity(
+            Some(ServiceIdentity::new("old-listener", None).unwrap()),
+            Some("sid=old".into()),
+        )
+        .unwrap();
+    fs::remove_file(temp.path().join(BACKUP_FILE)).unwrap();
+    fs::create_dir(temp.path().join(BACKUP_FILE)).unwrap();
+
+    assert_eq!(
+        store.persist_deezer_identity(
+            Some(ServiceIdentity::new("new-listener", None).unwrap()),
+            Some("sid=fresh".into()),
+        ),
+        Err(SessionError::Filesystem)
+    );
+
+    // The store rolled the profile and the cookies back together: the new
+    // profile is never paired with the old cookies anywhere.
+    assert_eq!(
+        store.session().deezer_profile().unwrap().username,
+        "old-listener"
+    );
+    assert_eq!(store.session().deezer_cookies(), Some("sid=old"));
+
+    fs::remove_dir(temp.path().join(BACKUP_FILE)).unwrap();
+    let recovered = SessionStore::load(temp.path()).unwrap();
+    assert_eq!(
+        recovered.session().deezer_profile().unwrap().username,
+        "old-listener"
+    );
+    assert_eq!(recovered.session().deezer_cookies(), Some("sid=old"));
+}
