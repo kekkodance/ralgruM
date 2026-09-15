@@ -3,6 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Condvar, LazyLock, Mutex},
 };
 
 use sha2::{Digest, Sha256};
@@ -217,13 +218,13 @@ impl SmartTitleCache {
     }
 
     fn persist(&self) {
-        let Some(path) = self.storage_path.as_deref() else {
+        let Some(path) = self.storage_path.clone() else {
             return;
         };
-        let _ = self.save_to_path(path);
+        schedule_write(path, self.snapshot());
     }
 
-    fn save_to_path(&self, path: &Path) -> io::Result<()> {
+    fn snapshot(&self) -> PersistedSmartTitles {
         let entries = self
             .order
             .iter()
@@ -235,14 +236,11 @@ impl SmartTitleCache {
                 })
             })
             .collect::<Vec<_>>();
-        let document = PersistedSmartTitles {
+        PersistedSmartTitles {
             schema: CACHE_SCHEMA.to_owned(),
             version: CACHE_VERSION,
             entries,
-        };
-        let bytes = serde_json::to_vec_pretty(&document)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "cache serialization"))?;
-        write_atomic(path, &bytes)
+        }
     }
 
     #[cfg(test)]
@@ -338,10 +336,146 @@ fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
 }
 
+/// Pending durable writes, keyed by cache path so the latest snapshot
+/// replaces any earlier one that has not reached disk yet.
+#[derive(Default)]
+struct WriteBehindState {
+    pending: HashMap<PathBuf, PersistedSmartTitles>,
+    enqueued: u64,
+    written: u64,
+}
+
+/// Single background writer for title-cache snapshots. The in-memory map
+/// stays authoritative for the session; durable writes happen off the
+/// state-update path and coalesce per path, so the last state wins.
+#[derive(Default)]
+struct WriteBehind {
+    state: Mutex<WriteBehindState>,
+    idle: Condvar,
+}
+
+static WRITE_BEHIND: LazyLock<Option<Arc<WriteBehind>>> = LazyLock::new(|| {
+    let worker = Arc::new(WriteBehind::default());
+    let spawned = worker.clone();
+    std::thread::Builder::new()
+        .name("discover-title-cache-writer".to_owned())
+        .spawn(move || run_write_behind(spawned))
+        .is_ok()
+        .then_some(worker)
+});
+
+/// Hand a snapshot to the writer thread. Returns as soon as the snapshot
+/// is queued; the durable write happens in the background. If the writer
+/// thread could not be spawned, fall back to a synchronous write, matching
+/// the old behavior.
+fn schedule_write(path: PathBuf, document: PersistedSmartTitles) {
+    let Some(worker) = WRITE_BEHIND.as_ref() else {
+        durable_write(&path, &document);
+        return;
+    };
+    let mut state = worker
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.pending.insert(path, document);
+    state.enqueued += 1;
+    drop(state);
+    worker.idle.notify_all();
+}
+
+fn run_write_behind(worker: Arc<WriteBehind>) {
+    loop {
+        let mut state = worker
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while state.pending.is_empty() {
+            state = worker
+                .idle
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        let batch = std::mem::take(&mut state.pending);
+        let written_through = state.enqueued;
+        drop(state);
+        for (path, document) in &batch {
+            durable_write(path, document);
+        }
+        let mut state = worker
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.written = state.written.max(written_through);
+        worker.idle.notify_all();
+    }
+}
+
+fn durable_write(path: &Path, document: &PersistedSmartTitles) {
+    #[cfg(test)]
+    run_test_write_hook(path);
+    let Ok(bytes) = serde_json::to_vec_pretty(document) else {
+        return;
+    };
+    let _ = write_atomic(path, &bytes);
+}
+
+#[cfg(test)]
+type TestWriteHook = Box<dyn Fn(&Path) + Send>;
+
+#[cfg(test)]
+static TEST_WRITE_HOOK: Mutex<Option<TestWriteHook>> = Mutex::new(None);
+
+#[cfg(test)]
+fn set_write_hook(hook: Option<TestWriteHook>) {
+    *TEST_WRITE_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = hook;
+}
+
+/// Tests install this hook to observe and delay durable writes. It runs
+/// before the real write, which still happens once the hook returns.
+#[cfg(test)]
+fn run_test_write_hook(path: &Path) {
+    let guard = TEST_WRITE_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(hook) = guard.as_ref() {
+        hook(path);
+    }
+}
+
+/// Block until every queued snapshot has been written. Test-only
+/// determinism helper; production relies on the writer draining promptly.
+#[cfg(test)]
+fn flush_write_behind() {
+    let Some(worker) = WRITE_BEHIND.as_ref() else {
+        return;
+    };
+    let mut state = worker
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let target = state.enqueued;
+    while state.written < target {
+        state = worker
+            .idle
+            .wait(state)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::search::{Card, Provider, ResultType};
+    use std::{
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc,
+        },
+        thread,
+        time::Duration,
+    };
     use tempfile::TempDir;
 
     fn sections(key: &str, title: &str) -> Vec<DiscoverSection> {
@@ -361,6 +495,20 @@ mod tests {
                 action: DiscoverAction::PlayDeezerFlow { smart_mix: true },
             }],
         }]
+    }
+
+    /// Serializes tests that install a write hook: they block the single
+    /// writer thread, so they must not overlap each other.
+    static HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Removes the installed write hook when the test scope ends, even on
+    /// panic.
+    struct WriteHookGuard;
+
+    impl Drop for WriteHookGuard {
+        fn drop(&mut self) {
+            set_write_hook(None);
+        }
     }
 
     #[test]
@@ -433,6 +581,7 @@ mod tests {
         let mut cache = SmartTitleCache::load_from_dir(temp.path(), account_scope);
         let mut sections = sections("monthly-top", "Electro Dance");
         cache.apply(&mut sections);
+        flush_write_behind();
 
         let path = cache_path(temp.path(), account_scope);
         let bytes = fs::read(&path).unwrap();
@@ -454,6 +603,7 @@ mod tests {
                 .remember_endpoint_title("monthly-top", "Electro Dance")
                 .is_some()
         );
+        flush_write_behind();
 
         let second = SmartTitleCache::load_from_dir(temp.path(), "account-two");
         assert!(second.entries.is_empty());
@@ -472,12 +622,131 @@ mod tests {
         cache
             .remember_endpoint_title("inspired-by-3", "Nuove Uscite")
             .unwrap();
+        flush_write_behind();
 
         let mut loaded = SmartTitleCache::load_from_dir(temp.path(), scope);
         let mut refreshed = sections("inspired-by-3", "NUOVE USCITE");
         loaded.apply(&mut refreshed);
         assert_eq!(refreshed[0].items[0].card.title, "Nuove Uscite");
         assert!(loaded.endpoint_authoritative.contains("inspired-by-3"));
+    }
+
+    #[test]
+    fn mutation_returns_before_the_durable_write_completes() {
+        let _serial = HOOK_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = TempDir::new().unwrap();
+        let scope = "slow-disk";
+        let mut cache = SmartTitleCache::load_from_dir(temp.path(), scope);
+        let base = temp.path().to_path_buf();
+
+        // Declared first so it is dropped last: uninstalling the hook must
+        // wait until a blocked write has been released.
+        let _guard = WriteHookGuard;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        set_write_hook(Some(Box::new(move |path: &Path| {
+            if !path.starts_with(&base) {
+                return;
+            }
+            let _ = started_tx.send(());
+            // Simulate a slow cache directory for this test's paths only.
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        })));
+
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let mut sections = sections("monthly-top", "Electro Dance");
+        let applier = thread::spawn(move || {
+            cache.apply(&mut sections);
+            let _ = returned_tx.send(());
+            cache
+        });
+
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("durable write started");
+        returned_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("apply returned before the durable write completed");
+
+        release_tx.send(()).unwrap();
+        let cache = applier.join().unwrap();
+        assert_eq!(
+            cache.entries.get("monthly-top"),
+            Some(&"Electro Dance".into())
+        );
+
+        flush_write_behind();
+        let reloaded = SmartTitleCache::load_from_dir(temp.path(), scope);
+        assert_eq!(
+            reloaded.entries.get("monthly-top"),
+            Some(&"Electro Dance".into())
+        );
+    }
+
+    #[test]
+    fn rapid_mutations_coalesce_into_the_final_state() {
+        let _serial = HOOK_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = TempDir::new().unwrap();
+        let scope = "coalesce";
+        let mut cache = SmartTitleCache::load_from_dir(temp.path(), scope);
+        let base = temp.path().to_path_buf();
+
+        // Declared first so it is dropped last: uninstalling the hook must
+        // wait until a blocked write has been released.
+        let _guard = WriteHookGuard;
+        let writes = Arc::new(AtomicUsize::new(0));
+        let first = Arc::new(AtomicBool::new(true));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let counted = writes.clone();
+        let gate = first.clone();
+        set_write_hook(Some(Box::new(move |path: &Path| {
+            if !path.starts_with(&base) {
+                return;
+            }
+            counted.fetch_add(1, Ordering::SeqCst);
+            if gate.swap(false, Ordering::SeqCst) {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            }
+        })));
+
+        cache
+            .remember_endpoint_title("monthly-top", "Title One")
+            .unwrap();
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("first durable write started");
+
+        // Rapid successive mutations while the first durable write is still
+        // in flight; every snapshot replaces the pending one.
+        for title in [
+            "Title Two",
+            "Title Three",
+            "Title Four",
+            "Title Five",
+            "Title Six",
+        ] {
+            cache.remember_endpoint_title("monthly-top", title).unwrap();
+        }
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert_eq!(cache.entries.get("monthly-top"), Some(&"Title Six".into()));
+
+        release_tx.send(()).unwrap();
+        flush_write_behind();
+
+        // Six mutations collapsed into two durable writes: the one that was
+        // already in flight plus one write of the final coalesced snapshot.
+        assert_eq!(writes.load(Ordering::SeqCst), 2);
+        let reloaded = SmartTitleCache::load_from_dir(temp.path(), scope);
+        assert_eq!(
+            reloaded.entries.get("monthly-top"),
+            Some(&"Title Six".into())
+        );
     }
 
     #[test]
@@ -587,6 +856,7 @@ mod tests {
         .unwrap();
 
         let loaded = SmartTitleCache::load_from_dir(temp.path(), scope);
+        flush_write_behind();
         assert_eq!(
             loaded.entries.get("inspired-by-3"),
             Some(&"Electro Dance".into())
