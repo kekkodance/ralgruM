@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{collections::HashMap, future::Future};
 
 use super::core::{
     EmptyLyricsReason, GeniusHit, LyricsProvider, LyricsResponse, LyricsTrack,
@@ -59,10 +59,14 @@ impl LyricsClient {
         if cancel.is_cancelled() {
             return Err("Lyrics request cancelled".into());
         }
-        match provider {
-            LyricsProvider::Musixmatch => self.musixmatch(&track).await,
-            LyricsProvider::Genius => self.genius(&track, cancel).await,
-        }
+        let request_cancel = cancel.clone();
+        let request = async {
+            match provider {
+                LyricsProvider::Musixmatch => self.musixmatch(&track).await,
+                LyricsProvider::Genius => self.genius(&track, request_cancel).await,
+            }
+        };
+        cancellable_request(&cancel, request).await
     }
 
     pub(super) async fn annotation(
@@ -85,7 +89,11 @@ impl LyricsClient {
         });
         let mut values = Vec::new();
         let mut last_error = None;
-        for result in futures::future::join_all(fetches).await {
+        let results = cancellable_request(&cancel, async {
+            Ok(futures::future::join_all(fetches).await)
+        })
+        .await?;
+        for result in results {
             match result {
                 Ok(value) => values.push(value),
                 Err(error) => last_error = Some(error),
@@ -302,6 +310,17 @@ impl LyricsClient {
     }
 }
 
+async fn cancellable_request<T>(
+    cancel: &CancellationToken,
+    request: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err("Lyrics request cancelled".into()),
+        result = request => result,
+    }
+}
+
 fn musixmatch_headers() -> header::HeaderMap {
     let mut headers = header::HeaderMap::new();
     headers.insert(header::USER_AGENT, MUSIXMATCH_USER_AGENT.parse().unwrap());
@@ -504,13 +523,33 @@ fn validate_genius_url(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tokio::time::{Duration, timeout};
+    use tokio_util::sync::CancellationToken;
 
     use super::{
-        genius_annotation_author, genius_hit, lyrics_json_error, merge_genius_referent_values,
-        parse_genius_referent, parse_musixmatch_token, split_genius_referent_ids,
-        validate_genius_url,
+        cancellable_request, genius_annotation_author, genius_hit, lyrics_json_error,
+        merge_genius_referent_values, parse_genius_referent, parse_musixmatch_token,
+        split_genius_referent_ids, validate_genius_url,
     };
     use crate::lyrics::core::{extract_genius_referents, prepare_genius_lyrics};
+
+    #[tokio::test]
+    async fn cancellation_interrupts_an_active_request() {
+        let cancellation = CancellationToken::new();
+        let request_cancellation = cancellation.clone();
+        let request = tokio::spawn(async move {
+            cancellable_request(&request_cancellation, std::future::pending()).await
+        });
+        tokio::task::yield_now().await;
+        cancellation.cancel();
+
+        let result: Result<(), String> = timeout(Duration::from_millis(100), request)
+            .await
+            .expect("cancelled request should finish promptly")
+            .expect("request task should not panic");
+        assert_eq!(result, Err("Lyrics request cancelled".into()));
+    }
+
     #[test]
     fn validates_provider_urls() {
         assert!(validate_genius_url("https://genius.com/song").is_ok());

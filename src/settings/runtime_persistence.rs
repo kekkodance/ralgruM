@@ -1,12 +1,53 @@
 use std::time::Duration;
 
-use gpui::Context;
+use gpui::{Context, SharedString};
 
-use super::{RightSidebarView, SettingsView};
+use super::{AppSettings, RightSidebarView, SettingsView};
 
 const SAVE_DELAY: Duration = Duration::from_millis(250);
 
 impl SettingsView {
+    pub(super) fn persist_settings_background(
+        &mut self,
+        settings: AppSettings,
+        sync_draft: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), SharedString> {
+        let Some(store) = self.store.as_ref() else {
+            return Err("Settings storage is unavailable.".into());
+        };
+        let write = store.prepare_persist(settings.clone());
+        self.saved = settings.clone();
+        if sync_draft || !self.session_active {
+            self.draft = settings;
+        }
+        self.save_error = None;
+
+        let runtime = self.runtime.clone();
+        cx.spawn(async move |this, cx| {
+            let worker_write = write.clone();
+            let result = runtime.spawn_blocking(move || worker_write.persist()).await;
+            let error = match result {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(error.to_string()),
+                Err(_) => Some("The settings writer stopped unexpectedly.".to_owned()),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if !write.is_current() {
+                    return;
+                }
+                if let Some(error) = error {
+                    this.save_error = Some(error.into());
+                } else if let Some(store) = this.store.as_mut() {
+                    store.accept_persisted(&write);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        Ok(())
+    }
+
     pub(super) fn install_runtime_settings_flush(&self, cx: &mut Context<Self>) {
         cx.on_app_quit(|this, _| {
             this.pending_runtime_save.take();

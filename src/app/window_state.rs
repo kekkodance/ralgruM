@@ -2,6 +2,10 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -70,6 +74,38 @@ impl SavedWindowState {
 pub(crate) struct WindowStateStore {
     directory: PathBuf,
     saved: Option<SavedWindowState>,
+    writes: Arc<WindowWriteCoordinator>,
+}
+
+#[derive(Default)]
+struct WindowWriteCoordinator {
+    latest: AtomicU64,
+    writer: Mutex<()>,
+}
+
+struct WindowStateWrite {
+    directory: PathBuf,
+    state: SavedWindowState,
+    revision: u64,
+    coordinator: Arc<WindowWriteCoordinator>,
+}
+
+impl WindowStateWrite {
+    fn persist(self) -> io::Result<bool> {
+        let _guard = self
+            .coordinator
+            .writer
+            .lock()
+            .map_err(|_| io::Error::other("window state writer was poisoned"))?;
+        if self.coordinator.latest.load(Ordering::SeqCst) != self.revision {
+            return Ok(false);
+        }
+        fs::create_dir_all(&self.directory)?;
+        let encoded = encode(self.state);
+        atomic_write(&self.directory.join(PRIMARY_FILE), &encoded)?;
+        atomic_write(&self.directory.join(BACKUP_FILE), &encoded)?;
+        Ok(true)
+    }
 }
 
 impl WindowStateStore {
@@ -99,6 +135,7 @@ impl WindowStateStore {
         Self {
             directory: directory.to_owned(),
             saved,
+            writes: Arc::default(),
         }
     }
 
@@ -107,12 +144,23 @@ impl WindowStateStore {
     }
 
     fn persist(&mut self, saved: SavedWindowState) -> io::Result<()> {
-        fs::create_dir_all(&self.directory)?;
-        let encoded = encode(saved);
-        atomic_write(&self.directory.join(PRIMARY_FILE), &encoded)?;
-        atomic_write(&self.directory.join(BACKUP_FILE), &encoded)?;
-        self.saved = Some(saved);
+        self.prepare_persist(saved).persist()?;
         Ok(())
+    }
+
+    fn prepare_persist(&mut self, saved: SavedWindowState) -> WindowStateWrite {
+        let revision = self
+            .writes
+            .latest
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+        self.saved = Some(saved);
+        WindowStateWrite {
+            directory: self.directory.clone(),
+            state: saved,
+            revision,
+            coordinator: self.writes.clone(),
+        }
     }
 }
 
@@ -207,15 +255,47 @@ impl WindowStateManager {
             cx.background_executor().timer(SAVE_DELAY).await;
             this.update_in(cx, |this, window, cx| {
                 this.pending_save.take();
-                this.persist_now(window, cx);
+                this.persist_now_background(window, cx);
             })
             .ok();
         }));
     }
 
     pub(crate) fn persist_now(&mut self, window: &Window, cx: &App) {
-        if !self.settings.read(cx).saved().restore_window {
+        let Some(state) = self.state_for_persistence(window, cx) else {
             return;
+        };
+        if let Some(store) = self.store.as_mut() {
+            let _ = store.persist(state);
+        }
+    }
+
+    fn persist_now_background(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state_for_persistence(window, cx) else {
+            return;
+        };
+        let Some(write) = self
+            .store
+            .as_mut()
+            .map(|store| store.prepare_persist(state))
+        else {
+            return;
+        };
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(error) = write.persist() {
+                    crate::diagnostics::event(
+                        "WARN",
+                        format!("Could not save window state: {error}"),
+                    );
+                }
+            })
+            .detach();
+    }
+
+    fn state_for_persistence(&mut self, window: &Window, cx: &App) -> Option<SavedWindowState> {
+        if !self.settings.read(cx).saved().restore_window {
+            return None;
         }
         let state =
             state_for_persistence(self.normal, window.window_bounds(), window.is_maximized());
@@ -223,9 +303,7 @@ impl WindowStateManager {
             maximized: false,
             ..state
         };
-        if let Some(store) = self.store.as_mut() {
-            let _ = store.persist(state);
-        }
+        Some(state)
     }
 }
 
@@ -377,6 +455,26 @@ mod tests {
         let repaired = WindowStateStore::load(temp.path());
         assert_eq!(repaired.saved(), Some(saved));
         assert_eq!(read_state(&temp.path().join(PRIMARY_FILE)), Some(saved));
+    }
+
+    #[test]
+    fn superseded_background_write_cannot_overwrite_the_latest_window_state() {
+        let temp = TempDir::new().unwrap();
+        let mut store = WindowStateStore::load(temp.path());
+        let older = store.prepare_persist(state(10., 20., 900., 620., false));
+        let latest_state = state(30., 40., 1100., 720., true);
+        let latest = store.prepare_persist(latest_state);
+
+        assert!(!older.persist().unwrap());
+        assert!(latest.persist().unwrap());
+        assert_eq!(
+            read_state(&temp.path().join(PRIMARY_FILE)),
+            Some(latest_state)
+        );
+        assert_eq!(
+            read_state(&temp.path().join(BACKUP_FILE)),
+            Some(latest_state)
+        );
     }
 
     #[test]

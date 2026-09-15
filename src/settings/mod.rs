@@ -162,6 +162,7 @@ pub(crate) struct SettingsView {
     pub(super) draft: AppSettings,
     pub(super) save_error: Option<SharedString>,
     import_sync_pending: bool,
+    save_in_flight: bool,
     pending_runtime_save: Option<Task<()>>,
     pub(super) account: Entity<AccountState>,
     pub(super) runtime: Arc<Runtime>,
@@ -308,6 +309,7 @@ impl SettingsView {
             store,
             save_error,
             import_sync_pending: false,
+            save_in_flight: false,
             pending_runtime_save: None,
             account,
             runtime,
@@ -450,6 +452,7 @@ impl SettingsView {
         diagnostics::event("INFO", "settings session begin");
         self.stop_cache_watcher();
         self.session_active = true;
+        self.save_in_flight = false;
         self.cache_generation = self.cache_generation.wrapping_add(1);
         self.draft = self.saved.clone();
         self.category = initial_category;
@@ -551,72 +554,104 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) {
         update(&mut self.draft);
-        match self.persist_draft() {
-            Ok(()) => diagnostics::event("INFO", "settings change persisted"),
+        let result = prepare_settings_for_persistence(&self.draft, &self.saved)
+            .and_then(|settings| self.persist_settings_background(settings, true, cx));
+        match result {
+            Ok(()) => diagnostics::event("INFO", "settings change queued for persistence"),
             Err(error) => self.save_error = Some(error),
         }
         cx.notify();
     }
 
-    fn persist_draft(&mut self) -> Result<(), SharedString> {
-        let settings = prepare_settings_for_persistence(&self.draft, &self.saved)?;
-        let Some(store) = self.store.as_mut() else {
-            return Err("Settings storage is unavailable.".into());
-        };
-        store
-            .persist(settings.clone())
-            .map_err(|error| SharedString::from(error.to_string()))?;
-        self.saved = settings.clone();
-        self.draft = settings;
-        self.save_error = None;
-        Ok(())
-    }
-
-    pub(crate) fn persist_navigation(&mut self, settings: AppSettings, always: bool) {
+    pub(crate) fn persist_navigation(
+        &mut self,
+        settings: AppSettings,
+        always: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.import_sync_pending {
             return;
         }
         if !always && !self.saved.remember_navigation {
             return;
         }
-        let Some(store) = self.store.as_mut() else {
-            return;
-        };
-        if store.persist(settings.clone()).is_ok() {
-            self.saved = settings;
-            if !self.session_active {
-                self.draft = self.saved.clone();
-            }
+        if let Err(error) = self.persist_settings_background(settings, false, cx) {
+            self.save_error = Some(error);
         }
     }
 
-    pub(crate) fn persist_search_history(&mut self, search_history: Vec<String>) {
+    pub(crate) fn persist_search_history(
+        &mut self,
+        search_history: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
         if self.import_sync_pending {
             return;
         }
         if self.saved.search_history == search_history {
             return;
         }
-        let Some(store) = self.store.as_mut() else {
-            return;
-        };
         let mut settings = self.saved.clone();
         settings.search_history = search_history;
-        if store.persist(settings.clone()).is_ok() {
-            self.saved = settings.clone();
-            if !self.session_active {
-                self.draft = settings;
-            }
+        if let Err(error) = self.persist_settings_background(settings, false, cx) {
+            self.save_error = Some(error);
         }
     }
 
     pub(crate) fn request_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        diagnostics::event("INFO", "settings submission");
-        if let Err(error) = self.persist_draft() {
-            self.save_error = Some(error);
-            cx.notify();
+        if self.save_in_flight {
             return;
         }
+        diagnostics::event("INFO", "settings submission");
+        let settings = match prepare_settings_for_persistence(&self.draft, &self.saved) {
+            Ok(settings) => settings,
+            Err(error) => {
+                self.save_error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        let Some(store) = self.store.as_ref() else {
+            self.save_error = Some("Settings storage is unavailable.".into());
+            cx.notify();
+            return;
+        };
+        let write = store.prepare_persist(settings.clone());
+        self.saved = settings.clone();
+        self.draft = settings;
+        self.save_error = None;
+        self.save_in_flight = true;
+
+        let runtime = self.runtime.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let worker_write = write.clone();
+            let result = runtime.spawn_blocking(move || worker_write.persist()).await;
+            this.update_in(cx, |this, window, cx| {
+                this.save_in_flight = false;
+                let persistence_error = match result {
+                    Ok(Ok(_)) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(_) => Some("The settings writer stopped unexpectedly.".to_owned()),
+                };
+                if write.is_current()
+                    && let Some(error) = persistence_error
+                {
+                    this.save_error = Some(error.into());
+                    cx.notify();
+                    return;
+                }
+                if let Some(store) = this.store.as_mut() {
+                    store.accept_persisted(&write);
+                }
+                this.finish_settings_session(window, cx);
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_settings_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.stop_cache_watcher();
         self.cache_generation = self.cache_generation.wrapping_add(1);
         self.cache_overview_loading = false;

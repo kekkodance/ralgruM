@@ -15,6 +15,7 @@ use self::core::{
     LyricsProvider, LyricsResponse, LyricsTrack, collapse_blank_lyric_gaps, genius_line_fragments,
     lyric_block_text, lyric_full_text, parse_synced_lyrics, prepare_genius_lyrics,
 };
+use futures::future::{Either, select};
 use gpui::{
     AnimationExt, AnyElement, App, ClickEvent, Context, FontWeight, HighlightStyle, IntoElement,
     Render, ScrollHandle, StyledText, Task, Window, div, point, prelude::*, px, rgb, rgba,
@@ -554,67 +555,85 @@ impl LyricsPanel {
             async move { client.load(alternate, request_track, cancellation).await }
         });
         cx.spawn(async move |this, cx| {
-            let primary_result = lyrics_task_result(primary_task).await;
-            let primary_done = this
+            let primary_future = Box::pin(lyrics_task_result(primary_task));
+            let alternate_future = Box::pin(lyrics_task_result(alternate_task));
+            let (first_provider, first_result, second_provider, second_future) =
+                match select(primary_future, alternate_future).await {
+                    Either::Left((result, remaining)) => {
+                        (primary_provider, result, alternate, remaining)
+                    }
+                    Either::Right((result, remaining)) => {
+                        (alternate, result, primary_provider, remaining)
+                    }
+                };
+            let first_has_lyrics = this
                 .update(cx, |this, cx| {
                     if generation != this.generation {
-                        return false;
+                        return None;
                     }
-                    match primary_result {
+                    let key = LyricsCacheKey::new(first_provider, &track);
+                    let has_lyrics = match first_result {
                         Ok(value) if !matches!(value, LyricsResponse::Empty { .. }) => {
-                            this.cache.set(primary_key.clone(), value.clone());
-                            this.apply(primary_provider, value);
-                            cx.notify();
+                            this.cache.set(key, value.clone());
+                            this.apply(first_provider, value);
                             true
                         }
                         Ok(empty) => {
-                            this.cache.set(primary_key.clone(), empty);
+                            this.cache.set(key, empty);
                             this.status = Status::Loading;
-                            cx.notify();
                             false
                         }
                         Err(error) if error == "Lyrics request cancelled" => false,
                         Err(_) => {
                             this.status = Status::Loading;
-                            cx.notify();
                             false
                         }
-                    }
+                    };
+                    cx.notify();
+                    Some(has_lyrics)
                 })
                 .ok()
-                .unwrap_or(false);
-            let alternate_result = lyrics_task_result(alternate_task).await;
+                .flatten();
+            let Some(first_has_lyrics) = first_has_lyrics else {
+                return;
+            };
+            let second_result = second_future.await;
             this.update(cx, |this, cx| {
                 if generation != this.generation {
                     return;
                 }
-                if primary_done {
-                    if let Ok(value) = alternate_result
-                        && this.cache.get(&alternate_key).is_none()
-                    {
-                        this.cache.set(alternate_key.clone(), value);
+                let second_key = LyricsCacheKey::new(second_provider, &track);
+                if first_has_lyrics {
+                    if let Ok(value) = second_result {
+                        if this.cache.get(&second_key).is_none() {
+                            this.cache.set(second_key, value.clone());
+                        }
+                        if let Some((provider, value)) =
+                            late_primary_selection(primary_provider, second_provider, value)
+                        {
+                            this.apply(provider, value);
+                            cx.notify();
+                        }
                     }
                     return;
                 }
-                if this.response.is_some() {
-                    if let Ok(value) = alternate_result
-                        && this.cache.get(&alternate_key).is_none()
-                    {
-                        this.cache.set(alternate_key.clone(), value);
-                    }
-                    return;
-                }
-                match alternate_result {
+                match second_result {
                     Ok(value) => {
-                        this.cache.set(alternate_key.clone(), value.clone());
-                        let primary_empty = this
-                            .cache
-                            .get(&primary_key)
-                            .cloned()
-                            .filter(|cached| matches!(cached, LyricsResponse::Empty { .. }));
-                        let (selected_provider, selected) =
-                            automatic_fallback_selection(primary_provider, primary_empty, value);
-                        this.apply(selected_provider, selected);
+                        this.cache.set(second_key, value.clone());
+                        if second_provider == primary_provider {
+                            this.apply(primary_provider, value);
+                        } else {
+                            let primary_empty =
+                                this.cache.get(&primary_key).cloned().filter(|cached| {
+                                    matches!(cached, LyricsResponse::Empty { .. })
+                                });
+                            let (selected_provider, selected) = automatic_fallback_selection(
+                                primary_provider,
+                                primary_empty,
+                                value,
+                            );
+                            this.apply(selected_provider, selected);
+                        }
                     }
                     Err(error) if error != "Lyrics request cancelled" => {
                         if let Some(primary_empty) = this
@@ -624,7 +643,14 @@ impl LyricsPanel {
                             .filter(|cached| matches!(cached, LyricsResponse::Empty { .. }))
                         {
                             this.apply(primary_provider, primary_empty);
-                        } else if this.cache.get(&primary_key).is_none() {
+                        } else if let Some(alternate_empty) = this
+                            .cache
+                            .get(&alternate_key)
+                            .cloned()
+                            .filter(|cached| matches!(cached, LyricsResponse::Empty { .. }))
+                        {
+                            this.apply(alternate, alternate_empty);
+                        } else {
                             this.status = Status::Error(error);
                         }
                     }
@@ -809,6 +835,15 @@ fn automatic_fallback_selection(
         }
         (_, alternate) => (alternate_provider(primary_provider), alternate),
     }
+}
+
+fn late_primary_selection(
+    primary_provider: LyricsProvider,
+    completed_provider: LyricsProvider,
+    response: LyricsResponse,
+) -> Option<(LyricsProvider, LyricsResponse)> {
+    (completed_provider == primary_provider && !matches!(&response, LyricsResponse::Empty { .. }))
+        .then_some((primary_provider, response))
 }
 
 fn track_changed(current: Option<&LyricsTrack>, next: Option<&LyricsTrack>) -> bool {
@@ -1483,6 +1518,44 @@ mod tests {
         assert_eq!(
             automatic_fallback_selection(LyricsProvider::Musixmatch, None, alternate_empty.clone(),),
             (LyricsProvider::Genius, alternate_empty)
+        );
+    }
+
+    #[test]
+    fn late_primary_lyrics_replace_a_fast_alternate_but_empty_results_do_not() {
+        let primary = LyricsResponse::Plain {
+            text: "preferred".into(),
+            url: None,
+        };
+        assert_eq!(
+            late_primary_selection(
+                LyricsProvider::Musixmatch,
+                LyricsProvider::Musixmatch,
+                primary.clone(),
+            ),
+            Some((LyricsProvider::Musixmatch, primary))
+        );
+        assert_eq!(
+            late_primary_selection(
+                LyricsProvider::Musixmatch,
+                LyricsProvider::Genius,
+                LyricsResponse::Plain {
+                    text: "alternate".into(),
+                    url: None,
+                },
+            ),
+            None
+        );
+        assert_eq!(
+            late_primary_selection(
+                LyricsProvider::Musixmatch,
+                LyricsProvider::Musixmatch,
+                LyricsResponse::Empty {
+                    provider: LyricsProvider::Musixmatch,
+                    reason: EmptyLyricsReason::NotFound,
+                },
+            ),
+            None
         );
     }
 

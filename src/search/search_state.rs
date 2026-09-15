@@ -307,8 +307,8 @@ impl SearchView {
 
     fn persist_search_history(&mut self, cx: &mut Context<Self>) {
         let history = self.suggestions.history().to_vec();
-        self.settings.update(cx, |settings, _| {
-            settings.persist_search_history(history);
+        self.settings.update(cx, |settings, cx| {
+            settings.persist_search_history(history, cx);
         });
     }
 

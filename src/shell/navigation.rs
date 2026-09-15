@@ -109,8 +109,9 @@ impl RalgrumApp {
                 saved.library_categories.soundcloud = category_id(category).into()
             }
         }
-        self.settings
-            .update(cx, |settings, _| settings.persist_navigation(saved, false));
+        self.settings.update(cx, |settings, cx| {
+            settings.persist_navigation(saved, false, cx)
+        });
     }
 }
 

@@ -3,10 +3,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use futures::FutureExt;
@@ -24,6 +24,7 @@ const ARTWORK_CACHE_DIR: &str = "artwork-v1";
 const ARTWORK_CACHE_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
 const ARTWORK_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const ARTWORK_DOWNLOAD_LIMIT: usize = 8;
+const ARTWORK_PRUNE_INTERVAL: Duration = Duration::from_secs(30);
 // Search can keep several 64-card carousels mounted at once. The cache must
 // retain every mounted cover so one section cannot evict another mid-frame.
 const ARTWORK_MEMORY_CACHE_LIMIT: usize = 512;
@@ -40,6 +41,7 @@ pub(crate) struct ArtworkCache {
     runtime: Arc<Runtime>,
     client: Client,
     download_gate: Arc<Semaphore>,
+    pruner: Arc<ArtworkPruner>,
     items: HashMap<Resource, ImageCacheItem>,
     loading_cancellations: HashMap<Resource, CancellationToken>,
     access_order: LruOrder<Resource>,
@@ -47,12 +49,14 @@ pub(crate) struct ArtworkCache {
 
 impl ArtworkCache {
     fn new(cache_dir: PathBuf, runtime: Arc<Runtime>, client: Client) -> Self {
-        let _ = prune_cache_dir(&cache_dir, ARTWORK_CACHE_LIMIT_BYTES);
+        let pruner = Arc::new(ArtworkPruner::default());
+        pruner.request(runtime.clone(), cache_dir.clone());
         Self {
             cache_dir,
             runtime,
             client,
             download_gate: Arc::new(Semaphore::new(ARTWORK_DOWNLOAD_LIMIT)),
+            pruner,
             items: HashMap::new(),
             loading_cancellations: HashMap::new(),
             access_order: LruOrder::default(),
@@ -183,6 +187,7 @@ impl ArtworkCache {
         let path_resource = Resource::Path(cache_path.clone().into());
         let path_loader = AssetLogger::<ImageAssetLoader>::load(path_resource, cx);
         let runtime = self.runtime.clone();
+        let pruner = self.pruner.clone();
         let client = self.client.clone();
         let download_gate = self.download_gate.clone();
         let cache_dir = self.cache_dir.clone();
@@ -225,7 +230,8 @@ impl ArtworkCache {
             // not delay the first paint.
             let persist_runtime = runtime.clone();
             let persistence = runtime.spawn(async move {
-                let _ = persist_artwork(persist_runtime, cache_dir, decode_path, bytes).await;
+                let _ =
+                    persist_artwork(persist_runtime, pruner, cache_dir, decode_path, bytes).await;
             });
             drop(persistence);
             Ok(image)
@@ -441,6 +447,7 @@ async fn decode_artwork(
 
 async fn persist_artwork(
     runtime: Arc<Runtime>,
+    pruner: Arc<ArtworkPruner>,
     cache_dir: PathBuf,
     cache_path: PathBuf,
     bytes: Vec<u8>,
@@ -449,11 +456,7 @@ async fn persist_artwork(
         .await
         .map_err(|error| error.to_string())?;
     write_atomically(&cache_path, &bytes).await?;
-    let prune_dir = cache_dir.clone();
-    runtime
-        .spawn_blocking(move || prune_cache_dir(&prune_dir, ARTWORK_CACHE_LIMIT_BYTES))
-        .await
-        .map_err(|_| "artwork cache pruner stopped unexpectedly".to_owned())??;
+    pruner.request(runtime, cache_dir);
     Ok(())
 }
 
@@ -536,7 +539,11 @@ fn files_to_prune(mut files: Vec<CacheFile>, limit: u64) -> Vec<PathBuf> {
 }
 
 fn prune_cache_dir(cache_dir: &Path, limit: u64) -> Result<(), String> {
-    let entries = fs::read_dir(cache_dir).map_err(|error| error.to_string())?;
+    let entries = match fs::read_dir(cache_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
     let mut files = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -562,6 +569,98 @@ fn prune_cache_dir(cache_dir: &Path, limit: u64) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Default)]
+struct ArtworkPruner {
+    state: Mutex<ArtworkPrunerState>,
+}
+
+#[derive(Default)]
+struct ArtworkPrunerState {
+    running: bool,
+    requested: bool,
+    last_run: Option<Instant>,
+}
+
+impl ArtworkPruner {
+    fn request(self: &Arc<Self>, runtime: Arc<Runtime>, cache_dir: PathBuf) {
+        let should_start = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.requested = true;
+            if state.running {
+                false
+            } else {
+                state.running = true;
+                true
+            }
+        };
+        if !should_start {
+            return;
+        }
+
+        let pruner = self.clone();
+        let task = runtime.clone().spawn(async move {
+            loop {
+                let delay = {
+                    let state = pruner
+                        .state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    artwork_prune_delay(state.last_run.map(|last_run| last_run.elapsed()))
+                };
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+                {
+                    let mut state = pruner
+                        .state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    state.requested = false;
+                }
+                let directory = cache_dir.clone();
+                let result = runtime
+                    .spawn_blocking(move || prune_cache_dir(&directory, ARTWORK_CACHE_LIMIT_BYTES))
+                    .await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => crate::diagnostics::event(
+                        "WARN",
+                        format!("artwork cache cleanup failed: {error}"),
+                    ),
+                    Err(_) => crate::diagnostics::event(
+                        "WARN",
+                        "artwork cache cleanup worker stopped unexpectedly",
+                    ),
+                }
+
+                let repeat = {
+                    let mut state = pruner
+                        .state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    state.last_run = Some(Instant::now());
+                    if state.requested {
+                        true
+                    } else {
+                        state.running = false;
+                        false
+                    }
+                };
+                if !repeat {
+                    break;
+                }
+            }
+        });
+        drop(task);
+    }
+}
+
+fn artwork_prune_delay(elapsed_since_last_run: Option<Duration>) -> Duration {
+    elapsed_since_last_run
+        .and_then(|elapsed| ARTWORK_PRUNE_INTERVAL.checked_sub(elapsed))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,6 +673,19 @@ mod tests {
             PathBuf::from(
                 "cache/92f1985235143b3546238c25ca066d7a0382f83566a30848b17c11242bf99086.image"
             )
+        );
+    }
+
+    #[test]
+    fn repeated_artwork_prunes_are_rate_limited() {
+        assert_eq!(artwork_prune_delay(None), Duration::ZERO);
+        assert_eq!(
+            artwork_prune_delay(Some(Duration::from_secs(5))),
+            Duration::from_secs(25)
+        );
+        assert_eq!(
+            artwork_prune_delay(Some(ARTWORK_PRUNE_INTERVAL)),
+            Duration::ZERO
         );
     }
 

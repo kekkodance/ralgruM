@@ -189,12 +189,16 @@ fn main() {
                         |store| store.settings().clone(),
                     );
                     let cache = AudioCache::new(cache_dir, saved.audio_cache_limit_mb);
-                    if let Err(error) = runtime.block_on(cache.purge_partial_prefetch()) {
-                        diagnostics::event(
-                            "WARN",
-                            format!("audio cache prefetch cleanup failed: {error}"),
-                        );
-                    }
+                    let cleanup_cache = cache.clone();
+                    let cleanup_task = runtime.spawn(async move {
+                        if let Err(error) = cleanup_cache.purge_partial_prefetch().await {
+                            diagnostics::event(
+                                "WARN",
+                                format!("audio cache prefetch cleanup failed: {error}"),
+                            );
+                        }
+                    });
+                    drop(cleanup_task);
                     let settings = cx.new(|cx| {
                         SettingsView::new(
                             account.clone(),

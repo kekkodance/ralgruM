@@ -15,8 +15,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::resolver::AudioFormat;
 
-const EMPTY_READ_WAIT: Duration = Duration::from_millis(1);
-
 /// The initial reader and backing file produced by a timeline-aware seek.
 ///
 /// Timeline sessions fetch only enough data to construct a decoder, then keep
@@ -651,13 +649,9 @@ impl Read for ProgressiveReader {
                     ));
                 }
                 None => {
-                    let (next, _) = self
-                        .shared
-                        .wake
-                        .wait_timeout(state, EMPTY_READ_WAIT)
-                        .map_err(|_| {
-                            io::Error::other("The progressive playback state was poisoned")
-                        })?;
+                    let next = self.shared.wake.wait(state).map_err(|_| {
+                        io::Error::other("The progressive playback state was poisoned")
+                    })?;
                     drop(next);
                 }
             }
