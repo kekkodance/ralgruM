@@ -16,3 +16,9 @@ pub(crate) use state::{
     BatchConflictPolicy, BatchExistingTarget, BatchNeedsConfirmation, DownloadJob, DownloadStatus,
     remove_claimed_jobs,
 };
+// Re-exported for the downloads page regression tests, which pin render
+// behavior against the model's cached file stats.
+#[cfg(test)]
+pub(crate) use quality::ResolvedQuality;
+#[cfg(test)]
+pub(crate) use state::DownloadFileStat;

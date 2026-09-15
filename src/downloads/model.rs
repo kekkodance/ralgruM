@@ -16,16 +16,18 @@ use super::{
     inspect_batch_targets,
     quality::ResolvedQuality,
     sanitize_filename,
-    state::{BatchTargetAction, batch_outcome, batch_target_action, current_conflict},
+    state::{
+        BatchTargetAction, DownloadFileStat, batch_outcome, batch_target_action, current_conflict,
+        file_destination,
+    },
 };
 use crate::{
-    navigation_state::{AppSettings, SettingsStore},
     playback::{
         AudioCache, CACHED_DOWNLOAD_INVALID, CachedDownload, DownloadVariant, PlaybackProvider,
         PlaybackTrack, ProgressCallback, ProgressUpdate, ResolvedSource, StreamResolver,
     },
     search::{DeezerArl, SoundCloudToken},
-    settings::AccountState,
+    settings::{AccountState, SettingsView},
     toast::{ToastKind, ToastStack},
 };
 
@@ -33,6 +35,7 @@ pub(crate) struct DownloadModel {
     pub(crate) jobs: Vec<DownloadJob>,
     pub(crate) platform_status: Option<String>,
     account: Entity<AccountState>,
+    settings: Option<Entity<SettingsView>>,
     runtime: Arc<Runtime>,
     resolver: Result<StreamResolver, String>,
     active: Option<(u64, u64, CancellationToken)>,
@@ -53,6 +56,7 @@ pub(crate) struct DownloadModel {
     capabilities: CapabilityCache,
     capability_cancellations: CapabilityProbeRegistry,
     capability_tasks: HashMap<CapabilityKey, Task<()>>,
+    file_stat_probes: std::collections::HashSet<u64>,
 }
 
 /// Capability notification for an open download row. `None` invalidates an
@@ -127,6 +131,7 @@ impl DownloadModel {
             jobs: Vec::new(),
             platform_status: None,
             account,
+            settings: None,
             runtime,
             resolver: StreamResolver::new(),
             active: None,
@@ -147,7 +152,26 @@ impl DownloadModel {
             capabilities: CapabilityCache::default(),
             capability_cancellations: CapabilityProbeRegistry::default(),
             capability_tasks: HashMap::new(),
+            file_stat_probes: std::collections::HashSet::new(),
         }
+    }
+
+    /// Wire the live settings entity that owns the downloads directory.
+    /// When it is missing, downloads fail visibly instead of guessing a
+    /// destination.
+    pub(crate) fn with_settings(mut self, settings: Entity<SettingsView>) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    /// The live downloads directory from the settings entity. This never
+    /// falls back to a default directory: an unavailable settings entity
+    /// is an error the caller must surface to the user.
+    fn downloads_dir(&self, cx: &Context<Self>) -> Result<PathBuf, String> {
+        self.settings
+            .as_ref()
+            .map(|settings| settings.read(cx).saved().effective_downloads_dir())
+            .ok_or_else(|| "The downloads directory could not be read from settings".to_owned())
     }
 
     pub(crate) fn with_toasts(mut self, toasts: gpui::WeakEntity<ToastStack>) -> Self {
@@ -318,29 +342,43 @@ impl DownloadModel {
                 .and_then(|job| batch_download_extension(job.track.provider, variant))
         });
         let existing_targets = match extension {
-            Some(extension) => {
-                let settings = SettingsStore::load_current_user()
-                    .map(|store| store.settings().clone())
-                    .unwrap_or_else(|_| AppSettings::default());
-                let downloads_dir = settings.effective_downloads_dir();
-                let target_paths = ids
-                    .iter()
-                    .filter_map(|id| {
-                        self.job(*id)
-                            .map(|job| destination_guess(&job.track, extension, &downloads_dir))
-                    })
-                    .collect::<Vec<_>>();
-                let inspection = inspect_batch_targets(target_paths.clone());
-                let existing_paths = inspection
-                    .existing
-                    .into_iter()
-                    .collect::<std::collections::HashSet<_>>();
-                ids.iter()
-                    .zip(target_paths)
-                    .filter(|(_, path)| existing_paths.contains(path))
-                    .map(|(id, path)| BatchExistingTarget { id: *id, path })
-                    .collect::<Vec<_>>()
-            }
+            Some(extension) => match self.downloads_dir(cx) {
+                Ok(downloads_dir) => {
+                    let target_paths = ids
+                        .iter()
+                        .filter_map(|id| {
+                            self.job(*id)
+                                .map(|job| destination_guess(&job.track, extension, &downloads_dir))
+                        })
+                        .collect::<Vec<_>>();
+                    let inspection = inspect_batch_targets(target_paths.clone());
+                    let existing_paths = inspection
+                        .existing
+                        .into_iter()
+                        .collect::<std::collections::HashSet<_>>();
+                    ids.iter()
+                        .zip(target_paths)
+                        .filter(|(_, path)| existing_paths.contains(path))
+                        .map(|(id, path)| BatchExistingTarget { id: *id, path })
+                        .collect::<Vec<_>>()
+                }
+                Err(error) => {
+                    // Settings are unavailable, so no destination can be
+                    // determined. Fail the whole batch visibly instead of
+                    // guessing a directory for the conflict pre-check or
+                    // the transfer itself.
+                    for id in &ids {
+                        self.requests.remove(id);
+                        if let Some(job) = self.job_mut(*id) {
+                            job.status = DownloadStatus::Failed(error.clone());
+                            job.unread = true;
+                        }
+                    }
+                    self.notify_toast(ToastKind::Error, "Downloads Failed", Some(error), cx);
+                    cx.notify();
+                    return ids;
+                }
+            },
             None => Vec::new(),
         };
         self.begin_batch_tracking(&ids);
@@ -413,6 +451,7 @@ impl DownloadModel {
             if let Some(status) = self.job(id).map(|job| job.status.clone()) {
                 self.record_outcome(id, &status, cx);
             }
+            self.invalidate_file_stat(id, cx);
         }
         if !self.batch_ids.is_empty() {
             self.notify_toast(
@@ -569,6 +608,17 @@ impl DownloadModel {
         if !self.accepts(id, generation) {
             return;
         }
+        // The destination directory is a precondition for any transfer.
+        // It comes from the live settings entity, and an unavailable
+        // entity fails the job visibly here rather than letting the
+        // download fall back to a default directory.
+        let downloads_dir = match self.downloads_dir(cx) {
+            Ok(downloads_dir) => downloads_dir,
+            Err(error) => {
+                self.finish(id, generation, DownloadStatus::Failed(error), cx);
+                return;
+            }
+        };
         let source = match result {
             Ok(source) => source,
             Err(error)
@@ -583,9 +633,6 @@ impl DownloadModel {
                 return;
             }
         };
-        let settings = SettingsStore::load_current_user()
-            .map(|store| store.settings().clone())
-            .unwrap_or_else(|_| AppSettings::default());
         let (extension, format_name, source_size, declared_bitrate) = match &source {
             DownloadSource::Resolved(source) => (
                 source.format.extension().to_owned(),
@@ -600,8 +647,7 @@ impl DownloadModel {
                 None,
             ),
         };
-        let path =
-            destination_with_extension(&track, &extension, &settings.effective_downloads_dir());
+        let path = destination_with_extension(&track, &extension, &downloads_dir);
         self.job_mut(id).unwrap().quality = Some(ResolvedQuality {
             format: format_name,
             source_size: (source_size > 0).then_some(source_size),
@@ -621,6 +667,7 @@ impl DownloadModel {
                     BatchTargetAction::DownloadNew | BatchTargetAction::NeedsConfirmation => {
                         self.job_mut(id).unwrap().status =
                             DownloadStatus::NeedsConfirmation { path: path.clone() };
+                        self.invalidate_file_stat(id, cx);
                         self.emit_conflict(id, cx);
                         cx.notify();
                     }
@@ -628,6 +675,7 @@ impl DownloadModel {
             } else {
                 self.job_mut(id).unwrap().status =
                     DownloadStatus::NeedsConfirmation { path: path.clone() };
+                self.invalidate_file_stat(id, cx);
                 self.emit_conflict(id, cx);
                 cx.notify();
             }
@@ -645,6 +693,52 @@ impl DownloadModel {
     pub(crate) fn clear_terminal(&mut self, cx: &mut Context<Self>) {
         self.jobs.retain(|job| !job.is_terminal());
         cx.notify();
+    }
+
+    /// Refresh the cached filesystem facts for every job that renders
+    /// file information and is still missing a stat. The probe itself
+    /// runs on the background executor, never the UI thread, and each
+    /// job has at most one probe in flight, so repeated refreshes
+    /// coalesce. This is the entry point for page opens and explicit
+    /// refreshes; state transitions funnel through `invalidate_file_stat`.
+    pub(crate) fn refresh_file_stats(&mut self, cx: &mut Context<Self>) {
+        let targets: Vec<(u64, PathBuf)> = self
+            .jobs
+            .iter()
+            .filter(|job| !self.file_stat_probes.contains(&job.id))
+            .filter_map(|job| {
+                file_destination(&job.status)
+                    .filter(|_| job.file.is_none())
+                    .map(|path| (job.id, path.to_owned()))
+            })
+            .collect();
+        for (id, path) in targets {
+            self.file_stat_probes.insert(id);
+            let probe = cx
+                .background_executor()
+                .spawn(async move { DownloadFileStat::probe(&path) });
+            let entity = cx.entity().clone();
+            cx.spawn(async move |_, cx| {
+                let stat = probe.await;
+                entity.update(cx, |model, cx| {
+                    model.file_stat_probes.remove(&id);
+                    if let Some(job) = model.job_mut(id) {
+                        job.file = Some(stat);
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Drop the cached stat for a job whose destination just changed and
+    /// queue a fresh background probe.
+    fn invalidate_file_stat(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(job) = self.job_mut(id) {
+            job.file = None;
+        }
+        self.refresh_file_stats(cx);
     }
 
     pub(crate) fn unread_count(&self) -> usize {
@@ -725,6 +819,7 @@ impl DownloadModel {
         job.status = DownloadStatus::Queued;
         job.unread = false;
         job.quality = None;
+        job.file = None;
         self.requests
             .insert(id, (deezer_arl, soundcloud_token, variant));
         self.start_next(cx);
@@ -946,7 +1041,7 @@ impl DownloadModel {
         let resolver = self.resolver.clone();
         let cache = self.cache.clone();
         let part = part_path(&path, id, generation);
-        let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (progress_sender, progress_receiver) = tokio::sync::mpsc::unbounded_channel();
         let progress: ProgressCallback = Arc::new(move |update: ProgressUpdate| {
             let _ = progress_sender.send((update.downloaded, update.total));
         });
@@ -956,27 +1051,7 @@ impl DownloadModel {
                 progress(ProgressUpdate::bytes(downloaded, Some(total)));
             })
         };
-        let progress_entity = cx.entity().clone();
-        cx.spawn(async move |_, cx| {
-            let mut last_notify: Option<Instant> = None;
-            while let Some((downloaded, total)) = progress_receiver.recv().await {
-                let is_complete = total.is_some_and(|total| downloaded >= total);
-                let should_notify = is_complete
-                    || last_notify.is_none_or(|last| last.elapsed() >= Duration::from_millis(100));
-                if should_notify {
-                    last_notify = Some(Instant::now());
-                    progress_entity.update(cx, |model, cx| {
-                        if model.accepts_transfer(id, generation)
-                            && let Some(job) = model.job_mut(id)
-                        {
-                            job.status = DownloadStatus::Downloading { downloaded, total };
-                            cx.notify();
-                        }
-                    });
-                }
-            }
-        })
-        .detach();
+        spawn_progress_pump(cx, id, generation, progress_receiver);
         let output_path = path.clone();
         let part_for_callback = part.clone();
         let task = self.runtime.spawn(async move {
@@ -1100,6 +1175,7 @@ impl DownloadModel {
                     if let Some(job) = model.job_mut(id) {
                         job.status = DownloadStatus::NeedsConfirmation { path: path.clone() };
                     }
+                    model.invalidate_file_stat(id, cx);
                     model.emit_conflict(id, cx);
                     cx.notify();
                     return true;
@@ -1154,9 +1230,11 @@ impl DownloadModel {
             let job = self.job_mut(id).unwrap();
             job.status = status.clone();
             job.unread = unread;
+            job.file = None;
             self.active = None;
             self.record_outcome(id, &status, cx);
             self.start_next(cx);
+            self.invalidate_file_stat(id, cx);
         }
     }
 
@@ -1209,6 +1287,58 @@ impl DownloadModel {
             _ => {}
         }
     }
+}
+
+/// Forward coalesced progress updates into the job status. The transfer
+/// publishes a tick for every buffered chunk, so the pump drains the
+/// queue down to the newest sample before touching the entity: a fast
+/// download collapses into one update per wake instead of leaving an
+/// unbounded backlog of queued ticks. Terminal states travel through the
+/// transfer task result, never this channel, so coalescing cannot drop
+/// them and the job still converges to its final state.
+fn spawn_progress_pump(
+    cx: &mut Context<DownloadModel>,
+    id: u64,
+    generation: u64,
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<(u64, Option<u64>)>,
+) {
+    let progress_entity = cx.entity().clone();
+    cx.spawn(async move |_, cx| {
+        let mut last_notify: Option<Instant> = None;
+        while let Some((downloaded, total)) = receiver.recv().await {
+            let (downloaded, total) = coalesce_progress((downloaded, total), &mut receiver);
+            let is_complete = total.is_some_and(|total| downloaded >= total);
+            let should_notify = is_complete
+                || last_notify.is_none_or(|last| last.elapsed() >= Duration::from_millis(100));
+            if should_notify {
+                last_notify = Some(Instant::now());
+                progress_entity.update(cx, |model, cx| {
+                    if model.accepts_transfer(id, generation)
+                        && let Some(job) = model.job_mut(id)
+                    {
+                        job.status = DownloadStatus::Downloading { downloaded, total };
+                        cx.notify();
+                    }
+                });
+            }
+        }
+    })
+    .detach();
+}
+
+/// Collapse the progress messages already queued behind a received one,
+/// keeping only the newest byte counts. Byte counts are monotonic, so
+/// the latest sample subsumes every collapsed tick.
+fn coalesce_progress(
+    latest: (u64, Option<u64>),
+    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<(u64, Option<u64>)>,
+) -> (u64, Option<u64>) {
+    let (mut downloaded, mut total) = latest;
+    while let Ok((next_downloaded, next_total)) = receiver.try_recv() {
+        downloaded = next_downloaded;
+        total = next_total;
+    }
+    (downloaded, total)
 }
 
 fn quality_label(job: &DownloadJob, downloaded_size: Option<u64>) -> String {
@@ -1272,33 +1402,44 @@ mod tests {
     use std::time::Duration;
     use tempfile::tempdir;
 
+    fn soundcloud_track() -> PlaybackTrack {
+        PlaybackTrack {
+            downloadable: true,
+            progressive: false,
+            provider: PlaybackProvider::SoundCloud,
+            id: "1".into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            album: String::new(),
+            album_id: String::new(),
+            release_date: String::new(),
+            artists: Vec::new(),
+            artwork: String::new(),
+            duration: Duration::from_secs(10),
+            explicit: false,
+            service_url: String::new(),
+        }
+    }
+
     fn quality_job() -> DownloadJob {
-        let mut job = DownloadJob::new(
-            1,
-            PlaybackTrack {
-                downloadable: true,
-                progressive: false,
-                provider: PlaybackProvider::SoundCloud,
-                id: "1".into(),
-                title: "Song".into(),
-                artist: "Artist".into(),
-                album: String::new(),
-                album_id: String::new(),
-                release_date: String::new(),
-                artists: Vec::new(),
-                artwork: String::new(),
-                duration: Duration::from_secs(10),
-                explicit: false,
-                service_url: String::new(),
-            },
-            DownloadVariant::Standard,
-        );
+        let mut job = DownloadJob::new(1, soundcloud_track(), DownloadVariant::Standard);
         job.quality = Some(ResolvedQuality {
             format: "MP3".into(),
             source_size: Some(80_000),
             declared_bitrate: None,
         });
         job
+    }
+
+    fn error_account(cx: &mut gpui::TestAppContext) -> Entity<AccountState> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AccountState::new(
+                    DeviceIdentityStatus::Error(DeviceIdentityError::HardwareCollectionUnavailable),
+                    Err(SessionError::ConfigDirectoryUnavailable),
+                )
+            })
+        })
     }
 
     #[test]
@@ -1468,6 +1609,250 @@ mod tests {
                 assert!(model.jobs[0].quality.is_some());
                 assert!(model.requests.is_empty());
             });
+        });
+    }
+
+    #[gpui::test]
+    fn batch_without_live_settings_fails_instead_of_guessing_a_directory(cx: &mut TestAppContext) {
+        let account = error_account(cx);
+        let model = cx.new(|_| DownloadModel::new(account, Arc::new(Runtime::new().unwrap())));
+
+        let ids = model.update(cx, |model, cx| {
+            model.start_batch(
+                [soundcloud_track()],
+                None,
+                None,
+                DownloadVariant::Standard,
+                cx,
+            )
+        });
+
+        model.update(cx, |model, _| {
+            assert_eq!(ids.len(), 1);
+            let job = &model.jobs[0];
+            let DownloadStatus::Failed(error) = &job.status else {
+                panic!("expected a visible failure, got {:?}", job.status);
+            };
+            assert!(error.contains("downloads directory"));
+            assert!(job.unread);
+            assert!(model.requests.is_empty());
+            assert!(model.pending_batch.is_none());
+            assert!(!model.batch_mode);
+        });
+    }
+
+    #[gpui::test]
+    fn resolved_download_without_live_settings_fails_instead_of_saving(cx: &mut TestAppContext) {
+        let account = error_account(cx);
+        let model = cx.new(|_| {
+            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
+            let mut job = quality_job();
+            job.status = DownloadStatus::Resolving;
+            model.jobs.push(job);
+            model.next_id = 1;
+            model.active = Some((0, 1, CancellationToken::new()));
+            model
+        });
+
+        model.update(cx, |model, cx| {
+            // The missing settings guard fires before the transfer result
+            // is interpreted, so not even a resolved stream can fall back
+            // to a default directory.
+            model.resolved(
+                1,
+                0,
+                soundcloud_track(),
+                Err("the resolved stream expired".into()),
+                cx,
+            );
+            let job = &model.jobs[0];
+            let DownloadStatus::Failed(error) = &job.status else {
+                panic!("expected a visible failure, got {:?}", job.status);
+            };
+            assert!(error.contains("downloads directory"));
+            assert!(job.unread);
+            assert!(model.active.is_none());
+            assert!(model.requests.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn file_stats_are_probed_once_and_cached_in_the_job(cx: &mut TestAppContext) {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("song.mp3");
+        std::fs::write(&path, vec![0; 160_000]).unwrap();
+
+        let account = error_account(cx);
+        let model = cx.new(|_| {
+            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
+            let mut job = quality_job();
+            job.status = DownloadStatus::Completed(path.clone());
+            model.jobs.push(job);
+            model.next_id = 1;
+            model
+        });
+
+        model.update(cx, |model, cx| {
+            model.refresh_file_stats(cx);
+            // A refresh while a probe is still in flight schedules no
+            // second probe.
+            model.refresh_file_stats(cx);
+            assert_eq!(model.file_stat_probes.len(), 1);
+        });
+        cx.run_until_parked();
+
+        model.update(cx, |model, cx| {
+            let job = &model.jobs[0];
+            let stat = job.file.as_ref().expect("the probe should have landed");
+            assert!(stat.exists);
+            assert_eq!(stat.size, Some(160_000));
+            assert!(stat.modified.is_some());
+            assert_eq!(job.file_size(), Some(160_000));
+            assert!(model.file_stat_probes.is_empty());
+
+            // A cached stat is reused; later refreshes do not re-probe.
+            model.refresh_file_stats(cx);
+            assert!(model.file_stat_probes.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn finishing_a_download_invalidates_and_reprobes_the_cached_stat(cx: &mut TestAppContext) {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("song.mp3");
+        std::fs::write(&path, vec![0; 160_000]).unwrap();
+
+        let account = error_account(cx);
+        let model = cx.new(|_| {
+            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
+            let mut job = quality_job();
+            job.status = DownloadStatus::Downloading {
+                downloaded: 8,
+                total: Some(8),
+            };
+            // A stale stat from an earlier conflict about the same file.
+            job.file = Some(DownloadFileStat::default());
+            model.jobs.push(job);
+            model.next_id = 1;
+            model.active = Some((0, 1, CancellationToken::new()));
+            model
+        });
+
+        model.update(cx, |model, cx| {
+            model.finish(1, 0, DownloadStatus::Completed(path), cx);
+            assert!(model.jobs[0].file.is_none());
+        });
+        cx.run_until_parked();
+
+        model.update(cx, |model, _| {
+            let stat = model.jobs[0].file.as_ref().expect("a fresh probe landed");
+            assert_eq!(stat.size, Some(160_000));
+            assert_eq!(model.jobs[0].file_size(), Some(160_000));
+        });
+    }
+
+    #[test]
+    fn coalescing_keeps_only_the_newest_progress_sample() {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let total = 2_000 * 64 * 1024;
+        for tick in 1..2_000 {
+            sender.send((tick * 64 * 1024, Some(total))).unwrap();
+        }
+        sender.send((total, Some(total))).unwrap();
+
+        let (downloaded, reported_total) = coalesce_progress((0, None), &mut receiver);
+
+        assert_eq!(downloaded, total);
+        assert_eq!(reported_total, Some(total));
+        // The whole backlog is drained in one pass.
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn coalescing_an_empty_queue_keeps_the_received_sample() {
+        let (_sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<(u64, Option<u64>)>();
+        assert_eq!(
+            coalesce_progress((128, Some(256)), &mut receiver),
+            (128, Some(256))
+        );
+    }
+
+    #[gpui::test]
+    fn progress_pump_collapses_bursts_and_converges_to_the_final_tick(cx: &mut TestAppContext) {
+        let account = error_account(cx);
+        let model = cx.new(|_| {
+            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
+            let mut job = quality_job();
+            job.status = DownloadStatus::Downloading {
+                downloaded: 0,
+                total: None,
+            };
+            model.jobs.push(job);
+            model.next_id = 1;
+            model.active = Some((0, 1, CancellationToken::new()));
+            model
+        });
+
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        model.update(cx, |_, cx| spawn_progress_pump(cx, 1, 0, receiver));
+
+        let total = 2_000 * 64 * 1024;
+        for tick in 1..2_000 {
+            sender.send((tick * 64 * 1024, Some(total))).unwrap();
+        }
+        // The terminal progress tick must survive the burst.
+        sender.send((total, Some(total))).unwrap();
+        drop(sender);
+        cx.run_until_parked();
+
+        model.update(cx, |model, _| {
+            assert_eq!(
+                model.jobs[0].status,
+                DownloadStatus::Downloading {
+                    downloaded: total,
+                    total: Some(total),
+                },
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn progress_pump_applies_the_newest_tick_of_a_throttled_burst(cx: &mut TestAppContext) {
+        let account = error_account(cx);
+        let model = cx.new(|_| {
+            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
+            let mut job = quality_job();
+            job.status = DownloadStatus::Downloading {
+                downloaded: 0,
+                total: None,
+            };
+            model.jobs.push(job);
+            model.next_id = 1;
+            model.active = Some((0, 1, CancellationToken::new()));
+            model
+        });
+
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        model.update(cx, |_, cx| spawn_progress_pump(cx, 1, 0, receiver));
+
+        let total = 2_000 * 64 * 1024;
+        let newest = 1_999 * 64 * 1024;
+        for tick in 1..2_000 {
+            sender.send((tick * 64 * 1024, Some(total))).unwrap();
+        }
+        drop(sender);
+        cx.run_until_parked();
+
+        model.update(cx, |model, _| {
+            // The whole burst collapses into one update, so the newest
+            // byte count is applied instead of the first throttled one.
+            assert_eq!(
+                model.jobs[0].status,
+                DownloadStatus::Downloading {
+                    downloaded: newest,
+                    total: Some(total),
+                },
+            );
         });
     }
 }

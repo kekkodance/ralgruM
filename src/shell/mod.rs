@@ -694,6 +694,7 @@ impl RalgrumApp {
             DownloadModel::new(account.clone(), runtime.clone())
                 .with_cache(cache.clone())
                 .with_toasts(toasts.downgrade())
+                .with_settings(settings.clone())
         });
         subscribe_download_notices(&downloads, cx);
         let favorite_controller = cx

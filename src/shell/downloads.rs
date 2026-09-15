@@ -32,6 +32,15 @@ pub(super) fn render_downloads(
         rows.push(render_job(job, app.downloads.clone(), cx).into_any_element());
     }
     let has_terminal_jobs = jobs.iter().any(|job| job.is_terminal());
+    // The page doubles as the refresh trigger: after the frame is out, ask
+    // the model to fill any missing file caches. The deferred update keeps
+    // rendering free of model mutation and disk access; the model probes
+    // on its background executor and notifies once results land, so this
+    // is a no-op whenever every visible job is already cached.
+    let refresh = app.downloads.clone();
+    cx.defer(move |cx| {
+        refresh.update(cx, |model, cx| model.refresh_file_stats(cx));
+    });
     let metrics = crate::music_ui::shell_metrics(f32::from(window.viewport_size().width));
     let content =
         div()
@@ -337,14 +346,13 @@ fn quality_badge(job: &DownloadJob) -> impl IntoElement {
 }
 
 fn quality_label(job: &DownloadJob) -> String {
-    let file_size = |path: &std::path::Path| std::fs::metadata(path).ok().map(|meta| meta.len());
     match &job.status {
-        DownloadStatus::Completed(path)
-        | DownloadStatus::Skipped(path)
-        | DownloadStatus::NeedsConfirmation { path } => job
+        DownloadStatus::Completed(_)
+        | DownloadStatus::Skipped(_)
+        | DownloadStatus::NeedsConfirmation { .. } => job
             .quality
             .as_ref()
-            .map(|quality| quality.label(job.track.duration, file_size(path)))
+            .map(|quality| quality.label(job.track.duration, job.file_size()))
             .unwrap_or_else(|| "Quality unavailable".to_owned()),
         DownloadStatus::Queued => "Queued".to_owned(),
         DownloadStatus::Failed(_) => "Failed".to_owned(),
@@ -504,7 +512,61 @@ fn bytes(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ProgressPresentation, progress_presentation};
-    use crate::downloads::DownloadStatus;
+    use crate::downloads::{DownloadFileStat, DownloadJob, DownloadStatus, ResolvedQuality};
+    use crate::playback::{DownloadVariant, PlaybackProvider, PlaybackTrack};
+    use std::time::Duration;
+
+    fn quality_job_with_missing_destination() -> DownloadJob {
+        let mut job = DownloadJob::new(
+            1,
+            PlaybackTrack {
+                downloadable: true,
+                progressive: false,
+                provider: PlaybackProvider::SoundCloud,
+                id: "1".into(),
+                title: "Song".into(),
+                artist: "Artist".into(),
+                album: String::new(),
+                album_id: String::new(),
+                release_date: String::new(),
+                artists: Vec::new(),
+                artwork: String::new(),
+                duration: Duration::from_secs(10),
+                explicit: false,
+                service_url: String::new(),
+            },
+            DownloadVariant::Standard,
+        );
+        job.quality = Some(ResolvedQuality {
+            format: "MP3".into(),
+            source_size: Some(80_000),
+            declared_bitrate: None,
+        });
+        job.status = DownloadStatus::Completed("Z:/missing/destination/song.mp3".into());
+        job
+    }
+
+    #[test]
+    fn quality_label_uses_the_cached_file_stat_instead_of_the_filesystem() {
+        let mut job = quality_job_with_missing_destination();
+        // The destination does not exist, so a filesystem probe would
+        // report no size and fall back to the source hint.
+        job.file = Some(DownloadFileStat {
+            exists: true,
+            size: Some(160_000),
+            modified: None,
+        });
+        assert_eq!(super::quality_label(&job), "MP3 128kbps");
+
+        // Without a cached probe the label falls back to the source hint,
+        // still without touching the disk.
+        job.file = None;
+        assert_eq!(super::quality_label(&job), "MP3 64kbps");
+
+        // A probe that found no file yields no size either.
+        job.file = Some(DownloadFileStat::default());
+        assert_eq!(super::quality_label(&job), "MP3 64kbps");
+    }
 
     #[test]
     fn queued_download_progress_starts_at_zero() {

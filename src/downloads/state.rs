@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::playback::{DownloadVariant, PlaybackTrack};
 
@@ -14,6 +15,46 @@ pub(crate) enum DownloadStatus {
     Skipped(PathBuf),
     Failed(String),
     Cancelled,
+}
+
+/// Cached filesystem facts about a job destination. The model refreshes
+/// this snapshot on a background thread when a job reaches a
+/// file-backed status or when the downloads page asks for a refresh, so
+/// rendering never has to touch the disk.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DownloadFileStat {
+    pub(crate) exists: bool,
+    pub(crate) size: Option<u64>,
+    pub(crate) modified: Option<SystemTime>,
+}
+
+impl DownloadFileStat {
+    /// One blocking stat call, meant to run off the UI thread.
+    pub(crate) fn probe(path: &Path) -> Self {
+        match std::fs::metadata(path) {
+            Ok(metadata) => Self {
+                exists: true,
+                size: Some(metadata.len()),
+                modified: metadata.modified().ok(),
+            },
+            Err(_) => Self::default(),
+        }
+    }
+}
+
+/// The destination whose filesystem facts are rendered for a status, if
+/// the status is backed by a file at all.
+pub(crate) fn file_destination(status: &DownloadStatus) -> Option<&Path> {
+    match status {
+        DownloadStatus::Completed(path)
+        | DownloadStatus::Skipped(path)
+        | DownloadStatus::NeedsConfirmation { path } => Some(path),
+        DownloadStatus::Queued
+        | DownloadStatus::Resolving
+        | DownloadStatus::Downloading { .. }
+        | DownloadStatus::Failed(_)
+        | DownloadStatus::Cancelled => None,
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,6 +116,10 @@ pub(crate) struct DownloadJob {
     pub(crate) quality: Option<ResolvedQuality>,
     pub(crate) status: DownloadStatus,
     pub(crate) unread: bool,
+    /// Cached filesystem facts about the current destination, or `None`
+    /// while no probe has landed. Refreshed by the model; rendering reads
+    /// only this cache.
+    pub(crate) file: Option<DownloadFileStat>,
 }
 
 impl DownloadJob {
@@ -86,7 +131,17 @@ impl DownloadJob {
             quality: None,
             status: DownloadStatus::Queued,
             unread: false,
+            file: None,
         }
+    }
+
+    /// The probed size of the destination file, when a completed probe is
+    /// cached. Rendering uses this snapshot instead of the filesystem.
+    pub(crate) fn file_size(&self) -> Option<u64> {
+        self.file
+            .as_ref()
+            .filter(|stat| stat.exists)
+            .and_then(|stat| stat.size)
     }
 
     #[cfg(test)]
