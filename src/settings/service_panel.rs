@@ -326,27 +326,6 @@ impl SettingsView {
                                 ),
                         )
                     })
-                    .when(service == Service::SoundCloud, |this| {
-                        this.child(
-                            provider_preference_row(
-                                format!("{service_key}-search-suggestions"),
-                                suggestions_title,
-                                suggestions_description,
-                                search_suggestions,
-                                cx.listener(move |this, checked: &bool, _, cx| {
-                                    this.update_draft_and_persist(
-                                        |draft| {
-                                            draft.soundcloud_search_suggestions = *checked
-                                        },
-                                        cx,
-                                    );
-                                }),
-                            )
-                            .pt(px(10.))
-                            .border_t_1()
-                            .border_color(rgba(0xffffff12)),
-                        )
-                    })
                     .when(!signed_in, |this| {
                         this.child(
                             div()
@@ -385,6 +364,27 @@ impl SettingsView {
                                         }),
                                     ),
                                 ),
+                        )
+                    })
+                    .when(service == Service::SoundCloud, |this| {
+                        this.child(
+                            provider_preference_row(
+                                format!("{service_key}-search-suggestions"),
+                                suggestions_title,
+                                suggestions_description,
+                                search_suggestions,
+                                cx.listener(move |this, checked: &bool, _, cx| {
+                                    this.update_draft_and_persist(
+                                        |draft| {
+                                            draft.soundcloud_search_suggestions = *checked
+                                        },
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .pt(px(10.))
+                            .border_t_1()
+                            .border_color(rgba(0xffffff12)),
                         )
                     })
                     .when(signed_in && identity_loading, |this| {
