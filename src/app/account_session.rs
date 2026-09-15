@@ -201,11 +201,12 @@ impl SessionStore {
         // Consume it before deletion so a migrated Deezer session keeps its
         // sid, but only when a Deezer ARL already exists: a stray sid file
         // must never fabricate a signed-in Deezer account.
-        if session.deezer_cookies.is_none() && !session.deezer.trim().is_empty() {
-            if let Some(sid) = read_legacy_deezer_sid(directory, legacy_directory)? {
-                session.deezer_cookies = Some(sid);
-                write_session_pair(&primary_path, &backup_path, &session)?;
-            }
+        if session.deezer_cookies.is_none()
+            && !session.deezer.trim().is_empty()
+            && let Some(sid) = read_legacy_deezer_sid(directory, legacy_directory)?
+        {
+            session.deezer_cookies = Some(sid);
+            write_session_pair(&primary_path, &backup_path, &session)?;
         }
 
         remove_legacy_files(directory, legacy_directory)?;

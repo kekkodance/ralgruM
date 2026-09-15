@@ -14,10 +14,6 @@ use crate::{
 pub(crate) struct MurglarClient;
 
 impl MurglarClient {
-    pub(crate) fn new(_identity: DeviceIdentity) -> Result<Self, AccountError> {
-        Ok(Self)
-    }
-
     pub(crate) fn with_client(_client: Client, _identity: DeviceIdentity) -> Self {
         Self
     }
@@ -108,8 +104,7 @@ impl std::error::Error for DeviceIdentityError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DeviceIdentityStatus {
-    ReadyExisting(DeviceIdentity),
-    ReadyCreated(DeviceIdentity),
+    Ready(Box<DeviceIdentity>),
     Error(DeviceIdentityError),
 }
 

@@ -166,18 +166,6 @@ pub(crate) fn artwork_reveal(
 }
 
 impl ArtworkReveal {
-    /// Set how the revealed image fits its bounds.
-    pub(crate) fn object_fit(mut self, object_fit: gpui::ObjectFit) -> Self {
-        self.object_fit = match object_fit {
-            gpui::ObjectFit::Fill => || gpui::ObjectFit::Fill,
-            gpui::ObjectFit::Contain => || gpui::ObjectFit::Contain,
-            gpui::ObjectFit::ScaleDown => || gpui::ObjectFit::ScaleDown,
-            gpui::ObjectFit::None => || gpui::ObjectFit::None,
-            gpui::ObjectFit::Cover => || gpui::ObjectFit::Cover,
-        };
-        self
-    }
-
     fn sample_ready(&self, cx: &App) -> bool {
         let Some(resource) = &self.resource else {
             return true;

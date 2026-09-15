@@ -263,7 +263,10 @@ fn apply_timeline_suffix_progress(state: &mut PlaybackState, suffix: &TimelineSu
     let fraction = (suffix.written as f32 / suffix.total as f32).clamp(0.0, 1.0);
     let remaining = state.duration.saturating_sub(suffix.base);
     let buffered = suffix.base + remaining.mul_f32(fraction);
-    if buffered <= state.buffered {
+    // A pending suffix replaces the buffer that drives playback, so its
+    // frontier may legitimately move backward after a backward seek. Once
+    // landed, keep normal progress monotonic across front and suffix updates.
+    if !suffix.pending && buffered <= state.buffered {
         return false;
     }
     let previous = state.buffered;

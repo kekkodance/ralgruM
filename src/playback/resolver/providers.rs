@@ -357,9 +357,21 @@ impl StreamResolver {
             exact_quality,
             include_remote_size,
         );
-        self.media_backend
+        let outcome = self
+            .media_backend
             .resolve(request, credentials, cancellation)
-            .await
+            .await;
+        if let MediaResolveOutcome::FallbackToDirect(reason) = &outcome {
+            let provider = match provider {
+                BackendProvider::Deezer => "deezer",
+                BackendProvider::SoundCloud => "soundcloud",
+            };
+            crate::diagnostics::event(
+                "WARN",
+                format!("{provider} source fallback=direct reason={reason}"),
+            );
+        }
+        outcome
     }
 
     pub(super) async fn resolve_deezer_backend_fallback_id(

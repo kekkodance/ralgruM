@@ -343,6 +343,7 @@ fn cache_key(source: &ResolvedSource) -> Option<String> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceVariant {
     Deezer,
+    #[cfg(test)]
     BackendDeezer,
     SoundCloudOriginal,
     BackendSoundCloud,
@@ -353,6 +354,7 @@ impl SourceVariant {
     const fn label(self) -> &'static str {
         match self {
             Self::Deezer => "deezer",
+            #[cfg(test)]
             Self::BackendDeezer => "murglar",
             Self::SoundCloudOriginal => "original",
             Self::BackendSoundCloud => "murglar",

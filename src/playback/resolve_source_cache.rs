@@ -48,6 +48,7 @@ pub(crate) struct SourceResolveFlight<T: Clone> {
 struct SourceResolveFlightState<T: Clone> {
     result: Option<Result<T, String>>,
     waiters: usize,
+    retired: bool,
 }
 
 impl<T: Clone> SourceResolveFlights<T> {
@@ -70,12 +71,19 @@ impl<T: Clone> SourceResolveFlights<T> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(flight) = entries.get(&key) {
-            if !flight.worker_cancellation.is_cancelled() {
-                flight
+            let joined = {
+                let mut state = flight
                     .state
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .waiters += 1;
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if state.retired || flight.worker_cancellation.is_cancelled() {
+                    false
+                } else {
+                    state.waiters += 1;
+                    true
+                }
+            };
+            if joined {
                 flight.promote(interactive);
                 return (flight.clone(), false);
             }
@@ -85,6 +93,7 @@ impl<T: Clone> SourceResolveFlights<T> {
             state: Mutex::new(SourceResolveFlightState {
                 result: None,
                 waiters: 1,
+                retired: false,
             }),
             completed: Notify::new(),
             worker_cancellation: CancellationToken::new(),
@@ -193,6 +202,20 @@ impl<T: Clone> SourceResolveFlight<T> {
             self.priority_changed.notify_waiters();
         }
     }
+
+    fn release_waiter(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.waiters = state.waiters.saturating_sub(1);
+        if state.waiters == 0 && state.result.is_none() && !state.retired {
+            state.retired = true;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 struct SourceResolveWaiter<'a, T: Clone> {
@@ -201,16 +224,7 @@ struct SourceResolveWaiter<'a, T: Clone> {
 
 impl<T: Clone> Drop for SourceResolveWaiter<'_, T> {
     fn drop(&mut self) {
-        let cancel_worker = {
-            let mut state = self
-                .flight
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.waiters = state.waiters.saturating_sub(1);
-            state.waiters == 0 && state.result.is_none()
-        };
-        if cancel_worker {
+        if self.flight.release_waiter() {
             self.flight.worker_cancellation.cancel();
         }
     }
@@ -615,6 +629,23 @@ mod tests {
         assert!(!Arc::ptr_eq(&old, &current));
         assert!(!current.cancellation().is_cancelled());
         assert!(current.is_interactive());
+    }
+
+    #[test]
+    fn retiring_a_last_waiter_cannot_accept_a_racing_join() {
+        let flights = SourceResolveFlights::<TestSource>::new();
+        let (old, starts_work) = flights.begin("track".into(), false);
+        assert!(starts_work);
+
+        // `release_waiter` publishes retirement while holding the same state
+        // lock used by `begin`. Even before token cancellation is published,
+        // a racing caller must replace this flight instead of joining it.
+        assert!(old.release_waiter());
+        assert!(!old.cancellation().is_cancelled());
+
+        let (current, starts_work) = flights.begin("track".into(), true);
+        assert!(starts_work);
+        assert!(!Arc::ptr_eq(&old, &current));
     }
 
     #[tokio::test]

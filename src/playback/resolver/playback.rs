@@ -154,7 +154,7 @@ impl StreamResolver {
                     // for the provider budget. Recheck before any network IO.
                     if !refresh
                         && let Some(source) = resolver.resolved_source_cache.get(&key)
-                        && (!backend.is_some() || source.uses_backend())
+                        && (backend.is_none() || source.uses_backend())
                     {
                         return Ok(source);
                     }

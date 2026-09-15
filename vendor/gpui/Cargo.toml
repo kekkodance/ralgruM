@@ -296,6 +296,9 @@ path = "examples/mouse_pressure.rs"
 name = "a11y"
 path = "examples/a11y.rs"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rust_analyzer)'] }
+
 [[example]]
 name = "view_example"
 path = "examples/view_example/view_example_main.rs"

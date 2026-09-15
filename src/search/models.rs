@@ -685,10 +685,9 @@ impl SearchState {
     fn cache_insert(&mut self, key: SearchCacheKey, snapshot: SearchCacheSnapshot) {
         if !self.result_cache.contains_key(&key)
             && self.result_cache.len() >= SEARCH_RESULT_CACHE_LIMIT
+            && let Some(oldest) = self.result_cache_order.pop_front()
         {
-            if let Some(oldest) = self.result_cache_order.pop_front() {
-                self.result_cache.remove(&oldest);
-            }
+            self.result_cache.remove(&oldest);
         }
         self.result_cache.insert(key.clone(), snapshot);
         self.touch_cache_key(&key);

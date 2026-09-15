@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 fn identity() -> DeviceIdentityStatus {
-    DeviceIdentityStatus::ReadyExisting(crate::murglar_backend::test_device_identity())
+    DeviceIdentityStatus::Ready(Box::new(crate::murglar_backend::test_device_identity()))
 }
 
 fn profile() -> AccountProfile {

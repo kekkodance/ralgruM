@@ -1,0 +1,4 @@
+# GPUI composition and callback functions routinely carry the view entity,
+# window, application context, and immutable render inputs. Keep the lint
+# useful for unusually broad APIs without flagging those framework adapters.
+too-many-arguments-threshold = 14

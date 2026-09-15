@@ -245,6 +245,3 @@ fn secondary_dialog_button(
 ) -> impl IntoElement {
     secondary_dialog_button_with_disabled(id, None, label, disabled, handler)
 }
-
-#[cfg(test)]
-mod tests {}

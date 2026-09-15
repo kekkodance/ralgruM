@@ -18,6 +18,7 @@ use gpui::{
 use reqwest::Client;
 use sha2::{Digest, Sha256};
 use tokio::{runtime::Runtime, sync::Semaphore, task::AbortHandle};
+use tokio_util::sync::CancellationToken;
 
 const ARTWORK_CACHE_DIR: &str = "artwork-v1";
 const ARTWORK_CACHE_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
@@ -40,6 +41,7 @@ pub(crate) struct ArtworkCache {
     client: Client,
     download_gate: Arc<Semaphore>,
     items: HashMap<Resource, ImageCacheItem>,
+    loading_cancellations: HashMap<Resource, CancellationToken>,
     access_order: LruOrder<Resource>,
 }
 
@@ -52,6 +54,7 @@ impl ArtworkCache {
             client,
             download_gate: Arc::new(Semaphore::new(ARTWORK_DOWNLOAD_LIMIT)),
             items: HashMap::new(),
+            loading_cancellations: HashMap::new(),
             access_order: LruOrder::default(),
         }
     }
@@ -81,6 +84,9 @@ impl ArtworkCache {
     }
 
     fn release(&mut self, cx: &mut App) {
+        for (_, cancellation) in self.loading_cancellations.drain() {
+            cancellation.cancel();
+        }
         for (_, mut item) in self.items.drain() {
             if let Some(Ok(image)) = item.get() {
                 cx.drop_image(image, None);
@@ -97,16 +103,21 @@ impl ArtworkCache {
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         let loader = AssetLogger::<ImageAssetLoader>::load(source.clone(), cx);
         let task = cx.background_executor().spawn(loader).shared();
-        self.insert_loading(source.clone(), task, window, cx)
+        self.insert_loading(source.clone(), task, None, window, cx)
     }
 
     fn insert_loading(
         &mut self,
         source: Resource,
         task: ImageLoadingTask,
+        cancellation: Option<CancellationToken>,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        if let Some(cancellation) = cancellation {
+            self.loading_cancellations
+                .insert(source.clone(), cancellation);
+        }
         self.items
             .insert(source.clone(), ImageCacheItem::Loading(task.clone()));
         self.access_order.touch(&source);
@@ -143,12 +154,16 @@ impl ArtworkCache {
         window: &mut Window,
         cx: &mut App,
     ) {
-        // Dropping a loading entry cancels its Tokio request through
-        // AbortOnDrop. This keeps both the cache and queued work bounded.
+        // Evicting a loading URI publishes cancellation explicitly. The
+        // detached repaint waiter retains a shared future clone, so dropping
+        // the cache item alone would not stop queued or active network work.
         while self.items.len() > ARTWORK_MEMORY_CACHE_LIMIT {
             let Some(victim) = self.access_order.pop_oldest_except(protected) else {
                 break;
             };
+            if let Some(cancellation) = self.loading_cancellations.remove(&victim) {
+                cancellation.cancel();
+            }
             if let Some(mut item) = self.items.remove(&victim)
                 && let Some(Ok(image)) = item.get()
             {
@@ -175,6 +190,8 @@ impl ArtworkCache {
         let probe_path = cache_path.clone();
         let decode_path = cache_path.clone();
         let svg_renderer = cx.svg_renderer();
+        let cancellation = CancellationToken::new();
+        let download_cancellation = cancellation.clone();
         let future = async move {
             let cached = runtime
                 .spawn_blocking(move || disk_cache_candidate(&probe_path))
@@ -193,7 +210,14 @@ impl ArtworkCache {
                 }
             }
 
-            let bytes = download_artwork(runtime.clone(), client, download_gate, url).await?;
+            let bytes = download_artwork(
+                runtime.clone(),
+                client,
+                download_gate,
+                url,
+                download_cancellation,
+            )
+            .await?;
             let image = decode_artwork(runtime.clone(), svg_renderer, bytes.clone()).await?;
 
             // Persistence is deliberately detached from the render path. The
@@ -208,7 +232,7 @@ impl ArtworkCache {
         }
         .boxed();
         let task = cx.background_executor().spawn(future).shared();
-        self.insert_loading(source.clone(), task, window, cx)
+        self.insert_loading(source.clone(), task, Some(cancellation), window, cx)
     }
 }
 
@@ -221,6 +245,9 @@ impl ImageCache for ArtworkCache {
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         if let Some(item) = self.items.get_mut(source) {
             let result = item.get();
+            if result.is_some() {
+                self.loading_cancellations.remove(source);
+            }
             self.access_order.touch(source);
             self.trim_memory_cache(Some(source), window, cx);
             return result;
@@ -342,6 +369,7 @@ async fn download_artwork(
     client: Client,
     download_gate: Arc<Semaphore>,
     url: String,
+    cancellation: CancellationToken,
 ) -> Result<Vec<u8>, ImageCacheError> {
     let task = runtime.spawn(async move {
         let _permit = download_gate
@@ -374,9 +402,13 @@ async fn download_artwork(
         Ok(bytes)
     });
     let _abort_on_drop = AbortOnDrop(task.abort_handle());
-    task.await
-        .map_err(|_| image_error("artwork download stopped unexpectedly"))?
-        .map_err(image_error)
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(image_error("artwork download cancelled")),
+        result = task => result
+            .map_err(|_| image_error("artwork download stopped unexpectedly"))?
+            .map_err(image_error),
+    }
 }
 
 /// Tokio detaches a spawned task when its JoinHandle is dropped. Tie the
@@ -736,10 +768,38 @@ mod tests {
         let download_gate = Arc::new(Semaphore::new(ARTWORK_DOWNLOAD_LIMIT));
 
         let downloaded = futures::executor::block_on(async move {
-            download_artwork(runtime, client, download_gate, url).await
+            download_artwork(
+                runtime,
+                client,
+                download_gate,
+                url,
+                CancellationToken::new(),
+            )
+            .await
         });
 
         server.join().unwrap();
         assert_eq!(downloaded.unwrap(), png);
+    }
+
+    #[test]
+    fn artwork_download_cancellation_stops_a_queued_request() {
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let client = Client::new();
+        let download_gate = Arc::new(Semaphore::new(0));
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let started = std::time::Instant::now();
+        let result = futures::executor::block_on(download_artwork(
+            runtime,
+            client,
+            download_gate,
+            "http://127.0.0.1:9/never-started".into(),
+            cancellation,
+        ));
+
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

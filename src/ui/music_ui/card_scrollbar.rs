@@ -389,18 +389,20 @@ pub(crate) fn card_scrollbar(
             // until the unit hides. States the paint has not driven yet
             // skip this: skeleton carousels rebuild their state every
             // render, and a settle must not arm an endless wakeup cycle.
-            if was_initialized && !hovered && !dragging {
-                if let Some(elapsed) = fade.idle_for(now) {
-                    if elapsed < CARD_SCROLLBAR_FADE_OUT_DELAY {
-                        schedule_scrollbar_fade_wakeup(
-                            &show_state,
-                            CARD_SCROLLBAR_FADE_OUT_DELAY - elapsed,
-                            window,
-                            cx,
-                        );
-                    } else if opacity > 0. {
-                        window.request_animation_frame();
-                    }
+            if was_initialized
+                && !hovered
+                && !dragging
+                && let Some(elapsed) = fade.idle_for(now)
+            {
+                if elapsed < CARD_SCROLLBAR_FADE_OUT_DELAY {
+                    schedule_scrollbar_fade_wakeup(
+                        &show_state,
+                        CARD_SCROLLBAR_FADE_OUT_DELAY - elapsed,
+                        window,
+                        cx,
+                    );
+                } else if opacity > 0. {
+                    window.request_animation_frame();
                 }
             }
             if animating || needs_render_sync {

@@ -211,6 +211,3 @@ fn card_heading(icon: LocalIcon, title: &'static str) -> Div {
         )
         .child(title)
 }
-
-#[cfg(test)]
-mod tests {}

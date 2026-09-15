@@ -210,8 +210,7 @@ impl AccountState {
         self.service_status = None;
         self.device_limit_exceeded = false;
         let identity = match &self.identity {
-            DeviceIdentityStatus::ReadyExisting(identity)
-            | DeviceIdentityStatus::ReadyCreated(identity) => identity.clone(),
+            DeviceIdentityStatus::Ready(identity) => identity.as_ref().clone(),
             DeviceIdentityStatus::Error(_) => return None,
         };
         let token = self.token.clone()?;
@@ -240,8 +239,7 @@ impl AccountState {
                 .map(str::to_owned);
         }
         let identity = match &self.identity {
-            DeviceIdentityStatus::ReadyExisting(identity)
-            | DeviceIdentityStatus::ReadyCreated(identity) => identity.clone(),
+            DeviceIdentityStatus::Ready(identity) => identity.as_ref().clone(),
             DeviceIdentityStatus::Error(_) => return None,
         };
         let token = self.token.clone()?;
@@ -265,8 +263,7 @@ impl AccountState {
                 .map(str::to_owned);
         }
         let identity = match &self.identity {
-            DeviceIdentityStatus::ReadyExisting(identity)
-            | DeviceIdentityStatus::ReadyCreated(identity) => identity.clone(),
+            DeviceIdentityStatus::Ready(identity) => identity.as_ref().clone(),
             DeviceIdentityStatus::Error(_) => return None,
         };
         let token = self.token.clone()?;
@@ -309,8 +306,7 @@ impl AccountState {
             return None;
         }
         let identity = match &self.identity {
-            DeviceIdentityStatus::ReadyExisting(identity)
-            | DeviceIdentityStatus::ReadyCreated(identity) => identity.clone(),
+            DeviceIdentityStatus::Ready(identity) => identity.as_ref().clone(),
             DeviceIdentityStatus::Error(_) => return None,
         };
         self.generation = self.generation.wrapping_add(1);
@@ -909,8 +905,7 @@ impl AccountState {
 
     pub(crate) fn murglar_credentials(&self) -> Option<(DeviceIdentity, String)> {
         let identity = match &self.identity {
-            DeviceIdentityStatus::ReadyExisting(identity)
-            | DeviceIdentityStatus::ReadyCreated(identity) => identity.clone(),
+            DeviceIdentityStatus::Ready(identity) => identity.as_ref().clone(),
             DeviceIdentityStatus::Error(_) => return None,
         };
         let token = self

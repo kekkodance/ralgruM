@@ -198,14 +198,13 @@ pub(crate) fn album_route_for_track(
             if let (Some(id), Some(title)) = (
                 trimmed_non_empty(&[album_id]),
                 trimmed_non_empty(&[album_title]),
-            ) {
-                if title != "SoundCloud Upload" {
-                    return Some(MenuRoute {
-                        kind: MenuRouteKind::Album,
-                        id: id.to_owned(),
-                        title: title.to_owned(),
-                    });
-                }
+            ) && title != "SoundCloud Upload"
+            {
+                return Some(MenuRoute {
+                    kind: MenuRouteKind::Album,
+                    id: id.to_owned(),
+                    title: title.to_owned(),
+                });
             }
             let route = context?;
             if route.provider != Provider::SoundCloud || route.action != "albumTracks" {

@@ -383,6 +383,7 @@ impl PlaybackState {
             .is_some_and(|track| self.explicit_blocked(track))
     }
 
+    #[cfg(test)]
     pub(crate) fn current_id(&self) -> Option<&str> {
         self.current().map(|track| track.id.as_str())
     }

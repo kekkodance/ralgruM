@@ -308,6 +308,3 @@ impl Render for SettingsTransferDialog {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

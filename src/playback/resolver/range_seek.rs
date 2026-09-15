@@ -127,7 +127,7 @@ impl RangeTimelineSession {
 impl TimelineSeekSession for RangeTimelineSession {
     fn request(&self, position: Duration) -> Result<TimelineSeekRequest, String> {
         let seconds = self.duration.as_secs_f64();
-        if !(seconds > 0.0) {
+        if !seconds.is_finite() || seconds <= 0.0 {
             return Err("The track duration is unknown".into());
         }
         if self.total == 0 {
@@ -432,7 +432,7 @@ async fn flac_frame_near(
     cancellation: &CancellationToken,
 ) -> Result<FlacFrame, String> {
     let seconds = duration.as_secs_f64();
-    if !(seconds > 0.0) {
+    if !seconds.is_finite() || seconds <= 0.0 {
         return Err("The track duration is unknown".into());
     }
     let average_bytes_per_second = (total as f64 / seconds).max(1.0);
@@ -530,7 +530,7 @@ fn local_bytes_per_second(current: &FlacFrame, previous: Option<&FlacFrame>) -> 
 /// finds lands at or before the target.
 fn interpolated_offset(lower: &FlacFrame, upper: &FlacFrame, target: Duration) -> u64 {
     let span = upper.position.saturating_sub(lower.position).as_secs_f64();
-    if !(span > 0.0) {
+    if !span.is_finite() || span <= 0.0 {
         return lower.offset;
     }
     let aim = target.saturating_sub(FLAC_AIM_AHEAD);
@@ -871,7 +871,9 @@ mod tests {
         (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
     }
 
-    fn memory_fetch(bytes: Arc<Vec<u8>>) -> (RangeFetch, Arc<Mutex<Vec<(u64, u64)>>>) {
+    type RecordedRanges = Arc<Mutex<Vec<(u64, u64)>>>;
+
+    fn memory_fetch(bytes: Arc<Vec<u8>>) -> (RangeFetch, RecordedRanges) {
         let ranges = Arc::new(Mutex::new(Vec::new()));
         let recorded = ranges.clone();
         let fetch: RangeFetch = Arc::new(move |start, end, _cancellation| {
@@ -1688,7 +1690,7 @@ mod tests {
 
         // The front download keeps streaming behind the seek, but its next
         // chunk must park once the seek holds the gate.
-        let (front_parked_tx, mut front_parked_rx) = tokio::sync::oneshot::channel::<()>();
+        let (front_parked_tx, front_parked_rx) = tokio::sync::oneshot::channel::<()>();
         let (front_continue_tx, front_continue_rx) = tokio::sync::oneshot::channel::<()>();
         let mut front = tokio::spawn(async move {
             front_continue_rx.await.unwrap();

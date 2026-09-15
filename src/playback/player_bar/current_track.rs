@@ -378,10 +378,7 @@ pub(super) fn current_subtitle<'a>(
     }
 }
 
-pub(super) fn current_track_title<'a>(
-    track: Option<&'a PlaybackTrack>,
-    status: PlaybackStatus,
-) -> &'a str {
+pub(super) fn current_track_title(track: Option<&PlaybackTrack>, status: PlaybackStatus) -> &str {
     match (track, status) {
         (Some(track), _) => track.title.as_str(),
         // A pending source load has no track yet; say what is happening

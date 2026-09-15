@@ -54,4 +54,4 @@ jobs:
         run: cargo test --locked --all-targets
 
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets --no-deps -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
+        run: cargo clippy --locked --all-targets --no-deps -- -D warnings

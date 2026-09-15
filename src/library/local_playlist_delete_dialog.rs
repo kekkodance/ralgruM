@@ -227,6 +227,3 @@ impl Render for LocalPlaylistDeleteDialog {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

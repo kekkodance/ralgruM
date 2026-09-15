@@ -149,6 +149,3 @@ fn local_playlist_toast(title: &str, message: &str, cx: &mut Context<LibraryView
         Some(message.to_owned().into()),
     );
 }
-
-#[cfg(test)]
-mod tests {}

@@ -71,7 +71,6 @@ impl PassStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AccountError {
-    ClientUnavailable,
     IdentityUnavailable,
     TokenRequired,
     UserAlreadyExists,
@@ -101,6 +100,7 @@ pub(crate) enum AccountError {
 }
 
 impl AccountError {
+    #[cfg(test)]
     pub(crate) fn describe_validation_errors(&self) -> Option<String> {
         let Self::ValidationFailed(Some(errors)) = self else {
             return None;
@@ -118,7 +118,6 @@ impl AccountError {
 impl fmt::Display for AccountError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::ClientUnavailable => "The Murglar client could not be initialized.",
             Self::IdentityUnavailable => "The saved account identity could not be prepared.",
             Self::TokenRequired => "A Murglar login token is required.",
             Self::UserAlreadyExists => "A Murglar account with this email already exists.",

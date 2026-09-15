@@ -169,6 +169,3 @@ impl Render for LogoutAllDialog {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}
