@@ -468,6 +468,10 @@ impl SettingsView {
             cx.notify();
         });
         self.select_category(initial_category, window, cx);
+        // The session start cleared the account extras, so prefetch the
+        // Murglar profile, referral, and plans now instead of waiting for
+        // the Murglar category to be opened.
+        self.open_murglar_profile(cx);
         cx.notify();
         diagnostics::event("INFO", "settings session ready");
     }
