@@ -19,9 +19,9 @@ mod platform {
     use std::{
         collections::HashMap,
         num::NonZeroIsize,
-        path::PathBuf,
+        path::{Path, PathBuf},
         sync::{Mutex, OnceLock, mpsc},
-        time::{Duration, Instant},
+        time::{Duration, Instant, SystemTime},
     };
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -229,9 +229,7 @@ mod platform {
         .map_err(|error| format!("Could not create the sign-in window: {error}"))?;
         crate::windows_chrome::apply_app_window_chrome(hwnd);
         let mut window = NativeWindow(hwnd);
-        let data_dir = tempfile::Builder::new()
-            .prefix("ralgrum-auth-")
-            .tempdir()
+        let data_dir = open_auth_profile()
             .map_err(|error| format!("Could not create the private browser profile: {error}"))?;
         let profile_path = data_dir.path().to_owned();
         let mut context = WebContext::new(Some(profile_path.clone()));
@@ -400,6 +398,13 @@ mod platform {
 
     const PROFILE_CLEANUP_RETRIES: usize = 60;
     const PROFILE_CLEANUP_DELAY: Duration = Duration::from_millis(100);
+    const AUTH_PROFILE_PREFIX: &str = "ralgrum-auth-";
+    const AUTH_PROFILE_ROOT_DIR_NAME: &str = "auth-profiles";
+    // A crashed sign-in cannot run its scheduled cleanup, so the sweep on the
+    // next sign-in removes the abandoned profiles instead. The threshold
+    // dwarfs the sign-in timeout and cleanup retries, which keeps a live
+    // sign-in in another process out of the sweep's reach.
+    const AUTH_PROFILE_SWEEP_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
     fn schedule_profile_cleanup(profile_path: PathBuf) {
         let fallback_path = profile_path.clone();
@@ -424,6 +429,67 @@ mod platform {
                     std::thread::sleep(PROFILE_CLEANUP_DELAY);
                 }
                 Err(_) => return,
+            }
+        }
+    }
+
+    /// Creates the sign-in browser profile under the app-owned cache root.
+    fn open_auth_profile() -> Result<tempfile::TempDir, std::io::Error> {
+        open_auth_profile_in(
+            &auth_profile_root(),
+            &std::env::temp_dir(),
+            SystemTime::now(),
+        )
+    }
+
+    fn auth_profile_root() -> PathBuf {
+        crate::paths::cache_dir().join(AUTH_PROFILE_ROOT_DIR_NAME)
+    }
+
+    /// Creates a uniquely named profile directory under `root`, sweeping
+    /// `root` and `legacy_root` first so profiles abandoned by crashed
+    /// sign-ins do not outlive the next sign-in attempt.
+    fn open_auth_profile_in(
+        root: &Path,
+        legacy_root: &Path,
+        now: SystemTime,
+    ) -> Result<tempfile::TempDir, std::io::Error> {
+        sweep_stale_auth_profiles(legacy_root, now);
+        std::fs::create_dir_all(root)?;
+        sweep_stale_auth_profiles(root, now);
+        tempfile::Builder::new()
+            .prefix(AUTH_PROFILE_PREFIX)
+            .tempdir_in(root)
+    }
+
+    /// Best-effort removal of sign-in profiles under `root` that have been
+    /// untouched for AUTH_PROFILE_SWEEP_AGE as of `now`. Only directories
+    /// carrying the profile prefix are removed, so unrelated entries and live
+    /// sign-ins in other processes always survive.
+    fn sweep_stale_auth_profiles(root: &Path, now: SystemTime) {
+        // The sweep is a crash backstop, so an unreadable or missing root
+        // simply ends it without failing the sign-in.
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(AUTH_PROFILE_PREFIX)
+            {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .ok()
+                .filter(|metadata| metadata.is_dir())
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age >= AUTH_PROFILE_SWEEP_AGE);
+            if stale {
+                // A locked entry is retried by the next sign-in's sweep.
+                let _ = std::fs::remove_dir_all(entry.path());
             }
         }
     }
@@ -598,6 +664,81 @@ mod platform {
             assert_eq!(history_played_at(&history, 42), Some(1_700_000_123));
             assert_eq!(history_played_at(&history, 99), None);
             assert_eq!(history_played_at(&serde_json::json!({}), 42), None);
+        }
+
+        fn abandoned_profile(root: &Path, name: &str) -> PathBuf {
+            let path = root.join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            // Profiles hold authentication state, so each fixture carries a
+            // marker file the sweep must remove with the directory.
+            std::fs::write(path.join("Cookies"), b"auth-state").unwrap();
+            path
+        }
+
+        #[test]
+        fn profile_creation_places_new_profiles_in_the_app_owned_root() {
+            let root = tempfile::tempdir().unwrap();
+            let legacy = tempfile::tempdir().unwrap();
+            let fresh_root_profile = abandoned_profile(root.path(), "ralgrum-auth-fresh");
+            let fresh_legacy_profile =
+                abandoned_profile(legacy.path(), "ralgrum-auth-legacy-fresh");
+            let unrelated_dir = abandoned_profile(legacy.path(), "unrelated-dir");
+            let prefix_named_file = legacy.path().join("ralgrum-auth-not-a-directory.txt");
+            std::fs::write(&prefix_named_file, b"not a profile").unwrap();
+            let now = SystemTime::now();
+
+            let profile = open_auth_profile_in(root.path(), legacy.path(), now).unwrap();
+
+            assert!(profile.path().starts_with(root.path()));
+            let profile_name = profile.path().file_name().unwrap().to_string_lossy();
+            assert!(profile_name.starts_with(AUTH_PROFILE_PREFIX));
+            assert!(profile.path().is_dir());
+            // Profiles from a live or just finished sign-in, plus unrelated
+            // entries, must survive the creation-time sweep.
+            assert!(fresh_root_profile.is_dir());
+            assert!(fresh_legacy_profile.is_dir());
+            assert!(unrelated_dir.is_dir());
+            assert!(prefix_named_file.is_file());
+        }
+
+        #[test]
+        fn sweep_removes_crashed_profiles_and_keeps_unrelated_entries() {
+            let root = tempfile::tempdir().unwrap();
+            let legacy = tempfile::tempdir().unwrap();
+            let crashed_in_root = abandoned_profile(root.path(), "ralgrum-auth-crash");
+            let crashed_in_legacy =
+                abandoned_profile(legacy.path(), "ralgrum-auth-old-crash-in-temp");
+            let unrelated_dir = abandoned_profile(legacy.path(), "unrelated-dir");
+            let prefix_named_file = legacy.path().join("ralgrum-auth-not-a-directory.txt");
+            std::fs::write(&prefix_named_file, b"not a profile").unwrap();
+            let now = SystemTime::now();
+
+            // A sign-in right after the crash keeps the abandoned profiles
+            // because they are too recent for the sweep threshold.
+            open_auth_profile_in(root.path(), legacy.path(), now).unwrap();
+            assert!(crashed_in_root.is_dir());
+            assert!(crashed_in_legacy.is_dir());
+
+            // The next day's sign-in sweeps both the app root and the legacy
+            // system temp location while unrelated entries survive.
+            let next_day = now + AUTH_PROFILE_SWEEP_AGE;
+            let profile = open_auth_profile_in(root.path(), legacy.path(), next_day).unwrap();
+            assert!(profile.path().starts_with(root.path()));
+            assert!(!crashed_in_root.exists());
+            assert!(!crashed_in_legacy.exists());
+            assert!(unrelated_dir.is_dir());
+            assert!(prefix_named_file.is_file());
+        }
+
+        #[test]
+        fn profile_creation_tolerates_a_missing_legacy_location() {
+            let root = tempfile::tempdir().unwrap();
+            let missing_legacy = root.path().join("missing-temp-location");
+            let now = SystemTime::now();
+
+            let profile = open_auth_profile_in(root.path(), &missing_legacy, now).unwrap();
+
+            assert!(profile.path().starts_with(root.path()));
         }
     }
 }
