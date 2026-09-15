@@ -35,8 +35,7 @@ pub(crate) async fn load(
     if !response.status().is_success() {
         return Err(format!("SoundCloud returned {}", response.status()));
     }
-    let value = response
-        .json::<Value>()
+    let value = crate::provider_response::json::<Value>(response)
         .await
         .map_err(|_| "SoundCloud returned an invalid Discover response".to_owned())?;
     parse_home(&value)

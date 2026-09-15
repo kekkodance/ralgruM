@@ -559,8 +559,7 @@ async fn response_json(response: Response, stage: &'static str) -> Result<Value,
         );
         return Err(provider_rejection(stage, status));
     }
-    response
-        .json()
+    crate::provider_response::json(response)
         .await
         .map_err(|_| format!("The {stage} provider returned an invalid playback response"))
 }

@@ -140,8 +140,7 @@ impl SearchClient {
                 response.status()
             )));
         }
-        let value: Value = response
-            .json()
+        let value: Value = crate::provider_response::json(response)
             .await
             .map_err(|_| ProviderError::new("SoundCloud returned an invalid response"))?;
         // Shorts arrive with a placeholder kind, so it is read back from the

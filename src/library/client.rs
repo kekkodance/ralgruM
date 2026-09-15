@@ -423,8 +423,7 @@ impl LibraryClient {
                 status.is_server_error(),
             ));
         }
-        let envelope = response
-            .json()
+        let envelope = crate::provider_response::json(response)
             .await
             .map_err(|_| ("Deezer returned an invalid response".into(), false))?;
         let results =
@@ -1360,8 +1359,7 @@ async fn decode(response: Response) -> Result<Value, String> {
     if !response.status().is_success() {
         return Err(format!("Deezer returned {}", response.status()));
     }
-    response
-        .json()
+    crate::provider_response::json(response)
         .await
         .map_err(|_| "Deezer returned an invalid response".into())
 }

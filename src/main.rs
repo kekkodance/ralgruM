@@ -11,6 +11,7 @@ mod lyrics;
 mod murglar_backend;
 mod platform;
 mod playback;
+mod provider_response;
 mod search;
 mod settings;
 mod shell;

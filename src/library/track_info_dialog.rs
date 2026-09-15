@@ -480,7 +480,9 @@ async fn fetch_soundcloud_track_info(
     if !response.status().is_success() {
         return Err("soundcloud-track-status");
     }
-    let track: Value = response.json().await.map_err(|_| "soundcloud-track-body")?;
+    let track: Value = crate::provider_response::json(response)
+        .await
+        .map_err(|_| "soundcloud-track-body")?;
     Ok(parse_soundcloud_track_info(&track))
 }
 
@@ -492,33 +494,33 @@ async fn fetch_deezer_track_info(
         .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
         .build()
         .map_err(|_| "http-client")?;
-    let track: Value = http
+    let track_response = http
         .get(format!("{REST_BASE}/track/{track_id}"))
         .send()
         .await
-        .map_err(|_| "rest-track")?
-        .json()
+        .map_err(|_| "rest-track")?;
+    let track: Value = crate::provider_response::json(track_response)
         .await
         .map_err(|_| "rest-track-body")?;
     if track.get("error").is_some() {
         return Err("rest-track-error");
     }
     let album_id = id_string(track.pointer("/album/id")).ok_or("missing-album-id")?;
-    let album: Option<Value> = http
+    let album_response = http
         .get(format!("{REST_BASE}/album/{album_id}"))
         .send()
         .await
-        .map_err(|_| "rest-album")?
-        .json()
+        .map_err(|_| "rest-album")?;
+    let album: Option<Value> = crate::provider_response::json(album_response)
         .await
         .ok()
         .filter(|album: &Value| album.get("error").is_none());
-    let album_tracks: Option<Value> = http
+    let album_tracks_response = http
         .get(format!("{REST_BASE}/album/{album_id}/tracks?limit=2000"))
         .send()
         .await
-        .map_err(|_| "rest-album-tracks")?
-        .json()
+        .map_err(|_| "rest-album-tracks")?;
+    let album_tracks: Option<Value> = crate::provider_response::json(album_tracks_response)
         .await
         .ok();
     let page = match deezer_arl {
@@ -558,8 +560,7 @@ async fn page_track(
         .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
         .collect::<Vec<_>>()
         .join("; ");
-    let session: Value = session_response
-        .json()
+    let session: Value = crate::provider_response::json(session_response)
         .await
         .map_err(|error| error.to_string())?;
     let check_form = session
@@ -576,7 +577,7 @@ async fn page_track(
             .map_err(|_| "Deezer returned an invalid session".to_owned())?;
         cookie.set_sensitive(true);
     }
-    let page: Value = http
+    let page_response = http
         .post(format!(
             "{GATEWAY_BASE}?method=deezer.pageTrack&input=3&api_version=1.0&api_token={check_form}"
         ))
@@ -585,8 +586,8 @@ async fn page_track(
         .json(&json!({"sng_id": track_id}))
         .send()
         .await
-        .map_err(|error| error.to_string())?
-        .json()
+        .map_err(|error| error.to_string())?;
+    let page: Value = crate::provider_response::json(page_response)
         .await
         .map_err(|error| error.to_string())?;
     page.pointer("/results/DATA")

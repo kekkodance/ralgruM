@@ -2218,3 +2218,44 @@ async fn cached_progressive_writes_report_small_ordered_chunks() {
         ]
     );
 }
+
+#[tokio::test]
+async fn oversized_provider_bodies_are_rejected_by_the_shared_playback_decoder() {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let advertised = crate::provider_response::MAX_PROVIDER_RESPONSE_BYTES as u64 + 1;
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !request.ends_with(b"\r\n\r\n") {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0, "playback fixture request was incomplete");
+            request.extend_from_slice(&buffer[..read]);
+        }
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {advertised}\r\nConnection: close\r\n\r\n"
+        );
+    });
+
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(&endpoint)
+        .send()
+        .await
+        .unwrap();
+    let error = response_json(response, "deezer.media")
+        .await
+        .expect_err("an oversized provider body must be rejected");
+    assert_eq!(
+        error,
+        "The deezer.media provider returned an invalid playback response"
+    );
+    server.join().unwrap();
+}

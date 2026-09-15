@@ -867,8 +867,7 @@ async fn decode(response: Response) -> Result<Value, String> {
             response.status().as_u16()
         ));
     }
-    response
-        .json()
+    crate::provider_response::json(response)
         .await
         .map_err(|_| "Deezer returned an invalid response".into())
 }

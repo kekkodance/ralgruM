@@ -73,8 +73,7 @@ impl PlaylistClient {
         if !status.is_success() {
             return Err(format!("Deezer returned HTTP status {}", status.as_u16()));
         }
-        let value: Value = response
-            .json()
+        let value: Value = crate::provider_response::json(response)
             .await
             .map_err(|_| "Deezer returned an invalid response".to_string())?;
         if let Some(error) = value.get("error")

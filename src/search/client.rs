@@ -131,8 +131,7 @@ impl SearchClient {
                 response.status()
             )));
         }
-        let value: Value = response
-            .json()
+        let value: Value = crate::provider_response::json(response)
             .await
             .map_err(|_| ProviderError::new("SoundCloud returned invalid suggestions"))?;
         parse_soundcloud_suggestions(&value)
@@ -266,8 +265,7 @@ impl SearchClient {
                 response.status()
             )));
         }
-        let value: Value = response
-            .json()
+        let value: Value = crate::provider_response::json(response)
             .await
             .map_err(|_| ProviderError::new("SoundCloud returned an invalid response"))?;
         value
@@ -430,8 +428,7 @@ pub(super) async fn deezer_json(response: Response) -> Result<Value, ProviderErr
             response.status()
         )));
     }
-    let value = response
-        .json()
+    let value = crate::provider_response::json(response)
         .await
         .map_err(|_| ProviderError::new("Deezer returned an invalid response"))?;
     validate_deezer_envelope(value)
@@ -777,5 +774,44 @@ mod tests {
             empty.request_cookie().unwrap().to_str().unwrap(),
             format!("arl={ANONYMOUS_DEEZER_ARL}")
         );
+    }
+
+    #[tokio::test]
+    async fn oversized_deezer_bodies_are_rejected_while_streaming() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.ends_with(b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).unwrap();
+                assert!(read > 0, "search fixture request was incomplete");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let body = vec![b'x'; crate::provider_response::MAX_PROVIDER_RESPONSE_BYTES + 1];
+            let _ = write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(&body);
+        });
+
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(&endpoint)
+            .send()
+            .await
+            .unwrap();
+        let error = deezer_json(response)
+            .await
+            .expect_err("an oversized Deezer body must be rejected");
+        assert_eq!(error.message, "Deezer returned an invalid response");
+        server.join().unwrap();
     }
 }

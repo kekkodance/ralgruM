@@ -1902,8 +1902,7 @@ async fn decode(response: Response) -> Result<Value, String> {
     if !response.status().is_success() {
         return Err(format!("SoundCloud returned {}", response.status()));
     }
-    response
-        .json()
+    crate::provider_response::json(response)
         .await
         .map_err(|_| "SoundCloud returned an invalid response".into())
 }

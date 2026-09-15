@@ -289,8 +289,7 @@ impl SearchClient {
         if !status.is_success() {
             return Err(ProviderError::new(format!("SoundCloud returned {status}")));
         }
-        let playlist: Value = response
-            .json()
+        let playlist: Value = crate::provider_response::json(response)
             .await
             .map_err(|_| ProviderError::new("SoundCloud returned an invalid response"))?;
         let embedded = playlist.get("tracks").and_then(Value::as_array);
@@ -377,9 +376,11 @@ impl SearchClient {
                         response.status()
                     )));
                 }
-                response.json::<Vec<Value>>().await.map_err(|_| {
-                    ProviderError::new("SoundCloud returned an invalid track response")
-                })
+                crate::provider_response::json::<Vec<Value>>(response)
+                    .await
+                    .map_err(|_| {
+                        ProviderError::new("SoundCloud returned an invalid track response")
+                    })
             }
         }))
         .buffered(SOUNDCLOUD_TRACK_HYDRATION_CONCURRENCY)
@@ -426,9 +427,11 @@ impl SearchClient {
                     response.status()
                 )));
             }
-            let page: Value = response.json().await.map_err(|_| {
-                ProviderError::new("SoundCloud returned an invalid playlist tracks response")
-            })?;
+            let page: Value = crate::provider_response::json(response)
+                .await
+                .map_err(|_| {
+                    ProviderError::new("SoundCloud returned an invalid playlist tracks response")
+                })?;
             let next = soundcloud_next_offset(&page, &expected_path)?;
             let collection = page
                 .get("collection")

@@ -106,14 +106,15 @@ impl LyricsClient {
     }
 
     async fn fetch_referent_json(&self, id: &str) -> Result<Value, String> {
-        self.http
+        let response = self
+            .http
             .get(format!("{GENIUS_URL}/referents/{id}"))
             .headers(headers())
             .query(&[("text_format", "plain")])
             .send()
             .await
-            .map_err(|error| lyrics_request_error("Genius", error))?
-            .json::<Value>()
+            .map_err(|error| lyrics_request_error("Genius", error))?;
+        crate::provider_response::json::<Value>(response)
             .await
             .map_err(|_| lyrics_json_error("Genius"))
     }
@@ -142,15 +143,15 @@ impl LyricsClient {
         if let Some(token) = self.cached_musixmatch_token() {
             return Ok(token);
         }
-        let value = self
+        let response = self
             .http
             .get(format!("{MUSIXMATCH_BASE}/token.get"))
             .headers(musixmatch_headers())
             .query(&[("format", "json"), ("app_id", MUSIXMATCH_APP_ID)])
             .send()
             .await
-            .map_err(|error| lyrics_request_error("Musixmatch", error))?
-            .json::<Value>()
+            .map_err(|error| lyrics_request_error("Musixmatch", error))?;
+        let value = crate::provider_response::json::<Value>(response)
             .await
             .map_err(|_| lyrics_json_error("Musixmatch"))?;
         let token = parse_musixmatch_token(&value)?;
@@ -159,7 +160,8 @@ impl LyricsClient {
     }
 
     async fn musixmatch_macro(&self, track: &LyricsTrack, token: &str) -> Result<Value, String> {
-        self.http
+        let response = self
+            .http
             .get(format!("{MUSIXMATCH_BASE}/macro.subtitles.get"))
             .headers(musixmatch_headers())
             .query(&[
@@ -181,8 +183,8 @@ impl LyricsClient {
             ])
             .send()
             .await
-            .map_err(|error| lyrics_request_error("Musixmatch", error))?
-            .json::<Value>()
+            .map_err(|error| lyrics_request_error("Musixmatch", error))?;
+        crate::provider_response::json::<Value>(response)
             .await
             .map_err(|_| lyrics_json_error("Musixmatch"))
     }
@@ -225,19 +227,21 @@ impl LyricsClient {
             return Err("Lyrics request cancelled".into());
         }
         let song_fut = async {
-            self.http
+            let response = self
+                .http
                 .get(format!("{GENIUS_URL}/songs/{id}"))
                 .headers(headers())
                 .query(&[("text_format", "plain")])
                 .send()
                 .await
-                .map_err(|error| lyrics_request_error("Genius", error))?
-                .json::<Value>()
+                .map_err(|error| lyrics_request_error("Genius", error))?;
+            crate::provider_response::json::<Value>(response)
                 .await
                 .map_err(|_| lyrics_json_error("Genius"))
         };
         let referents_fut = async {
-            self.http
+            let response = self
+                .http
                 .get(format!("{GENIUS_URL}/referents"))
                 .headers(headers())
                 .query(&[
@@ -247,8 +251,8 @@ impl LyricsClient {
                 ])
                 .send()
                 .await
-                .map_err(|error| lyrics_request_error("Genius", error))?
-                .json::<Value>()
+                .map_err(|error| lyrics_request_error("Genius", error))?;
+            crate::provider_response::json::<Value>(response)
                 .await
                 .map_err(|_| lyrics_json_error("Genius"))
         };
@@ -297,14 +301,15 @@ impl LyricsClient {
     }
 
     async fn genius_search(&self, query: &str) -> Result<Value, String> {
-        self.http
+        let response = self
+            .http
             .get(format!("{GENIUS_URL}/search/song"))
             .headers(headers())
             .query(&[("q", query)])
             .send()
             .await
-            .map_err(|error| lyrics_request_error("Genius", error))?
-            .json::<Value>()
+            .map_err(|error| lyrics_request_error("Genius", error))?;
+        crate::provider_response::json::<Value>(response)
             .await
             .map_err(|_| lyrics_json_error("Genius"))
     }

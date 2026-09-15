@@ -96,7 +96,7 @@ impl SearchClient {
                 response.status()
             )));
         }
-        response.json().await.map_err(|_| {
+        crate::provider_response::json(response).await.map_err(|_| {
             ProviderError::new("SoundCloud returned an invalid artist profile response")
         })
     }
@@ -218,11 +218,13 @@ impl SearchClient {
                     response.status()
                 )));
             }
-            let page: Value = response.json().await.map_err(|_| {
-                ProviderError::new(format!(
-                    "SoundCloud returned an invalid artist {context} response"
-                ))
-            })?;
+            let page: Value = crate::provider_response::json(response)
+                .await
+                .map_err(|_| {
+                    ProviderError::new(format!(
+                        "SoundCloud returned an invalid artist {context} response"
+                    ))
+                })?;
             let next = soundcloud_next_offset(&page, &expected_path, context)?;
             items.extend(
                 page.get("collection")
