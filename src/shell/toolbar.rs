@@ -40,6 +40,11 @@ const PLATFORM_SOURCE_RESERVE_FULL_WIDTH: f32 = 78.;
 const PLATFORM_SOURCE_RESERVE_COMPACT_WIDTH: f32 = 6.;
 const SEARCH_INPUT_ACTION_PADDING_PX: f32 = 44.;
 const SEARCH_INPUT_CLEAR_PADDING_PX: f32 = 72.;
+/// The text inset of the search field: its left padding, plus the 1px
+/// frame border the padded content box starts behind. The blurred hint
+/// overlay must sit exactly where the editor paints the focused native
+/// placeholder, or the hint visibly jumps when focus swaps the two.
+const SEARCH_INPUT_TEXT_INSET_PX: f32 = 36. + 1.;
 
 fn search_input_trailing_padding(clear_visible: bool) -> f32 {
     if clear_visible {
@@ -772,7 +777,7 @@ pub(super) fn render_top_toolbar(
         .id("music-search-placeholder")
         .absolute()
         .top(px(0.))
-        .left(px(36.))
+        .left(px(SEARCH_INPUT_TEXT_INSET_PX))
         .right(px(SEARCH_INPUT_ACTION_PADDING_PX))
         .h_full()
         .min_w_0()
