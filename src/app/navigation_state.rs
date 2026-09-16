@@ -426,21 +426,21 @@ impl SettingsStore {
                 if primary != backup {
                     atomic_write(&backup_path, &encode(&primary)?)?;
                 }
-                primary
+                *primary
             }
             (
                 StoredSettings::Valid(settings),
                 StoredSettings::Missing | StoredSettings::Invalid,
             ) => {
                 atomic_write(&backup_path, &encode(&settings)?)?;
-                settings
+                *settings
             }
             (
                 StoredSettings::Missing | StoredSettings::Invalid,
                 StoredSettings::Valid(settings),
             ) => {
                 atomic_write(&primary_path, &encode(&settings)?)?;
-                settings
+                *settings
             }
             (StoredSettings::Missing, StoredSettings::Missing) => {
                 let settings = read_legacy_preferences(&directory.join(LEGACY_PREFERENCES_FILE));
@@ -519,7 +519,7 @@ impl fmt::Display for SettingsError {
 
 enum StoredSettings {
     Missing,
-    Valid(AppSettings),
+    Valid(Box<AppSettings>),
     Invalid,
 }
 
@@ -529,7 +529,7 @@ fn read_settings(path: &Path) -> Result<StoredSettings, SettingsError> {
             Ok(mut settings) => {
                 settings.audio_cache_limit_mb =
                     normalize_audio_cache_limit_mb(settings.audio_cache_limit_mb);
-                StoredSettings::Valid(settings)
+                StoredSettings::Valid(Box::new(settings))
             }
             Err(_) => StoredSettings::Invalid,
         }),
@@ -650,8 +650,10 @@ mod tests {
 
     #[test]
     fn output_device_round_trips_and_old_settings_default_to_none() {
-        let mut settings = AppSettings::default();
-        settings.output_device = Some("Speakers (Realtek Audio)".into());
+        let settings = AppSettings {
+            output_device: Some("Speakers (Realtek Audio)".into()),
+            ..AppSettings::default()
+        };
         let encoded = serde_json::to_value(&settings).unwrap();
         assert_eq!(encoded["outputDevice"], "Speakers (Realtek Audio)");
         assert_eq!(
@@ -670,9 +672,11 @@ mod tests {
 
     #[test]
     fn asio_settings_round_trip_and_old_settings_default_to_off() {
-        let mut settings = AppSettings::default();
-        settings.asio_mode = true;
-        settings.asio_driver = Some("MiniFuse ASIO Driver".into());
+        let settings = AppSettings {
+            asio_mode: true,
+            asio_driver: Some("MiniFuse ASIO Driver".into()),
+            ..AppSettings::default()
+        };
         let encoded = serde_json::to_value(&settings).unwrap();
         assert_eq!(encoded["asioMode"], true);
         assert_eq!(encoded["asioDriver"], "MiniFuse ASIO Driver");

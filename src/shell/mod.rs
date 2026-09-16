@@ -22,8 +22,8 @@ use crate::{
     lyrics::{LyricsPanel, LyricsTrackInput},
     navigation_state::{RightSidebarView, StartPage},
     playback::{
-        ListenHistorySignal, PlaybackModel, PlaybackProvider, PlaybackView, PlayerBarMotion,
-        QueuePanel, RightSidebar,
+        AudioOutputSettings, ListenHistorySignal, PlaybackModel, PlaybackProvider, PlaybackView,
+        PlayerBarMotion, QueuePanel, RightSidebar,
     },
     search::{Provider, SearchView, Source},
     settings::{
@@ -661,9 +661,11 @@ impl RalgrumApp {
                 saved.discord_presence,
                 cache.clone(),
                 saved.background_audio_cache,
-                saved.output_device.clone(),
-                saved.asio_mode,
-                saved.asio_driver.clone(),
+                AudioOutputSettings {
+                    output_device: saved.output_device.clone(),
+                    asio_mode: saved.asio_mode,
+                    asio_driver: saved.asio_driver.clone(),
+                },
                 saved.seamless_playback,
                 saved.record_deezer_plays,
                 listen_history_changed.clone(),
@@ -778,7 +780,7 @@ impl RalgrumApp {
                     cx.notify();
                 }
                 SettingsEvent::Imported(settings) => {
-                    this.apply_imported_settings(settings.clone(), window, cx);
+                    this.apply_imported_settings((**settings).clone(), window, cx);
                 }
             },
         )

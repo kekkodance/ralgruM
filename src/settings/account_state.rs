@@ -257,7 +257,7 @@ impl SessionPersistence for Context<'_, AccountState> {
                     .background_executor()
                     .spawn(async move { write.persist() })
                     .await;
-                let settled = result.clone();
+                let settled = result;
                 let _ = account.update(cx, |account, cx| {
                     account.complete_session_write(cx, generation, kind, revert, written, result);
                     cx.notify();

@@ -45,6 +45,6 @@ pub(crate) use state::{
     VolumeIconLevel,
 };
 pub(crate) use track_info::{ResolvedTrackInfo, TrackInfoProbe, describe_track_info};
-pub(crate) use view::PlaybackModel;
+pub(crate) use view::{AudioOutputSettings, PlaybackModel};
 
 pub(crate) use player_bar::{PlaybackView, PlayerBarMotion, PlayerBarVisual};

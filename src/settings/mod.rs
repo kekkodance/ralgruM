@@ -151,7 +151,7 @@ pub(crate) enum Category {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SettingsEvent {
     ExitRequested,
-    Imported(AppSettings),
+    Imported(Box<AppSettings>),
 }
 
 pub(crate) struct SettingsView {

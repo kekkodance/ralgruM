@@ -56,7 +56,7 @@ impl SettingsView {
         self.reset_selects(window, cx);
         self.save_error = None;
         self.import_sync_pending = true;
-        cx.emit(super::SettingsEvent::Imported(settings));
+        cx.emit(super::SettingsEvent::Imported(Box::new(settings)));
         cx.notify();
         Ok(())
     }

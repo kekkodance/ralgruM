@@ -345,6 +345,14 @@ fn resolve_saved_output_target(
     target
 }
 
+/// Saved output routing the playback engine starts with: the regular
+/// output device choice plus the ASIO mode and driver selection.
+pub(crate) struct AudioOutputSettings {
+    pub(crate) output_device: Option<String>,
+    pub(crate) asio_mode: bool,
+    pub(crate) asio_driver: Option<String>,
+}
+
 impl PlaybackModel {
     fn reset_download_progress(&self) {
         if let Ok(mut progress) = self.download_progress.lock() {
@@ -358,9 +366,7 @@ impl PlaybackModel {
         discord_presence: bool,
         cache: AudioCache,
         background_audio_cache: bool,
-        output_device: Option<String>,
-        asio_mode: bool,
-        asio_driver: Option<String>,
+        audio_output: AudioOutputSettings,
         seamless_playback: bool,
         record_deezer_plays: bool,
         listen_history_changed: Arc<ListenHistorySignal>,
@@ -391,9 +397,9 @@ impl PlaybackModel {
                 .default_value(volume)
         });
         let target = resolve_saved_output_target(
-            asio_mode,
-            output_device.as_deref(),
-            asio_driver.as_deref(),
+            audio_output.asio_mode,
+            audio_output.output_device.as_deref(),
+            audio_output.asio_driver.as_deref(),
         );
         let engine = match RodioEngine::new(target.clone()) {
             Ok(engine) => Ok(engine),
