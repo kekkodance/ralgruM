@@ -103,11 +103,14 @@ jobs:
           }
           $tag = "v$version"
           git ls-remote --exit-code origin "refs/tags/$tag" *> $null
+          Write-Host "ls-remote exit code: $LASTEXITCODE"
           if ($LASTEXITCODE -eq 0) {
             throw "Tag '$tag' already exists."
           }
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "wrote RELEASE_VERSION, exit code: $LASTEXITCODE"
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "wrote RELEASE_TAG, exit code: $LASTEXITCODE"
 
       - name: Update Cargo package version
         shell: pwsh
