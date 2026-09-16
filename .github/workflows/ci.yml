@@ -30,7 +30,7 @@ jobs:
           submodules: false
 
       - name: Cache ASIO toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             vendor/libclang
