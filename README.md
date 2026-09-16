@@ -8,6 +8,8 @@
 
 ralgruM is a third-party client for [Murglar](https://murglar.app). It is not made by, affiliated with, or endorsed by Murglar, Deezer, or SoundCloud. If you have a Murglar account, ralgruM gives you a fast, native desktop app to search, browse, play, and download all your music in one place.
 
+<img width="1362" height="888" alt="{B880D2C6-D374-4667-BFC2-920FC404566B}" src="https://github.com/user-attachments/assets/6ece6bfb-d42b-40d8-8f77-ecc55f97c508" />
+
 ## Who is it for?
 
 ralgruM is primarily intended for:
