@@ -243,8 +243,8 @@ where
                 menu
             };
             let (kind, label) = match entity.kind {
-                EntityKind::Album => (FavoriteKind::Album, "Album Name"),
-                EntityKind::Playlist => (FavoriteKind::Playlist, "Playlist Name"),
+                EntityKind::Album => (FavoriteKind::Album, "Album name"),
+                EntityKind::Playlist => (FavoriteKind::Playlist, "Playlist name"),
                 _ => unreachable!(),
             };
             let favorite_enabled = enabled
@@ -452,7 +452,7 @@ where
                 false,
                 move |_, _, cx| {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_title.clone()));
-                    super::copied_toast("Playlist Name", cx);
+                    super::copied_toast("Playlist name", cx);
                 },
             ));
             let delete_host = host.clone();
@@ -547,10 +547,10 @@ where
             let title = entity.title.clone();
             let link = entity.service_link();
             let copy_label = match entity.kind {
-                EntityKind::Album => "Album Name",
-                EntityKind::Playlist => "Playlist Name",
-                EntityKind::Artist => "Artist Name",
-                EntityKind::Track => "title",
+                EntityKind::Album => "Album name",
+                EntityKind::Playlist => "Playlist name",
+                EntityKind::Artist => "Artist name",
+                EntityKind::Track => "Title",
             };
             // Album and playlist cards queue and download through the search
             // view, which fetches the collection tracks on demand. The items stay

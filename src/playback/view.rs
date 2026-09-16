@@ -695,7 +695,7 @@ impl PlaybackModel {
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Error,
-            "Playback Error",
+            "Playback error",
             Some(format!("Could not play \"{}\": {error}", track.title).into()),
         );
         if self.state.first_upcoming_index().is_some()
@@ -1622,7 +1622,12 @@ impl PlaybackModel {
                 self.state.seek(position);
             }
             Ok(SeekOutcome::Deferred) => {}
-            Err(error) => self.state.error = Some(error),
+            Err(error) => crate::toast::push_global(
+                cx,
+                crate::toast::ToastKind::Error,
+                "Could not seek",
+                Some(error.into()),
+            ),
         }
         self.arm_seek_completion(completion, cx);
     }
@@ -1673,7 +1678,7 @@ impl PlaybackModel {
             Err(error) => crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could Not Switch Output",
+                "Could not switch output",
                 Some(error.into()),
             ),
         }
@@ -1758,9 +1763,9 @@ impl PlaybackModel {
             cx,
             crate::toast::ToastKind::Success,
             if last {
-                "Added to End of Queue"
+                "Added to end of queue"
             } else {
-                "Playing Next"
+                "Playing next"
             },
             Some(
                 format!(
@@ -1958,7 +1963,12 @@ impl PlaybackModel {
                     Ok(SeekOutcome::AppliedStandbyDropped) => true,
                     Ok(_) => false,
                     Err(error) => {
-                        self.state.error = Some(error);
+                        crate::toast::push_global(
+                            cx,
+                            crate::toast::ToastKind::Error,
+                            "Could not seek",
+                            Some(error.into()),
+                        );
                         false
                     }
                 };

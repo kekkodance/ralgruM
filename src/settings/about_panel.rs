@@ -58,28 +58,28 @@ impl SettingsView {
                 "Chromium",
                 " cursor resources are licensed under the BSD 3-Clause License.",
                 crate::external_url::open_chromium,
-                "Could Not Open Chromium",
+                "Could not open Chromium",
             ))
             .child(linked_notice_line(
                 "about-gpui",
                 "GPUI",
                 " is developed by Zed Industries.",
                 crate::external_url::open_gpui,
-                "Could Not Open GPUI",
+                "Could not open GPUI",
             ))
             .child(linked_notice_line(
                 "about-gpui-component",
                 "gpui-component",
                 " is licensed under Apache 2.0.",
                 crate::external_url::open_gpui_component,
-                "Could Not Open gpui-component",
+                "Could not open gpui-component",
             ))
             .child(linked_notice_line(
                 "about-asio-sdk",
                 "Steinberg ASIO SDK",
-                " 2.3.3 sources are used under the GPLv3 option.",
+                " sources are used under the GPLv3 option.",
                 crate::external_url::open_asio_sdk,
-                "Could Not Open ASIO SDK",
+                "Could not open ASIO SDK",
             ))
             .into_any_element();
 
@@ -122,7 +122,7 @@ fn author_row() -> Div {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could Not Open GitHub",
+                        "Could not open GitHub",
                         Some(error.into()),
                     );
                 }
@@ -151,9 +151,9 @@ fn font_awesome_notice() -> Div {
     linked_notice_line(
         "about-font-awesome",
         "Font Awesome",
-        " Free 7.3.1 icons are licensed under CC BY 4.0.",
+        " Free icons are licensed under CC BY 4.0.",
         crate::external_url::open_font_awesome,
-        "Could Not Open Font Awesome",
+        "Could not open Font Awesome",
     )
 }
 

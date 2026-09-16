@@ -635,10 +635,19 @@ where
                                             Animation::new(Duration::from_millis(100))
                                                 .with_easing(ease_out_quint()),
                                             move |this, delta| {
+                                                // The popup anchors below the trigger and flips
+                                                // above it when space runs out. GPUI resolves that
+                                                // side at layout time and does not expose it here
+                                                // (uniform_list y_flipped describes list scrolling,
+                                                // not the popup), so both placements share one
+                                                // trigger-edge curve: the menu drops from the
+                                                // trigger while fading in, then collapses back
+                                                // toward the trigger on close, instead of rising
+                                                // from below.
                                                 if closing {
-                                                    this.opacity(1.0 - delta).top(px(3. * delta))
+                                                    this.opacity(1.0 - delta).top(px(-3. * delta))
                                                 } else {
-                                                    this.opacity(delta).top(px(3. * (1. - delta)))
+                                                    this.opacity(delta).top(px(-3. * (1. - delta)))
                                                 }
                                             },
                                         )
@@ -890,5 +899,8 @@ mod tests {
         assert!(source.contains("close_epoch: u64"));
         assert!(source.contains("select-menu-exit"));
         assert!(source.contains("select-menu-entry"));
+        assert!(source.contains("top(px(-3."));
+        assert!(source.contains("trigger-edge curve"));
+        assert!(!source.contains("top(px(3."));
     }
 }

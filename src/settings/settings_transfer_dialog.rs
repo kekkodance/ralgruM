@@ -133,7 +133,7 @@ impl SettingsTransferDialog {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Error,
-                            "Could Not Import Settings",
+                            "Could not import settings",
                             Some(error.to_string().into()),
                         );
                     }
@@ -170,7 +170,7 @@ impl SettingsTransferDialog {
                     Err(error) => crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could Not Export Settings",
+                        "Could not export settings",
                         Some(error.to_string().into()),
                     ),
                 }

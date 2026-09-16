@@ -72,7 +72,7 @@ impl LibraryView {
             Provider::Deezer => {
                 let Some(arl) = self.account.read(cx).deezer_arl() else {
                     collection_toast(
-                        "Collection Unavailable",
+                        "Collection unavailable",
                         "A Deezer account is required.",
                         cx,
                     );
@@ -80,7 +80,7 @@ impl LibraryView {
                 };
                 let Ok(client) = self.client.clone() else {
                     collection_toast(
-                        "Collection Unavailable",
+                        "Collection unavailable",
                         "The Deezer library client is unavailable.",
                         cx,
                     );
@@ -92,7 +92,7 @@ impl LibraryView {
             Provider::SoundCloud => {
                 let Some(token) = self.account.read(cx).soundcloud_token() else {
                     collection_toast(
-                        "Collection Unavailable",
+                        "Collection unavailable",
                         "A SoundCloud account is required.",
                         cx,
                     );
@@ -100,7 +100,7 @@ impl LibraryView {
                 };
                 let Ok(client) = self.soundcloud_library_client() else {
                     collection_toast(
-                        "Collection Unavailable",
+                        "Collection unavailable",
                         "The SoundCloud library client is unavailable.",
                         cx,
                     );
@@ -159,7 +159,7 @@ impl LibraryView {
                         }
                     }
                     (Ok(_), _) => collection_toast(empty_notice.0, empty_notice.1, cx),
-                    (Err(error), _) => collection_toast("Collection Unavailable", &error, cx),
+                    (Err(error), _) => collection_toast("Collection unavailable", &error, cx),
                 }
                 cx.notify();
             })

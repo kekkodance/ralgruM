@@ -311,9 +311,9 @@ impl crate::entity_navigation::TrackMenuHost for LibraryView {
                         cx,
                         crate::toast::ToastKind::Success,
                         if saved {
-                            "Saved to Local"
+                            "Saved to local"
                         } else {
-                            "Removed from Local"
+                            "Removed from local"
                         },
                         Some(title.into()),
                     );

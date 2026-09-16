@@ -206,7 +206,7 @@ where
             );
             let menu =
                 items::deezer_feedback_items(menu, host.clone(), &entity, window, cx).separator();
-            items::copy_items(menu, track.title.clone(), "title", link)
+            items::copy_items(menu, track.title.clone(), "Title", link)
         })
         .into_any_element()
 }

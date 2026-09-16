@@ -20,17 +20,17 @@ pub(crate) const fn empty_collection_notice(
     match (kind, action) {
         (CollectionKind::Album, CollectionAction::Queue)
         | (CollectionKind::Album, CollectionAction::AddToPlaylist) => {
-            ("Album Empty", "This album has no tracks to add.")
+            ("Album empty", "This album has no tracks to add.")
         }
         (CollectionKind::Album, CollectionAction::Download) => {
-            ("Album Empty", "This album has no tracks to download.")
+            ("Album empty", "This album has no tracks to download.")
         }
         (CollectionKind::Playlist, CollectionAction::Queue)
         | (CollectionKind::Playlist, CollectionAction::AddToPlaylist) => {
-            ("Playlist Empty", "This playlist has no tracks to add.")
+            ("Playlist empty", "This playlist has no tracks to add.")
         }
         (CollectionKind::Playlist, CollectionAction::Download) => {
-            ("Playlist Empty", "This playlist has no tracks to download.")
+            ("Playlist empty", "This playlist has no tracks to download.")
         }
     }
 }
@@ -43,27 +43,27 @@ mod tests {
     fn empty_collection_notice_is_kind_and_action_aware() {
         assert_eq!(
             empty_collection_notice(CollectionKind::Album, CollectionAction::Queue),
-            ("Album Empty", "This album has no tracks to add.")
+            ("Album empty", "This album has no tracks to add.")
         );
         assert_eq!(
             empty_collection_notice(CollectionKind::Album, CollectionAction::Download),
-            ("Album Empty", "This album has no tracks to download.")
+            ("Album empty", "This album has no tracks to download.")
         );
         assert_eq!(
             empty_collection_notice(CollectionKind::Playlist, CollectionAction::Queue),
-            ("Playlist Empty", "This playlist has no tracks to add.")
+            ("Playlist empty", "This playlist has no tracks to add.")
         );
         assert_eq!(
             empty_collection_notice(CollectionKind::Playlist, CollectionAction::Download),
-            ("Playlist Empty", "This playlist has no tracks to download.")
+            ("Playlist empty", "This playlist has no tracks to download.")
         );
         assert_eq!(
             empty_collection_notice(CollectionKind::Album, CollectionAction::AddToPlaylist),
-            ("Album Empty", "This album has no tracks to add.")
+            ("Album empty", "This album has no tracks to add.")
         );
         assert_eq!(
             empty_collection_notice(CollectionKind::Playlist, CollectionAction::AddToPlaylist),
-            ("Playlist Empty", "This playlist has no tracks to add.")
+            ("Playlist empty", "This playlist has no tracks to add.")
         );
     }
 }

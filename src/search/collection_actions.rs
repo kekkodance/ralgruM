@@ -117,7 +117,7 @@ impl SearchView {
                     }
                     (Ok(_), _) => collection_toast(empty_notice.0, empty_notice.1.to_owned(), cx),
                     (Err(error), _) => {
-                        collection_toast("Collection Unavailable", error.message.clone(), cx)
+                        collection_toast("Collection unavailable", error.message.clone(), cx)
                     }
                 }
                 cx.notify();

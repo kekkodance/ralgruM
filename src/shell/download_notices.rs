@@ -37,7 +37,7 @@ fn handle_download_notice(
                 toasts.push_actionable_keyed(
                     format!("download-conflict-{id}"),
                     ToastKind::Warning,
-                    "File Already Exists",
+                    "File already exists",
                     Some(description),
                     [
                         ToastAction::secondary("Ignore", move |_, _, cx| {
@@ -72,7 +72,7 @@ fn handle_download_notice(
                 toasts.push_actionable_keyed(
                     batch_conflict_toast_key(key),
                     ToastKind::Warning,
-                    "Files Already Exist",
+                    "Files already exist",
                     Some(batch_conflict_description(*existing).into()),
                     [
                         ToastAction::secondary("Ignore", move |_, _, cx| {
@@ -104,7 +104,7 @@ fn handle_download_notice(
                 app.toasts.update(cx, |toasts, cx| {
                     toasts.push(
                         ToastKind::Success,
-                        "Track Downloaded",
+                        "Track downloaded",
                         Some(completed_description(title, quality).into()),
                         cx,
                     );
@@ -121,7 +121,7 @@ fn handle_download_notice(
                     };
                     toasts.push(
                         ToastKind::Success,
-                        "Downloads Finished",
+                        "Downloads finished",
                         Some(description.into()),
                         cx,
                     );

@@ -241,7 +241,7 @@ impl SettingsView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Warning,
-                "Murglar Login Required",
+                "Murglar login required",
                 Some("Log in to Murglar before choosing a payment method.".into()),
             );
             return;
@@ -273,18 +273,18 @@ impl SettingsView {
                         Ok(link) => match crate::external_url::open_payment_url(&link) {
                             Ok(()) => (
                                 crate::toast::ToastKind::Success,
-                                "Payment Page Opened",
+                                "Payment page opened",
                                 "Continue securely in your browser.".into(),
                             ),
                             Err(error) => (
                                 crate::toast::ToastKind::Error,
-                                "Could Not Open Payment",
+                                "Could not open payment",
                                 error.to_string().into(),
                             ),
                         },
                         Err(error) => (
                             crate::toast::ToastKind::Error,
-                            "Could Not Open Payment",
+                            "Could not open payment",
                             error.to_string().into(),
                         ),
                     };
@@ -314,7 +314,7 @@ impl SettingsView {
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Success,
-            "Referral Code Copied",
+            "Referral code copied",
             Some("The Murglar referral code was copied to the clipboard.".into()),
         );
     }

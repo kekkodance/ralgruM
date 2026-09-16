@@ -243,7 +243,7 @@ impl LibraryView {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Success,
-                            "Added to Local playlist",
+                            "Added to local playlist",
                             Some(local_added_tracks_message(*count).into()),
                         );
                     }
@@ -251,7 +251,7 @@ impl LibraryView {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Info,
-                            "Already in Local playlist",
+                            "Already in local playlist",
                             Some(playlist_title.clone().into()),
                         );
                     }

@@ -865,7 +865,7 @@ pub(super) fn artist_menu_items<N: TrackMenuHost>(
                 menu.separator(),
                 entity.title.clone(),
                 "Copy name",
-                "Artist Name",
+                "Artist name",
                 entity.service_link(),
             );
         }
@@ -873,7 +873,7 @@ pub(super) fn artist_menu_items<N: TrackMenuHost>(
             menu.separator(),
             entity.title.clone(),
             "Copy name",
-            "Artist Name",
+            "Artist name",
             entity.service_link(),
         );
     }
@@ -919,7 +919,7 @@ pub(super) fn artist_menu_items<N: TrackMenuHost>(
         menu.separator(),
         entity.title.clone(),
         "Copy name",
-        "Artist Name",
+        "Artist name",
         entity.service_link(),
     )
 }
@@ -1160,7 +1160,7 @@ pub(crate) fn lyrics_copy_menu(
         false,
         move |_, _, cx| {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(line.clone()));
-            copied_toast("Lyric Line", cx);
+            copied_toast("Lyric line", cx);
         },
     ));
     let menu = if block.is_empty() {
@@ -1172,7 +1172,7 @@ pub(crate) fn lyrics_copy_menu(
             false,
             move |_, _, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(block.clone()));
-                copied_toast("Lyrics Block", cx);
+                copied_toast("Lyrics block", cx);
             },
         ))
     };

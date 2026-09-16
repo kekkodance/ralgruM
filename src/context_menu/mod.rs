@@ -289,7 +289,7 @@ pub(crate) fn copied_toast(label: &str, cx: &mut gpui::App) {
     crate::toast::push_global(
         cx,
         crate::toast::ToastKind::Success,
-        format!("{label} Copied"),
+        format!("{label} copied"),
         Some("Copied to the clipboard.".into()),
     );
 }

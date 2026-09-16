@@ -20,15 +20,12 @@ pub(super) fn search_provider_for_playback(provider: PlaybackProvider) -> crate:
 pub(super) fn current_artist_navigation(
     track: &PlaybackTrack,
     status: PlaybackStatus,
-    error: Option<&str>,
     openers: Option<&ProviderNavigationOpeners>,
 ) -> Option<TrackArtistNavigation> {
-    if error.is_some()
-        || !matches!(
-            status,
-            PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
-        )
-    {
+    if !matches!(
+        status,
+        PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
+    ) {
         return None;
     }
     let provider = search_provider_for_playback(track.provider);
@@ -140,7 +137,6 @@ pub(super) fn render_current(
     track: Option<&PlaybackTrack>,
     artwork_hold: &ArtworkHold,
     status: PlaybackStatus,
-    error: Option<&str>,
     loading_from_cache: bool,
     desktop_layout: Option<PlayerBarLayout>,
     compact: bool,
@@ -161,9 +157,9 @@ pub(super) fn render_current(
     let block_width = desktop_layout.map_or(380., |layout| layout.side_width);
     let artwork = if narrow { 44. } else { 60. };
     let title = current_track_title(track, status);
-    let subtitle = current_subtitle(track, status, error, loading_from_cache);
+    let subtitle = current_subtitle(track, status, loading_from_cache);
     let rendered_artist =
-        rendered_current_artist_text(track, status, error, subtitle, artist_navigation.as_ref());
+        rendered_current_artist_text(track, status, subtitle, artist_navigation.as_ref());
     // Fixed side widths only on desktop layouts; narrow rows stretch, so there
     // is no cheap width to compare against for overflow tooltips there. The
     // compact heart lives outside this row and does not reserve text width.
@@ -176,11 +172,10 @@ pub(super) fn render_current(
         )
     });
     let text_block_width = text_width_visual.map(|visual| visual.target);
-    let artist_line = if error.is_none()
-        && matches!(
-            status,
-            PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
-        ) {
+    let artist_line = if matches!(
+        status,
+        PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
+    ) {
         track
             .map(|track| {
                 crate::music_ui::track_artist_line(
@@ -224,7 +219,7 @@ pub(super) fn render_current(
                 .id("player-artist")
                 .truncate()
                 .text_size(px(12.))
-                .text_color(rgb(if error.is_some() { DANGER } else { MUTED }))
+                .text_color(rgb(MUTED))
                 .child(artist_line),
             rendered_artist.as_str(),
             text_width.map(|width| {
@@ -360,21 +355,16 @@ pub(super) fn render_current(
     }
 }
 
-pub(super) fn current_subtitle<'a>(
-    track: Option<&'a PlaybackTrack>,
+pub(super) fn current_subtitle(
+    track: Option<&PlaybackTrack>,
     status: PlaybackStatus,
-    error: Option<&'a str>,
     loading_from_cache: bool,
-) -> &'a str {
-    if let Some(err) = error {
-        err
-    } else {
-        match status {
-            PlaybackStatus::Loading if !loading_from_cache => "Loading audio...",
-            PlaybackStatus::Loading => track.map_or("", |track| track.artist.as_str()),
-            PlaybackStatus::Failed => "Playback failed",
-            _ => track.map_or("", |track| track.artist.as_str()),
-        }
+) -> &str {
+    match status {
+        PlaybackStatus::Loading if !loading_from_cache => "Loading audio...",
+        PlaybackStatus::Loading => track.map_or("", |track| track.artist.as_str()),
+        PlaybackStatus::Failed => "Playback failed",
+        _ => track.map_or("", |track| track.artist.as_str()),
     }
 }
 
@@ -391,16 +381,13 @@ pub(super) fn current_track_title(track: Option<&PlaybackTrack>, status: Playbac
 pub(super) fn rendered_current_artist_text(
     track: Option<&PlaybackTrack>,
     status: PlaybackStatus,
-    error: Option<&str>,
     subtitle: &str,
     navigation: Option<&TrackArtistNavigation>,
 ) -> String {
-    if error.is_some()
-        || !matches!(
-            status,
-            PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
-        )
-    {
+    if !matches!(
+        status,
+        PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
+    ) {
         return subtitle.to_owned();
     }
     let Some(track) = track else {

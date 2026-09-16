@@ -256,7 +256,7 @@ where
             );
             let menu =
                 items::deezer_feedback_items(menu, host.clone(), &entity, window, cx).separator();
-            items::copy_items(menu, entity.title.clone(), "title", link)
+            items::copy_items(menu, entity.title.clone(), "Title", link)
         })
         .open_on(trigger_button);
     if matches!(trigger_button, MouseButton::Left) {
@@ -404,7 +404,7 @@ where
             );
             let menu =
                 items::deezer_feedback_items(menu, host.clone(), &entity, window, cx).separator();
-            items::copy_items(menu, title, "title", link)
+            items::copy_items(menu, title, "Title", link)
         })
         .into_any_element()
 }

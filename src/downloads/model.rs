@@ -381,7 +381,7 @@ impl DownloadModel {
                             job.unread = true;
                         }
                     }
-                    self.notify_toast(ToastKind::Error, "Downloads Failed", Some(error), cx);
+                    self.notify_toast(ToastKind::Error, "Downloads failed", Some(error), cx);
                     cx.notify();
                     return ids;
                 }
@@ -406,7 +406,7 @@ impl DownloadModel {
         } else {
             self.notify_toast(
                 ToastKind::Info,
-                "Downloads Started",
+                "Downloads started",
                 Some(format!("Queued {} tracks.", ids.len())),
                 cx,
             );
@@ -463,7 +463,7 @@ impl DownloadModel {
         if !self.batch_ids.is_empty() {
             self.notify_toast(
                 ToastKind::Info,
-                "Downloads Started",
+                "Downloads started",
                 Some(format!("Queued {} tracks.", self.batch_ids.len())),
                 cx,
             );
@@ -483,7 +483,7 @@ impl DownloadModel {
         if !self.batch_ids.is_empty() {
             self.notify_toast(
                 ToastKind::Info,
-                "Downloads Started",
+                "Downloads started",
                 Some(format!("Queued {} tracks.", self.batch_ids.len())),
                 cx,
             );
@@ -1314,7 +1314,7 @@ impl DownloadModel {
                     if failed > 0 {
                         self.notify_toast(
                             ToastKind::Warning,
-                            "Downloads Finished with Errors",
+                            "Downloads finished with errors",
                             Some(format!(
                                 "{saved} saved; {failed} unavailable in that format."
                             )),
@@ -1340,7 +1340,7 @@ impl DownloadModel {
                 }
             }
             DownloadStatus::Failed(error) => {
-                self.notify_toast(ToastKind::Error, "Download Failed", Some(error.clone()), cx);
+                self.notify_toast(ToastKind::Error, "Download failed", Some(error.clone()), cx);
             }
             _ => {}
         }

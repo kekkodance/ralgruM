@@ -685,7 +685,7 @@ mod tests {
                 stack.push_actionable_keyed(
                     "download-conflict-7",
                     super::ToastKind::Warning,
-                    "File Already Exists",
+                    "File already exists",
                     Some("Song Title · MP3 320kbps".into()),
                     [
                         super::ToastAction::secondary("Ignore", |_, _, _| {}),

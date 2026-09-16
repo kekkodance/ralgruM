@@ -29,7 +29,7 @@ use crate::{
     music_ui::TrackArtistNavigation,
     settings::AccountState,
     theme::{
-        BORDER, DANGER, FOREGROUND, MUTED, PRIMARY, SCROLLBAR_THUMB, SURFACE, SURFACE_RAISED,
+        BORDER, FOREGROUND, MUTED, PRIMARY, SCROLLBAR_THUMB, SURFACE, SURFACE_RAISED,
         ui_font_family,
     },
     ui::artwork_cache::ArtworkCache,

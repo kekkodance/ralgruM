@@ -1422,22 +1422,33 @@ fn ended_queue_keeps_the_last_track_artist_visible() {
         service_url: String::new(),
     };
     assert_eq!(
-        current_subtitle(Some(&track), PlaybackStatus::Ended, None, false),
+        current_subtitle(Some(&track), PlaybackStatus::Ended, false),
         "Last Artist"
     );
     assert_eq!(
-        current_subtitle(Some(&track), PlaybackStatus::Playing, None, false),
+        current_subtitle(Some(&track), PlaybackStatus::Playing, false),
         "Last Artist"
+    );
+    assert_eq!(
+        rendered_current_artist_text(Some(&track), PlaybackStatus::Ended, "Last Artist", None),
+        "Last Artist"
+    );
+    assert_eq!(
+        current_subtitle(Some(&track), PlaybackStatus::Failed, false),
+        "Playback failed"
     );
     assert_eq!(
         rendered_current_artist_text(
             Some(&track),
-            PlaybackStatus::Ended,
-            None,
-            "Last Artist",
+            PlaybackStatus::Failed,
+            "Playback failed",
             None
         ),
-        "Last Artist"
+        "Playback failed"
+    );
+    assert_ne!(
+        current_subtitle(Some(&track), PlaybackStatus::Playing, false),
+        "engine exploded"
     );
 }
 
@@ -1461,11 +1472,11 @@ fn cached_loading_keeps_the_artist_visible() {
     };
 
     assert_eq!(
-        current_subtitle(Some(&track), PlaybackStatus::Loading, None, true),
+        current_subtitle(Some(&track), PlaybackStatus::Loading, true),
         "Cached Artist"
     );
     assert_eq!(
-        current_subtitle(Some(&track), PlaybackStatus::Loading, None, false),
+        current_subtitle(Some(&track), PlaybackStatus::Loading, false),
         "Loading audio..."
     );
 }

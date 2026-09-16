@@ -16,7 +16,6 @@ impl Render for PlaybackView {
             volume,
             generation,
             seek_commit_epoch,
-            error,
             shuffle_enabled,
             repeat_mode,
             right_sidebar,
@@ -35,7 +34,6 @@ impl Render for PlaybackView {
                 state.volume,
                 state.generation,
                 model.seek_commit_epoch(),
-                state.error.clone(),
                 state.shuffle_enabled,
                 state.repeat_mode,
                 state.right_sidebar,
@@ -287,24 +285,13 @@ impl Render for PlaybackView {
         };
 
         let artist_navigation = current.as_ref().and_then(|track| {
-            current_artist_navigation(
-                track,
-                status,
-                error.as_deref(),
-                self.external_track_navigation.as_ref(),
-            )
+            current_artist_navigation(track, status, self.external_track_navigation.as_ref())
         });
         let title_for_motion = current_track_title(current.as_ref(), status);
-        let subtitle_for_motion = current_subtitle(
-            current.as_ref(),
-            status,
-            error.as_deref(),
-            loading_from_cache,
-        );
+        let subtitle_for_motion = current_subtitle(current.as_ref(), status, loading_from_cache);
         let rendered_artist_for_motion = rendered_current_artist_text(
             current.as_ref(),
             status,
-            error.as_deref(),
             subtitle_for_motion,
             artist_navigation.as_ref(),
         );
@@ -460,7 +447,6 @@ impl Render for PlaybackView {
                 None,
                 &self.artwork_hold,
                 status,
-                error.as_deref(),
                 loading_from_cache,
                 (!narrow).then_some(layout),
                 compact,
@@ -478,7 +464,6 @@ impl Render for PlaybackView {
                     Some(track),
                     &self.artwork_hold,
                     status,
-                    error.as_deref(),
                     loading_from_cache,
                     (!narrow).then_some(layout),
                     compact,
