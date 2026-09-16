@@ -30,6 +30,8 @@ pub(crate) enum LocalIcon {
     SoundCloud,
     ArrowLeft,
     ArrowRight,
+    ArrowUp,
+    ArrowDown,
     MagnifyingGlass,
     EarthAmericas,
     List,
@@ -91,7 +93,7 @@ pub(crate) enum LocalIcon {
 
 impl LocalIcon {
     #[cfg(test)]
-    pub(crate) const ALL: [LocalIcon; 82] = [
+    pub(crate) const ALL: [LocalIcon; 84] = [
         LocalIcon::Music,
         LocalIcon::QuoteRight,
         LocalIcon::Compass,
@@ -117,6 +119,8 @@ impl LocalIcon {
         LocalIcon::SoundCloud,
         LocalIcon::ArrowLeft,
         LocalIcon::ArrowRight,
+        LocalIcon::ArrowUp,
+        LocalIcon::ArrowDown,
         LocalIcon::MagnifyingGlass,
         LocalIcon::EarthAmericas,
         LocalIcon::List,
@@ -203,6 +207,8 @@ impl LocalIcon {
             Self::SoundCloud => "ralgrum/icons/fontawesome-free-7.3.1/brands/soundcloud.svg",
             Self::ArrowLeft => "ralgrum/icons/fontawesome-free-7.3.1/solid/arrow-left.svg",
             Self::ArrowRight => "ralgrum/icons/fontawesome-free-7.3.1/solid/arrow-right.svg",
+            Self::ArrowUp => "ralgrum/icons/fontawesome-free-7.3.1/solid/arrow-up.svg",
+            Self::ArrowDown => "ralgrum/icons/fontawesome-free-7.3.1/solid/arrow-down.svg",
             Self::MagnifyingGlass => {
                 "ralgrum/icons/fontawesome-free-7.3.1/solid/magnifying-glass.svg"
             }
@@ -288,6 +294,8 @@ fn font_awesome_file_for_widget_icon(path: &str) -> Option<&'static str> {
     let name = path.strip_prefix("icons/")?.strip_suffix(".svg")?;
     let icon = match name {
         "arrow-left" => LocalIcon::ArrowLeft,
+        "arrow-down" => LocalIcon::ArrowDown,
+        "arrow-up" => LocalIcon::ArrowUp,
         "arrow-right" => LocalIcon::ArrowRight,
         "check" => LocalIcon::Check,
         "chevron-down" => LocalIcon::ChevronDown,

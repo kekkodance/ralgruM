@@ -115,7 +115,7 @@ where
                 .separator()
                 .item(items::action_item(
                     "Move up",
-                    None,
+                    Some(LocalIcon::ArrowUp),
                     !available.move_up,
                     move |_, _, cx| {
                         if available.move_up {
@@ -127,7 +127,7 @@ where
                 ))
                 .item(items::action_item(
                     "Move down",
-                    None,
+                    Some(LocalIcon::ArrowDown),
                     !available.move_down,
                     move |_, _, cx| {
                         if available.move_down {
