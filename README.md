@@ -31,9 +31,9 @@ You can browse without signing into everything, but signing in unlocks your pers
 
 1. Download the [latest ralgruM release](https://github.com/kekkodance/ralgruM/releases/latest) for Windows and open it.
 2. Log in with your Murglar account to unlock the full service.
-3. Go to Settings and connect Deezer and SoundCloud if you use them.
+3. Go to Settings and connect your Deezer and SoundCloud accounts.
 
-That is it. Your logins stay saved on your PC so you do not have to sign in every time.
+That is it.
 
 ## Good to know
 
