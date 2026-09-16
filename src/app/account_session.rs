@@ -703,13 +703,35 @@ fn write_session_pair(
             return Err(error);
         }
     };
-    // The primary file is authoritative: rename it first so a failure on the
-    // backup still leaves the session recoverable from the primary.
-    if atomic_rename(&primary_temporary, primary_path).is_err() {
+    // Keep the previous backup content so the swap below can be undone.
+    // The primary file is authoritative: its rename is the single commit
+    // point of the pair, and until it lands a fresh load must recover the
+    // previous session.
+    let previous_backup = match read_bounded(backup_path, MAX_PROTECTED_FILE_LEN) {
+        Ok(previous) => previous,
+        Err(error) => {
+            let _ = fs::remove_file(&primary_temporary);
+            let _ = fs::remove_file(&backup_temporary);
+            return Err(error);
+        }
+    };
+    // Replace the backup first. A failure here leaves the previous pair
+    // fully in place, so a rejected session never reaches the primary.
+    if atomic_rename(&backup_temporary, backup_path).is_err() {
+        let _ = fs::remove_file(&primary_temporary);
         let _ = fs::remove_file(&backup_temporary);
         return Err(SessionError::Filesystem);
     }
-    atomic_rename(&backup_temporary, backup_path).map_err(|_| SessionError::Filesystem)
+    // The primary rename commits the pair. A failure here rolls the backup
+    // back to the previous content; if even that best-effort restore
+    // fails, the untouched primary still wins at load time and the pair is
+    // repaired then.
+    if atomic_rename(&primary_temporary, primary_path).is_err() {
+        let _ = fs::remove_file(&primary_temporary);
+        restore_previous_backup(backup_path, previous_backup.as_deref());
+        return Err(SessionError::Filesystem);
+    }
+    Ok(())
 }
 
 fn read_legacy_deezer_sid(
@@ -761,6 +783,20 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), SessionError> {
         let _ = fs::remove_file(&temporary);
     }
     result.map_err(|_| SessionError::Filesystem)
+}
+
+/// Puts the previous backup content back after its replacement landed but
+/// the pair failed to commit. Without previous content the replacement is
+/// removed, returning the pair to its pre-write shape.
+fn restore_previous_backup(backup_path: &Path, previous: Option<&[u8]>) {
+    match previous {
+        Some(previous) => {
+            let _ = atomic_write(backup_path, previous);
+        }
+        None => {
+            let _ = fs::remove_file(backup_path);
+        }
+    }
 }
 
 fn stage_replacement(path: &Path, contents: &[u8]) -> Result<PathBuf, SessionError> {

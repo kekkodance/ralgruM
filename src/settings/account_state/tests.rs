@@ -50,6 +50,18 @@ fn account_state(temp: &TempDir) -> AccountState {
     AccountState::new(identity(), SessionStore::load(temp.path()))
 }
 
+/// Starts a login on the synchronous driver and returns its generation
+/// and login epoch. The synchronous preflight has already settled by the
+/// time this returns, so there is no storage gate to await.
+fn login_start(state: &mut AccountState) -> (u64, u64) {
+    let LoginStart {
+        generation,
+        login_epoch,
+        ..
+    } = state.begin_login(&mut DirectPersistence).unwrap();
+    (generation, login_epoch)
+}
+
 fn assert_media_credentials_at(state: &AccountState, now: i64) {
     #[cfg(ralgrum_private_backend)]
     assert!(state.murglar_media_credentials_at(now).is_some());
@@ -148,7 +160,7 @@ fn stale_session_end_after_exchange_persists_without_exposing_token_or_profile()
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     state.end_settings_session();
 
     assert!(
@@ -177,13 +189,11 @@ fn superseded_login_completion_is_rejected_before_persistence() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (first_generation, _, first_login_epoch) =
-        state.begin_login(&mut DirectPersistence).unwrap();
+    let (first_generation, first_login_epoch) = login_start(&mut state);
 
     state.end_settings_session();
     state.begin_settings_session();
-    let (second_generation, _, second_login_epoch) =
-        state.begin_login(&mut DirectPersistence).unwrap();
+    let (second_generation, second_login_epoch) = login_start(&mut state);
     assert_ne!(first_login_epoch, second_login_epoch);
 
     assert!(
@@ -221,7 +231,7 @@ fn token_exchange_then_profile_success_updates_profile_and_token() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     let token = state.complete_token_exchange(
         generation,
         logout_epoch,
@@ -384,7 +394,7 @@ fn replacement_login_suppresses_stored_entitlement_until_fresh_profile_is_accept
     assert_media_credentials_at(&state, now);
 
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     assert!(state.murglar_media_credentials_at(now).is_none());
     assert_eq!(state.sidebar_pass_at(now), SidebarPass::Inactive);
 
@@ -409,7 +419,7 @@ fn live_profile_survives_summary_persistence_failure_without_retrusting_fallback
     let now = 1_700_000_000_000;
     let mut state = account_state_with_saved_pass(&temp, now + 1);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     assert_eq!(
         state
             .complete_token_exchange(
@@ -469,7 +479,7 @@ fn murglar_scope_changes_again_after_token_commit() {
     let mut state = account_state(&temp);
     state.begin_settings_session();
     let before_login = state.credential_generation();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     let before_commit = state.credential_generation();
     assert_ne!(before_commit, before_login);
 
@@ -843,7 +853,7 @@ fn logout_all_rejects_late_murglar_exchange_before_persistence() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state_with_saved_accounts(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
 
     state.logout_all(&mut DirectPersistence);
     let post_logout_scope = state.credential_generation();
@@ -871,7 +881,7 @@ fn murglar_logout_rejects_late_exchange_before_persistence() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state_with_saved_accounts(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
 
     state.logout(&mut DirectPersistence);
     let post_logout_scope = state.credential_generation();
@@ -917,7 +927,7 @@ fn logout_clears_account_and_invalidates_pending_login() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     state.complete_token_exchange(
         generation,
         logout_epoch,
@@ -940,7 +950,7 @@ fn device_limit_completion_sets_danger_state() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     assert!(
         state
             .complete_token_exchange(
@@ -963,7 +973,7 @@ fn failed_new_login_cannot_leave_a_stale_account() {
     state.token = Some("old-token".into());
     state.profile = Some(profile());
 
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     assert!(state.token.is_none());
     assert!(state.profile.is_none());
     assert!(
@@ -1035,7 +1045,7 @@ fn persistence_failure_prevents_profile_request_and_exposes_no_profile() {
     store.persist_murglar("previous-token".into()).unwrap();
     let mut state = AccountState::new(identity(), Ok(store));
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     make_store_unwritable(&temp);
 
     let profile_request_token = state.complete_token_exchange(
@@ -1066,7 +1076,7 @@ fn profile_failure_retains_durably_persisted_token() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
 
     let profile_request_token = state.complete_token_exchange(
         generation,
@@ -1143,7 +1153,7 @@ fn failed_logout_keeps_token_state_but_clears_profile_for_privacy() {
     let temp = TempDir::new().unwrap();
     let mut state = account_state(&temp);
     state.begin_settings_session();
-    let (generation, _, logout_epoch) = state.begin_login(&mut DirectPersistence).unwrap();
+    let (generation, logout_epoch) = login_start(&mut state);
     state.complete_token_exchange(
         generation,
         logout_epoch,
@@ -1542,7 +1552,11 @@ fn session_persistence_returns_before_the_write_touches_disk(cx: &mut gpui::Test
     let (generation, login_epoch) = cx.update(|cx| {
         account.update(cx, |account, cx| {
             account.begin_settings_session();
-            let (generation, _, login_epoch) = account.begin_login(cx).expect("login starts");
+            let LoginStart {
+                generation,
+                login_epoch,
+                ..
+            } = account.begin_login(cx).expect("login starts");
             cx.notify();
             (generation, login_epoch)
         })
@@ -1585,7 +1599,11 @@ fn queued_session_writes_reach_the_disk_in_submission_order(cx: &mut gpui::TestA
     let (generation, login_epoch) = cx.update(|cx| {
         account.update(cx, |account, cx| {
             account.begin_settings_session();
-            let (generation, _, login_epoch) = account.begin_login(cx).expect("login starts");
+            let LoginStart {
+                generation,
+                login_epoch,
+                ..
+            } = account.begin_login(cx).expect("login starts");
             cx.notify();
             (generation, login_epoch)
         })
@@ -1628,7 +1646,11 @@ fn failed_background_write_reverts_the_account_and_surfaces_the_error(
     let (generation, login_epoch) = cx.update(|cx| {
         account.update(cx, |account, cx| {
             account.begin_settings_session();
-            let (generation, _, login_epoch) = account.begin_login(cx).expect("login starts");
+            let LoginStart {
+                generation,
+                login_epoch,
+                ..
+            } = account.begin_login(cx).expect("login starts");
             cx.notify();
             (generation, login_epoch)
         })
@@ -1657,5 +1679,104 @@ fn failed_background_write_reverts_the_account_and_surfaces_the_error(
         assert_eq!(state.token, None);
         assert_eq!(state.session_error, Some(SessionError::Filesystem));
         assert!(!state.loading);
+    });
+}
+
+#[gpui::test]
+fn login_storage_preflight_gates_the_exchange_until_it_settles(cx: &mut gpui::TestAppContext) {
+    let temp = TempDir::new().unwrap();
+    let account =
+        cx.update(|cx| cx.new(|_| AccountState::new(identity(), SessionStore::load(temp.path()))));
+    make_store_unwritable(&temp);
+    let gate = cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            account.begin_settings_session();
+            let login = account.begin_login(cx).expect("login starts");
+            cx.notify();
+            login.storage_preflight.expect("background preflight gate")
+        })
+    });
+
+    // The caller contract: the network exchange starts only after the
+    // storage preflight settles successfully.
+    let exchange_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started = exchange_started.clone();
+    cx.spawn(async move |_| {
+        if gate.await.is_ok() {
+            started.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    })
+    .detach();
+    cx.run_until_parked();
+
+    assert!(
+        !exchange_started.load(std::sync::atomic::Ordering::SeqCst),
+        "the exchange must not start against an unwritable store"
+    );
+    cx.update(|cx| {
+        let state = account.read(cx);
+        assert!(!state.loading);
+        assert_eq!(state.session_error, Some(SessionError::Filesystem));
+        assert_eq!(state.active_murglar_login_epoch, None);
+    });
+}
+
+#[gpui::test]
+fn failed_login_then_logout_with_both_writes_failing_ends_at_the_durable_state(
+    cx: &mut gpui::TestAppContext,
+) {
+    let temp = TempDir::new().unwrap();
+    let account =
+        cx.update(|cx| cx.new(|_| AccountState::new(identity(), SessionStore::load(temp.path()))));
+    let (generation, login_epoch) = cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            account.begin_settings_session();
+            let login = account.begin_login(cx).expect("login starts");
+            cx.notify();
+            (login.generation, login.login_epoch)
+        })
+    });
+    // The store goes bad after the preflight proved it writable, so both
+    // the sign-in and the sign-out writes fail.
+    make_store_unwritable(&temp);
+
+    let token = cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            let token = account.complete_token_exchange(
+                generation,
+                login_epoch,
+                Ok(AccessToken::new("optimistic-token".into())),
+                cx,
+            );
+            cx.notify();
+            token
+        })
+    });
+    assert_eq!(token.as_deref(), Some("optimistic-token"));
+
+    cx.update(|cx| {
+        account.update(cx, |account, cx| {
+            account.logout(cx);
+            cx.notify();
+        })
+    });
+
+    cx.run_until_parked();
+
+    cx.update(|cx| {
+        let state = account.read(cx);
+        // Memory matches the pre-login durable state: the logout sticks
+        // and nothing from the failed login survives.
+        assert_eq!(state.token, None);
+        assert!(state.profile.is_none());
+        assert!(state.referral.is_none());
+        assert!(state.plans.is_none());
+        assert_eq!(state.durable_session.murglar(), "");
+        assert_eq!(
+            state.session_store.as_ref().unwrap().session().murglar(),
+            ""
+        );
+        // The governing write is the logout, so its failure surfaced.
+        assert_eq!(state.session_error, Some(SessionError::Filesystem));
     });
 }

@@ -603,22 +603,16 @@ fn failed_encrypted_write_retains_both_directory_plaintext_until_pair_is_repaire
 
         assert_legacy_material(&active, &expected);
         assert_legacy_material(&legacy, &expected);
-        if blocked_file == BACKUP_FILE {
-            assert_eq!(
-                stored_value(&active.join(PRIMARY_FILE))["murglar"],
-                "new-token"
-            );
-        }
+        // The backup is replaced before the primary commits, so a failed
+        // write leaves the authoritative primary untouched.
+        assert!(!active.join(PRIMARY_FILE).is_file());
 
         fs::remove_dir(active.join(blocked_file)).unwrap();
         let recovered = SessionStore::load_in_directories(&active, Some(&legacy)).unwrap();
-        let expected_token = if blocked_file == BACKUP_FILE {
-            "new-token"
-        } else {
-            "legacy-token"
-        };
-        assert_eq!(recovered.session().murglar(), expected_token);
-        assert_encrypted_pair(&active, expected_token);
+        // The rejected write never committed, so the legacy session is
+        // what migrates once the blocked target is available again.
+        assert_eq!(recovered.session().murglar(), "legacy-token");
+        assert_encrypted_pair(&active, "legacy-token");
         assert_legacy_removed(&active);
         assert_legacy_removed(&legacy);
     }
@@ -771,4 +765,67 @@ fn failed_deezer_identity_write_keeps_the_previous_pair_and_memory_intact() {
         "old-listener"
     );
     assert_eq!(recovered.session().deezer_cookies(), Some("sid=old"));
+}
+
+#[test]
+fn failed_backup_swap_never_touches_the_authoritative_primary() {
+    let temp = TempDir::new().unwrap();
+    let mut store = SessionStore::load(temp.path()).unwrap();
+    store.persist_murglar("old-token".into()).unwrap();
+    fs::remove_file(temp.path().join(BACKUP_FILE)).unwrap();
+    fs::create_dir(temp.path().join(BACKUP_FILE)).unwrap();
+
+    assert_eq!(
+        store.persist_murglar("new-token".into()),
+        Err(SessionError::Filesystem)
+    );
+
+    // The backup is replaced before the primary commits, so a rejected
+    // write can never leave the new session in the authoritative file.
+    assert_eq!(
+        stored_value(&temp.path().join(PRIMARY_FILE))["murglar"],
+        "old-token"
+    );
+    assert_no_staging_files(&temp);
+    assert_eq!(store.session().murglar(), "old-token");
+
+    fs::remove_dir(temp.path().join(BACKUP_FILE)).unwrap();
+    let recovered = SessionStore::load(temp.path()).unwrap();
+    assert_eq!(recovered.session().murglar(), "old-token");
+}
+
+#[test]
+fn failed_primary_commit_restores_the_previous_backup() {
+    let temp = TempDir::new().unwrap();
+    let mut store = SessionStore::load(temp.path()).unwrap();
+    store.persist_murglar("old-token".into()).unwrap();
+    fs::remove_file(temp.path().join(PRIMARY_FILE)).unwrap();
+    fs::create_dir(temp.path().join(PRIMARY_FILE)).unwrap();
+
+    assert_eq!(
+        store.persist_murglar("new-token".into()),
+        Err(SessionError::Filesystem)
+    );
+
+    // The commit never landed, so the backup swap was rolled back: the
+    // previous pair survives intact and no staging files linger.
+    assert_eq!(
+        stored_value(&temp.path().join(BACKUP_FILE))["murglar"],
+        "old-token"
+    );
+    assert_no_staging_files(&temp);
+
+    fs::remove_dir(temp.path().join(PRIMARY_FILE)).unwrap();
+    store.persist_murglar("new-token".into()).unwrap();
+    assert_encrypted_pair(temp.path(), "new-token");
+    assert_no_staging_files(&temp);
+}
+
+fn assert_no_staging_files(temp: &TempDir) {
+    let staging = fs::read_dir(temp.path())
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+        .count();
+    assert_eq!(staging, 0, "staging files must not linger after a write");
 }

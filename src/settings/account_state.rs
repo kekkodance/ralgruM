@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::service_auth::{Service, ValidatedCredentials};
 use chrono::Utc;
+use futures::channel::oneshot;
 use gpui::{Context, SharedString, Task};
 
 use crate::{
@@ -132,7 +133,6 @@ pub(super) trait SessionPersistence {
     fn install_quit_drain(&mut self) {}
 }
 
-/// How a driver resolved a durable write request.
 pub(super) enum SessionWriteDispatch {
     /// The write already finished; the caller applies its outcome.
     #[cfg(test)]
@@ -141,8 +141,36 @@ pub(super) enum SessionWriteDispatch {
         pending: Box<PendingSessionWrite>,
     },
     /// The write runs in the background; the driver captured the pending
-    /// write and will deliver its outcome on the entity.
-    Scheduled(Task<()>),
+    /// write and will deliver its outcome on the entity. For the login
+    /// storage preflight, `preflight` settles with the write's outcome
+    /// once that outcome has been applied to the entity.
+    Scheduled {
+        task: Task<()>,
+        preflight: Option<Task<Result<(), SessionError>>>,
+    },
+}
+
+/// How a staged durable write was left by its driver.
+struct DrivenWrite {
+    /// Whether the write already failed. A synchronous driver has fully
+    /// reverted the failure by the time the drive returns.
+    failed: bool,
+    /// The login storage preflight's gate, present only when a background
+    /// driver runs the preflight. The network login must await it and
+    /// settle it successfully before the token exchange starts.
+    preflight: Option<Task<Result<(), SessionError>>>,
+}
+
+/// A login attempt cleared to start. The network exchange must not begin
+/// until `storage_preflight` settles successfully: it proves the store can
+/// accept the session, so an unwritable store fails the login before any
+/// token is exchanged instead of stranding a session that cannot be
+/// persisted. `None` means the driver settled the preflight synchronously.
+pub(super) struct LoginStart {
+    pub(super) generation: u64,
+    pub(super) identity: DeviceIdentity,
+    pub(super) login_epoch: u64,
+    pub(super) storage_preflight: Option<Task<Result<(), SessionError>>>,
 }
 
 /// A staged durable write plus everything needed to apply or revert its
@@ -184,7 +212,11 @@ pub(super) enum SessionWriteKind {
 }
 
 /// Presentation state captured before an optimistic write so a failed write
-/// restores exactly the pre-write presentation.
+/// restores the pre-write presentation. Session-backed mirrors (the token
+/// and the provider identities) additionally survive only when the durable
+/// session still contains the same value, because a capture taken between
+/// an optimistic application and its failed write would otherwise
+/// resurrect state the store never accepted.
 pub(super) struct SessionRevertState {
     token: Option<String>,
     profile: Option<AccountProfile>,
@@ -192,7 +224,6 @@ pub(super) struct SessionRevertState {
     device_limit_exceeded: bool,
     deezer_profile: Option<ServiceIdentity>,
     soundcloud_profile: Option<ServiceIdentity>,
-    soundcloud_username: Option<String>,
     deezer_cookies: Option<String>,
 }
 
@@ -209,23 +240,38 @@ impl SessionPersistence for Context<'_, AccountState> {
             revert,
             written,
         } = pending;
+        let is_login_preflight = matches!(kind, SessionWriteKind::LoginPreflight { .. });
         let account = self.entity().downgrade();
-        SessionWriteDispatch::Scheduled(self.spawn(async move |_, cx| {
-            // Chaining on the previous write serializes writes per store:
-            // a later snapshot can never reach the disk before an earlier
-            // one, so the disk always ends at the newest staged session.
-            if let Some(previous) = previous {
-                let _ = previous.await;
-            }
-            let result = cx
-                .background_executor()
-                .spawn(async move { write.persist() })
-                .await;
-            let _ = account.update(cx, |account, cx| {
-                account.complete_session_write(cx, generation, kind, revert, written, result);
-                cx.notify();
-            });
-        }))
+        // Settles the login preflight gate once the write's outcome has
+        // been applied to the entity.
+        let (settled_sender, settled_receiver) = oneshot::channel();
+        SessionWriteDispatch::Scheduled {
+            task: self.spawn(async move |_, cx| {
+                // Chaining on the previous write serializes writes per store:
+                // a later snapshot can never reach the disk before an earlier
+                // one, so the disk always ends at the newest staged session.
+                if let Some(previous) = previous {
+                    let _ = previous.await;
+                }
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { write.persist() })
+                    .await;
+                let settled = result.clone();
+                let _ = account.update(cx, |account, cx| {
+                    account.complete_session_write(cx, generation, kind, revert, written, result);
+                    cx.notify();
+                });
+                let _ = settled_sender.send(settled);
+            }),
+            preflight: is_login_preflight.then(|| {
+                self.spawn(async move |_, _| {
+                    settled_receiver
+                        .await
+                        .unwrap_or(Err(SessionError::Filesystem))
+                })
+            }),
+        }
     }
 
     fn install_quit_drain(&mut self) {
@@ -443,7 +489,7 @@ impl AccountState {
     pub(super) fn begin_login(
         &mut self,
         persistence: &mut impl SessionPersistence,
-    ) -> Option<(u64, DeviceIdentity, u64)> {
+    ) -> Option<LoginStart> {
         if !self.settings_active || self.loading {
             return None;
         }
@@ -454,16 +500,19 @@ impl AccountState {
         // Preflight the store by writing the unchanged session: the login
         // flow must not start against storage that cannot accept a token.
         // The write goes through the same driver as every other persistence
-        // operation, so slow storage cannot block the UI thread.
+        // operation, so slow storage cannot block the UI thread. The
+        // returned gate makes the preflight actually gate the login: the
+        // network exchange must not start until it settles successfully,
+        // and the loading state below covers that wait.
         let login_epoch = self.murglar_login_epoch.wrapping_add(1);
         let preflight = store.prepare_write();
-        let failed = self.drive_session_write(
+        let outcome = self.drive_session_write(
             persistence,
             SessionWriteKind::LoginPreflight { login_epoch },
             self.revert_state(),
             preflight,
         );
-        if failed {
+        if outcome.failed {
             return None;
         }
         let identity = match &self.identity {
@@ -487,7 +536,12 @@ impl AccountState {
         self.referral_copy_status = None;
         self.plans_status = None;
         self.session_error = None;
-        Some((self.generation, identity, login_epoch))
+        Some(LoginStart {
+            generation: self.generation,
+            identity,
+            login_epoch,
+            storage_preflight: outcome.preflight,
+        })
     }
 
     pub(super) fn complete_token_exchange(
@@ -524,12 +578,14 @@ impl AccountState {
                 // reverts the account and surfaces the error on the entity.
                 let token = token.into_inner();
                 let write = store.stage_murglar(token.clone());
-                let failed = self.drive_session_write(
-                    persistence,
-                    SessionWriteKind::MurglarSignIn { generation },
-                    self.revert_state(),
-                    write,
-                );
+                let failed = self
+                    .drive_session_write(
+                        persistence,
+                        SessionWriteKind::MurglarSignIn { generation },
+                        self.revert_state(),
+                        write,
+                    )
+                    .failed;
                 if failed {
                     return None;
                 }
@@ -585,12 +641,14 @@ impl AccountState {
                 self.murglar_summary_trusted = match self.session_store.as_mut() {
                     Some(store) => {
                         let write = store.stage_profile_summary(Some(summary));
-                        !self.drive_session_write(
-                            persistence,
-                            SessionWriteKind::ProfileSummary,
-                            self.revert_state(),
-                            write,
-                        )
+                        !self
+                            .drive_session_write(
+                                persistence,
+                                SessionWriteKind::ProfileSummary,
+                                self.revert_state(),
+                                write,
+                            )
+                            .failed
                     }
                     None => false,
                 };
@@ -613,6 +671,7 @@ impl AccountState {
                             self.revert_state(),
                             write,
                         )
+                        .failed
                     }
                     None => {
                         self.session_error = Some(SessionError::Filesystem);
@@ -701,15 +760,17 @@ impl AccountState {
         match self.session_store.as_mut() {
             Some(store) => {
                 // Token and cached summary disappear in one durable
-                // transition; a failure keeps the signed-in token and
-                // surfaces the error.
+                // transition; a failure keeps the token as far as it is
+                // durable and surfaces the error.
                 let write = store.stage_murglar_signout();
-                let failed = self.drive_session_write(
-                    persistence,
-                    SessionWriteKind::MurglarSignOut,
-                    self.revert_state(),
-                    write,
-                );
+                let failed = self
+                    .drive_session_write(
+                        persistence,
+                        SessionWriteKind::MurglarSignOut,
+                        self.revert_state(),
+                        write,
+                    )
+                    .failed;
                 if !failed {
                     self.token = None;
                     self.session_error = None;
@@ -952,12 +1013,15 @@ impl AccountState {
                     credentials.deezer_user_id,
                     profile.clone(),
                 );
-                if self.drive_session_write(
-                    persistence,
-                    SessionWriteKind::ServiceLogin { service },
-                    self.revert_state(),
-                    write,
-                ) {
+                if self
+                    .drive_session_write(
+                        persistence,
+                        SessionWriteKind::ServiceLogin { service },
+                        self.revert_state(),
+                        write,
+                    )
+                    .failed
+                {
                     // The write completion already surfaced the scoped error.
                     return;
                 }
@@ -1015,12 +1079,15 @@ impl AccountState {
         match self.session_store.as_mut() {
             Some(store) => {
                 let write = store.stage_service_clear(service);
-                if self.drive_session_write(
-                    persistence,
-                    SessionWriteKind::ServiceSignOut { service },
-                    self.revert_state(),
-                    write,
-                ) {
+                if self
+                    .drive_session_write(
+                        persistence,
+                        SessionWriteKind::ServiceSignOut { service },
+                        self.revert_state(),
+                        write,
+                    )
+                    .failed
+                {
                     // The write completion already surfaced the scoped error.
                     return;
                 }
@@ -1066,12 +1133,15 @@ impl AccountState {
         match self.session_store.as_mut() {
             Some(store) => {
                 let write = store.stage_clear_all_services();
-                if self.drive_session_write(
-                    persistence,
-                    SessionWriteKind::AllServicesSignOut,
-                    self.revert_state(),
-                    write,
-                ) {
+                if self
+                    .drive_session_write(
+                        persistence,
+                        SessionWriteKind::AllServicesSignOut,
+                        self.revert_state(),
+                        write,
+                    )
+                    .failed
+                {
                     // The write completion already surfaced the error.
                     return;
                 }
@@ -1174,14 +1244,17 @@ impl AccountState {
                     return;
                 };
                 let write = store.stage_service_profile(Service::SoundCloud, Some(profile.clone()));
-                if self.drive_session_write(
-                    persistence,
-                    SessionWriteKind::ServiceProfile {
-                        service: Service::SoundCloud,
-                    },
-                    self.revert_state(),
-                    write,
-                ) {
+                if self
+                    .drive_session_write(
+                        persistence,
+                        SessionWriteKind::ServiceProfile {
+                            service: Service::SoundCloud,
+                        },
+                        self.revert_state(),
+                        write,
+                    )
+                    .failed
+                {
                     // The write completion already surfaced the scoped error.
                     return;
                 }
@@ -1235,14 +1308,17 @@ impl AccountState {
                     return;
                 };
                 let write = store.stage_deezer_identity(Some(profile.clone()), jar_snapshot);
-                if self.drive_session_write(
-                    persistence,
-                    SessionWriteKind::ServiceProfile {
-                        service: Service::Deezer,
-                    },
-                    self.revert_state(),
-                    write,
-                ) {
+                if self
+                    .drive_session_write(
+                        persistence,
+                        SessionWriteKind::ServiceProfile {
+                            service: Service::Deezer,
+                        },
+                        self.revert_state(),
+                        write,
+                    )
+                    .failed
+                {
                     // The write completion already surfaced the scoped error.
                     return;
                 }
@@ -1278,28 +1354,53 @@ impl AccountState {
             device_limit_exceeded: self.device_limit_exceeded,
             deezer_profile: self.deezer_profile.clone(),
             soundcloud_profile: self.soundcloud_profile.clone(),
-            soundcloud_username: self.soundcloud_username.clone(),
             deezer_cookies: self.deezer_cookie_jar.snapshot(),
         }
     }
 
     fn restore_signin_mirrors(&mut self, revert: &SessionRevertState) {
-        self.token = revert.token.clone();
+        self.token = self.backed_token(revert.token.clone());
         self.profile = revert.profile.clone();
         self.status = revert.status.clone();
         self.device_limit_exceeded = revert.device_limit_exceeded;
     }
 
     fn restore_service_mirrors(&mut self, revert: &SessionRevertState) {
-        self.deezer_profile = revert.deezer_profile.clone();
-        self.soundcloud_profile = revert.soundcloud_profile.clone();
-        self.soundcloud_username = revert.soundcloud_username.clone();
+        self.deezer_profile = self.backed_mirror(
+            revert.deezer_profile.clone(),
+            self.durable_session.deezer_profile(),
+        );
+        self.soundcloud_profile = self.backed_mirror(
+            revert.soundcloud_profile.clone(),
+            self.durable_session.soundcloud_profile(),
+        );
+        self.soundcloud_username = self
+            .soundcloud_profile
+            .as_ref()
+            .map(|profile| profile.username.clone());
         self.deezer_cookie_jar = DeezerCookieJar::new(revert.deezer_cookies.clone());
     }
 
-    /// Stages a durable write through `persistence` and returns whether the
-    /// write already failed. On a synchronous driver the failure has been
-    /// fully reverted by the time this returns; on a background driver the
+    /// The captured Murglar token, kept only when the durable session still
+    /// contains it.
+    fn backed_token(&self, captured: Option<String>) -> Option<String> {
+        let durable = self.durable_session.murglar();
+        captured.filter(|token| token.as_str() == durable)
+    }
+
+    /// A captured session-backed mirror, kept only when the durable session
+    /// still contains the same value. A capture taken after an optimistic
+    /// write that also failed would otherwise resurrect state the store
+    /// never accepted; a cleared mirror instead hides durable content
+    /// until the next load, which is how a failed login flow already
+    /// treats a saved session.
+    fn backed_mirror<T: Clone + Eq>(&self, captured: Option<T>, durable: Option<&T>) -> Option<T> {
+        captured.filter(|value| Some(value) == durable)
+    }
+
+    /// Stages a durable write through `persistence` and reports how the
+    /// driver left it. On a synchronous driver a failure has been fully
+    /// reverted by the time this returns; on a background driver the
     /// outcome arrives later on the entity.
     fn drive_session_write(
         &mut self,
@@ -1307,7 +1408,7 @@ impl AccountState {
         kind: SessionWriteKind,
         revert: SessionRevertState,
         write: SessionWrite,
-    ) -> bool {
+    ) -> DrivenWrite {
         self.session_write_generation = self.session_write_generation.wrapping_add(1);
         let generation = self.session_write_generation;
         let written = write.session().clone();
@@ -1335,11 +1436,17 @@ impl AccountState {
                     pending.written,
                     result,
                 );
-                failed
+                DrivenWrite {
+                    failed,
+                    preflight: None,
+                }
             }
-            SessionWriteDispatch::Scheduled(task) => {
+            SessionWriteDispatch::Scheduled { task, preflight } => {
                 self.session_write_chain = Some(task);
-                false
+                DrivenWrite {
+                    failed: false,
+                    preflight,
+                }
             }
         }
     }
@@ -1348,7 +1455,10 @@ impl AccountState {
     /// content; failure rolls the store back to it, re-writes it so a
     /// half-renamed pair cannot resurrect the change, and surfaces the error
     /// the same way the synchronous path did. Outcomes of superseded writes
-    /// are dropped: a newer write already governs the session.
+    /// are dropped: a newer write governs the session, and its failure
+    /// restores session-backed mirrors only as far as the durable session
+    /// backs them, so an optimistic write that also failed can never be
+    /// resurrected through a later capture.
     fn complete_session_write(
         &mut self,
         persistence: &mut impl SessionPersistence,
@@ -1411,7 +1521,7 @@ impl AccountState {
                 self.generation = self.generation.wrapping_add(1);
             }
             SessionWriteKind::MurglarSignOut => {
-                self.token = revert.token.clone();
+                self.token = self.backed_token(revert.token.clone());
                 self.session_error = Some(error);
             }
             SessionWriteKind::ProfileSummary => {
@@ -1428,7 +1538,7 @@ impl AccountState {
                 self.set_service_status(service, "The account could not be signed out.");
             }
             SessionWriteKind::AllServicesSignOut => {
-                self.token = revert.token.clone();
+                self.token = self.backed_token(revert.token.clone());
                 self.restore_service_mirrors(&revert);
                 self.session_error = Some(error);
                 self.set_all_service_status("The account sessions could not be cleared.");

@@ -142,7 +142,7 @@ impl SettingsView {
 
         self.password
             .update(cx, |input, cx| input.set_value("", window, cx));
-        let Some((generation, identity, logout_epoch)) = self.account.update(cx, |account, cx| {
+        let Some(login) = self.account.update(cx, |account, cx| {
             let login = account.begin_login(cx);
             cx.notify();
             login
@@ -150,14 +150,23 @@ impl SettingsView {
             return;
         };
 
-        let client = MurglarClient::with_client(self.http_client.clone(), identity);
-        let task = self.runtime.spawn(async move {
-            let token = client.exchange_token(username, password).await?;
-            Ok((client, token))
-        });
+        let http_client = self.http_client.clone();
         let runtime = self.runtime.clone();
         let account = self.account.downgrade();
         cx.spawn(async move |_, cx| {
+            // The storage preflight must settle before the network login
+            // starts: an unwritable store rejects the login up front
+            // instead of stranding a session that cannot be persisted.
+            if let Some(preflight) = login.storage_preflight
+                && preflight.await.is_err()
+            {
+                return;
+            }
+            let client = MurglarClient::with_client(http_client, login.identity);
+            let task = runtime.spawn(async move {
+                let token = client.exchange_token(username, password).await?;
+                Ok((client, token))
+            });
             let result = account_task_result(task).await;
             let (client, result) = match result {
                 Ok((client, token)) => (Some(client), Ok(token)),
@@ -165,8 +174,12 @@ impl SettingsView {
             };
             let persisted_token = account
                 .update(cx, |account, cx| {
-                    let token =
-                        account.complete_token_exchange(generation, logout_epoch, result, cx);
+                    let token = account.complete_token_exchange(
+                        login.generation,
+                        login.login_epoch,
+                        result,
+                        cx,
+                    );
                     cx.notify();
                     token
                 })
@@ -187,8 +200,8 @@ impl SettingsView {
                 .update(cx, |account, cx| {
                     let (profile, extras) =
                         result.unwrap_or_else(|error| (Err(error), MurglarClient::empty_extras()));
-                    let profile_changed = account.complete_profile(generation, profile, cx);
-                    let extras_changed = account.complete_extras(generation, extras);
+                    let profile_changed = account.complete_profile(login.generation, profile, cx);
+                    let extras_changed = account.complete_extras(login.generation, extras);
                     if profile_changed || extras_changed {
                         cx.notify();
                     }
