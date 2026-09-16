@@ -662,6 +662,8 @@ impl RalgrumApp {
                 cache.clone(),
                 saved.background_audio_cache,
                 saved.output_device.clone(),
+                saved.asio_mode,
+                saved.asio_driver.clone(),
                 saved.seamless_playback,
                 saved.record_deezer_plays,
                 listen_history_changed.clone(),
@@ -1042,6 +1044,8 @@ impl RalgrumApp {
                 saved.soundcloud_search_suggestions,
                 saved.motion_preference.is_reduced(),
                 saved.output_device.clone(),
+                saved.asio_mode,
+                saved.asio_driver.clone(),
             )
         };
         cx.observe(&settings, move |this, _, cx| {
@@ -1057,6 +1061,8 @@ impl RalgrumApp {
                 saved.soundcloud_search_suggestions,
                 saved.motion_preference.is_reduced(),
                 saved.output_device.clone(),
+                saved.asio_mode,
+                saved.asio_driver.clone(),
             );
             if last_applied_settings != current {
                 let previous_motion_reduced = last_applied_settings.8;
@@ -1071,6 +1077,8 @@ impl RalgrumApp {
                     soundcloud_search_suggestions,
                     motion_reduced,
                     output_device,
+                    asio_mode,
+                    asio_driver,
                 ) = current.clone();
                 last_applied_settings = current;
                 this.playback.update(cx, |playback, cx| {
@@ -1080,7 +1088,7 @@ impl RalgrumApp {
                     playback.set_seamless_playback(seamless_playback);
                     playback.set_provider_play_reporting(record_deezer_plays);
                     playback.set_skip_explicit(block_explicit, cx);
-                    playback.set_output_device(output_device, cx);
+                    playback.set_audio_output(asio_mode, output_device, asio_driver, cx);
                 });
                 match motion_transition(previous_motion_reduced, motion_reduced) {
                     MotionTransition::Unchanged => {}

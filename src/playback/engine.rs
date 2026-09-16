@@ -14,6 +14,7 @@ use std::{
 use futures::channel::oneshot;
 use ogg::reading::PacketReader;
 use opus_decoder::OpusDecoder;
+use rodio::cpal::traits::DeviceTrait;
 use rodio::{
     Decoder, OutputStream, OutputStreamBuilder, Sink, Source, buffer::SamplesBuffer,
     source::SeekError,
@@ -22,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics;
 
+use super::asio_drivers::find_asio_driver;
 use super::fade::{USER_FADE_FRAME, USER_FADE_SETTLE_TIMEOUT};
 use super::output_devices::find_output_device;
 use super::progressive::{
@@ -100,11 +102,13 @@ pub(crate) enum SeekOutcome {
 }
 
 /// Output device the engine plays through. Device names are the endpoint
-/// names the default host reports, which stay stable on Windows.
+/// names the default host reports, which stay stable on Windows. ASIO
+/// driver names come from the registry's ASIO key.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AudioOutputTarget {
     SystemDefault,
     Device(String),
+    AsioDriver(String),
 }
 
 /// Outcome of switching the engine to another output target.
@@ -175,7 +179,38 @@ impl RodioEngine {
                     })
                     .map_err(|_| format!("The audio output device \"{name}\" could not be opened"))
             }
+            AudioOutputTarget::AsioDriver(name) => Self::open_asio_output_stream(name),
         }
+    }
+
+    /// Opens a stream through the named ASIO driver, logging the driver's
+    /// default output config once it is live. The lookup loads and
+    /// initializes drivers, and ASIO keeps a single driver loaded per
+    /// process, so a different live ASIO stream makes the lookup fail; the
+    /// caller then keeps the previous stream.
+    fn open_asio_output_stream(name: &str) -> Result<OutputStream, String> {
+        let device = find_asio_driver(name)
+            .ok_or_else(|| format!("The ASIO driver \"{name}\" could not be started"))?;
+        let config = device.default_output_config().ok();
+        let stream = OutputStreamBuilder::from_device(device)
+            .and_then(|builder| {
+                builder
+                    .with_error_callback(log_output_stream_error)
+                    .open_stream_or_fallback()
+            })
+            .map_err(|_| format!("The ASIO driver \"{name}\" could not be started"))?;
+        if let Some(config) = config {
+            diagnostics::event(
+                "INFO",
+                format!(
+                    "ASIO driver \"{name}\" opened at {} Hz, {} channels, sample format {}",
+                    config.sample_rate().0,
+                    config.channels(),
+                    config.sample_format(),
+                ),
+            );
+        }
+        Ok(stream)
     }
 
     /// Waits until the shared transport ramp settles on `target`. Bounded
@@ -1078,7 +1113,9 @@ impl AudioEngine for RodioEngine {
         }
         let label = match &target {
             AudioOutputTarget::SystemDefault => "the system default".to_owned(),
-            AudioOutputTarget::Device(name) => format!("\"{name}\""),
+            AudioOutputTarget::Device(name) | AudioOutputTarget::AsioDriver(name) => {
+                format!("\"{name}\"")
+            }
         };
         diagnostics::event("INFO", format!("audio output switched to {label}"));
         self.output_target = target;

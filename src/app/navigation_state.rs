@@ -205,6 +205,8 @@ pub(crate) struct AppSettings {
     pub(crate) block_explicit_content: bool,
     pub(crate) seamless_playback: bool,
     pub(crate) output_device: Option<String>,
+    pub(crate) asio_mode: bool,
+    pub(crate) asio_driver: Option<String>,
     pub(crate) remember_playback_modes: bool,
     pub(crate) lyrics_source: LyricsSource,
     pub(crate) volume: f32,
@@ -374,6 +376,8 @@ impl Default for AppSettings {
             block_explicit_content: false,
             seamless_playback: true,
             output_device: None,
+            asio_mode: false,
+            asio_driver: None,
             remember_playback_modes: true,
             lyrics_source: LyricsSource::Musixmatch,
             volume: 0.8,
@@ -635,9 +639,11 @@ mod tests {
                 ,"recordDeezerPlays": true
                 ,"soundcloudSearchSuggestions": true
                 ,"searchHistory": []
+                ,"outputDevice": null
                 ,"rightSidebarOpen": false
                 ,"rightSidebarView": "lyrics"
-                ,"outputDevice": null
+                ,"asioMode": false
+                ,"asioDriver": null
             })
         );
     }
@@ -660,6 +666,26 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(legacy.output_device, None);
+    }
+
+    #[test]
+    fn asio_settings_round_trip_and_old_settings_default_to_off() {
+        let mut settings = AppSettings::default();
+        settings.asio_mode = true;
+        settings.asio_driver = Some("MiniFuse ASIO Driver".into());
+        let encoded = serde_json::to_value(&settings).unwrap();
+        assert_eq!(encoded["asioMode"], true);
+        assert_eq!(encoded["asioDriver"], "MiniFuse ASIO Driver");
+        let decoded = serde_json::from_value::<AppSettings>(encoded).unwrap();
+        assert!(decoded.asio_mode);
+        assert_eq!(decoded.asio_driver, Some("MiniFuse ASIO Driver".into()));
+
+        let legacy = serde_json::from_value::<AppSettings>(json!({
+            "seamlessPlayback": true,
+        }))
+        .unwrap();
+        assert!(!legacy.asio_mode);
+        assert_eq!(legacy.asio_driver, None);
     }
 
     #[test]

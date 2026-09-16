@@ -65,7 +65,7 @@ pub(crate) fn output_device_selected_index(options: &[String], saved: Option<&st
         .unwrap_or(0)
 }
 
-fn sorted_deduped(names: &[String]) -> Vec<String> {
+pub(crate) fn sorted_deduped(names: &[String]) -> Vec<String> {
     let mut sorted = names.to_vec();
     sorted.sort();
     sorted.dedup();

@@ -49,7 +49,12 @@ impl RalgrumApp {
                 window,
                 cx,
             );
-            playback.set_output_device(imported.output_device.clone(), cx);
+            playback.set_audio_output(
+                imported.asio_mode,
+                imported.output_device.clone(),
+                imported.asio_driver.clone(),
+                cx,
+            );
         });
 
         let source = source_from_stored(imported.source_filter);

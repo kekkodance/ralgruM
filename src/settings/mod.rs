@@ -24,7 +24,7 @@ use crate::{
     navigation_state::{
         AppSettings, LyricsSource, RightSidebarView, SettingsError, SettingsStore, StartPage,
     },
-    playback::{AudioCache, LIMITS_MB, Overview, output_devices},
+    playback::{AudioCache, LIMITS_MB, Overview, asio_drivers, output_devices},
     theme::{BACKGROUND, BORDER, FOREGROUND, MUTED},
 };
 mod about_panel;
@@ -361,9 +361,12 @@ impl SettingsView {
                 cx,
             ),
             output_device_select: {
-                let (labels, selected) =
-                    Self::output_device_picker(saved_for_selects.output_device.as_deref());
-                Self::make_select(labels, Some(selected), window, cx)
+                let (labels, selected) = Self::output_device_picker(
+                    saved_for_selects.asio_mode,
+                    saved_for_selects.output_device.as_deref(),
+                    saved_for_selects.asio_driver.as_deref(),
+                );
+                Self::make_select(labels, selected, window, cx)
             },
             cache_limit_select: Self::make_select(
                 LIMITS_MB
@@ -407,11 +410,22 @@ impl SettingsView {
         all.iter().position(|item| *item == value).unwrap_or(0)
     }
 
-    /// Entries and selected row for the output device picker. A saved device
-    /// that is no longer attached selects the system default row.
-    fn output_device_picker(saved: Option<&str>) -> (Vec<SharedString>, usize) {
-        let options = output_devices::output_device_options(&output_devices::list_output_devices());
-        if let Some(name) = saved
+    /// Entries and selected row for the output device picker. WASAPI mode
+    /// lists the system default plus devices and selects the saved device;
+    /// ASIO mode lists the registry drivers and selects the saved driver,
+    /// falling back to the first entry when nothing valid is saved.
+    fn output_device_picker(
+        asio_mode: bool,
+        output_device: Option<&str>,
+        asio_driver: Option<&str>,
+    ) -> (Vec<SharedString>, Option<usize>) {
+        let options = asio_drivers::picker_options(
+            asio_mode,
+            &asio_drivers::list_registry_asio_drivers(),
+            output_devices::output_device_options(&output_devices::list_output_devices()),
+        );
+        if !asio_mode
+            && let Some(name) = output_device
             && !options.iter().any(|option| option == name)
         {
             diagnostics::event(
@@ -419,11 +433,36 @@ impl SettingsView {
                 format!("the saved output device \"{name}\" is not available"),
             );
         }
+        let saved = if asio_mode {
+            asio_driver
+        } else {
+            output_device
+        };
         let selected = output_devices::output_device_selected_index(&options, saved);
+        let has_rows = !options.is_empty();
         (
             options.into_iter().map(SharedString::from).collect(),
-            selected,
+            has_rows.then_some(selected),
         )
+    }
+
+    /// Rebuilds the output device picker for the current draft. The row
+    /// list depends on the ASIO mode, so the toggle and every session
+    /// reset refresh both the items and the selected row.
+    fn refresh_output_device_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (labels, selected) = Self::output_device_picker(
+            self.draft.asio_mode,
+            self.draft.output_device.as_deref(),
+            self.draft.asio_driver.as_deref(),
+        );
+        self.output_device_select.update(cx, |select, cx| {
+            select.set_items(labels, window, cx);
+            select.set_selected_index(
+                selected.map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            );
+        });
     }
 
     fn subscribe_selects(&mut self, cx: &mut Context<Self>) {
@@ -470,12 +509,20 @@ impl SettingsView {
             &self.output_device_select,
             |this, _, event: &SelectEvent<Vec<SharedString>>, cx| {
                 if let SelectEvent::Confirm(Some(value)) = event {
-                    let device = if value.as_ref() == output_devices::SYSTEM_DEFAULT_OUTPUT_LABEL {
-                        None
+                    if this.draft.asio_mode {
+                        this.update_draft_and_persist(
+                            |draft| draft.asio_driver = Some(value.to_string()),
+                            cx,
+                        );
                     } else {
-                        Some(value.to_string())
-                    };
-                    this.update_draft_and_persist(|draft| draft.output_device = device, cx);
+                        let device =
+                            if value.as_ref() == output_devices::SYSTEM_DEFAULT_OUTPUT_LABEL {
+                                None
+                            } else {
+                                Some(value.to_string())
+                            };
+                        this.update_draft_and_persist(|draft| draft.output_device = device, cx);
+                    }
                 }
             },
         )
@@ -547,10 +594,7 @@ impl SettingsView {
                 cx,
             )
         });
-        let (_, output_device) = Self::output_device_picker(self.draft.output_device.as_deref());
-        self.output_device_select.update(cx, |select, cx| {
-            select.set_selected_index(Some(IndexPath::default().row(output_device)), window, cx)
-        });
+        self.refresh_output_device_select(window, cx);
     }
 
     pub(crate) fn select_category(

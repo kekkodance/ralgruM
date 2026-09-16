@@ -1,3 +1,4 @@
+pub(crate) mod asio_drivers;
 mod cache;
 mod deezer_extension;
 mod download_variant;

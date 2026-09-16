@@ -52,6 +52,7 @@ gpui = { git = "https://github.com/zed-industries/zed", features = ["test-suppor
 embed-resource = "3.0.11"
 
 [target.'cfg(windows)'.dependencies]
+cpal = { version = "0.16.0", features = ["asio"] }
 raw-window-handle = "0.6"
 tray-icon = { version = "=0.24.1", default-features = false }
 wry = { version = "0.55.1", default-features = false }

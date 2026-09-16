@@ -24,7 +24,7 @@ use super::state::{ExactQueueAppend, ExactQueueAppendTicket};
 use super::{
     AudioCache, DeezerFlowKind, ExtensionApply, PlaybackContext, PlaybackProvider, PlaybackState,
     PlaybackStatus, PlaybackTrack, PreviousAction, QueueExtensionTicket, ResolvedTrackInfo,
-    RightSidebar,
+    RightSidebar, asio_drivers,
     deezer_extension::{self, ExtensionObserverKey},
     engine::{
         AudioEngine, AudioOutputTarget, OutputSwitch, RodioEngine, SeekCompletion, SeekOutcome,
@@ -303,18 +303,42 @@ fn pause_silently(set_volume: impl FnOnce(), pause: impl FnOnce()) {
     pause();
 }
 
-/// Resolves the saved output device setting into an engine target, falling
-/// back to the system default when the device is no longer attached.
-fn resolve_saved_output_target(device: Option<&str>) -> AudioOutputTarget {
-    let target =
-        output_devices::resolve_output_target(device, &output_devices::list_output_devices());
-    if let Some(name) = device
+/// Resolves the saved output selection into an engine target. ASIO mode
+/// plays through the saved driver, falling back to the first installed
+/// one; WASAPI mode falls back to the system default when the device is
+/// no longer attached. Either way a vanished selection never blocks
+/// audio.
+fn resolve_saved_output_target(
+    asio_mode: bool,
+    output_device: Option<&str>,
+    asio_driver: Option<&str>,
+) -> AudioOutputTarget {
+    let wasapi_devices = output_devices::list_output_devices();
+    let registry_drivers = asio_drivers::list_registry_asio_drivers();
+    let target = asio_drivers::effective_target(
+        asio_mode,
+        asio_driver,
+        &registry_drivers,
+        output_device,
+        &wasapi_devices,
+    );
+    let saved_name = if asio_mode {
+        asio_driver
+    } else {
+        output_device
+    };
+    if let Some(name) = saved_name
         && target == AudioOutputTarget::SystemDefault
     {
         diagnostics::event(
             "WARN",
             format!(
-                "the saved audio output device \"{name}\" is unavailable, using the system default"
+                "the saved {} \"{name}\" is unavailable, using the system default",
+                if asio_mode {
+                    "ASIO driver"
+                } else {
+                    "audio output device"
+                }
             ),
         );
     }
@@ -335,6 +359,8 @@ impl PlaybackModel {
         cache: AudioCache,
         background_audio_cache: bool,
         output_device: Option<String>,
+        asio_mode: bool,
+        asio_driver: Option<String>,
         seamless_playback: bool,
         record_deezer_plays: bool,
         listen_history_changed: Arc<ListenHistorySignal>,
@@ -364,7 +390,29 @@ impl PlaybackModel {
                 .step(0.01)
                 .default_value(volume)
         });
-        let engine = RodioEngine::new(resolve_saved_output_target(output_device.as_deref()));
+        let target = resolve_saved_output_target(
+            asio_mode,
+            output_device.as_deref(),
+            asio_driver.as_deref(),
+        );
+        let engine = match RodioEngine::new(target.clone()) {
+            Ok(engine) => Ok(engine),
+            // An unloadable saved ASIO driver must not brick the player:
+            // keep the setting and start on the system default instead.
+            Err(error) => match target {
+                AudioOutputTarget::AsioDriver(name) => {
+                    diagnostics::event(
+                        "WARN",
+                        format!(
+                            "the ASIO driver \"{name}\" could not be opened at startup, \
+                             using the system default: {error}"
+                        ),
+                    );
+                    RodioEngine::new(AudioOutputTarget::SystemDefault)
+                }
+                _ => Err(error),
+            },
+        };
         if let Ok(engine) = &engine {
             engine.set_volume(volume);
         }
@@ -1573,11 +1621,21 @@ impl PlaybackModel {
         self.arm_seek_completion(completion, cx);
     }
 
-    /// Moves the audio stream onto the saved output device. The engine no
-    /// ops when it already plays through that target, so imports and repeat
-    /// changes never rebuild the stream.
-    pub(crate) fn set_output_device(&mut self, device: Option<String>, cx: &mut Context<Self>) {
-        let target = resolve_saved_output_target(device.as_deref());
+    /// Moves the audio stream onto the saved output selection. The engine
+    /// no ops when it already plays through that target, so imports and
+    /// repeat changes never rebuild the stream.
+    pub(crate) fn set_audio_output(
+        &mut self,
+        asio_mode: bool,
+        output_device: Option<String>,
+        asio_driver: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let target = resolve_saved_output_target(
+            asio_mode,
+            output_device.as_deref(),
+            asio_driver.as_deref(),
+        );
         if !self
             .engine
             .as_ref()

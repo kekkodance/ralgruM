@@ -267,63 +267,90 @@ impl SettingsView {
     fn render_playback_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         settings_card()
             .child(card_heading(LocalIcon::Play, "Playback"))
-            .child(control_list(vec![
-                control_row(
-                    "Output device",
-                    "Choose where ralgruM plays audio.",
-                    settings_select(&self.output_device_select, 180.).into_any_element(),
-                ),
-                control_row(
-                    "Seamless transitions",
-                    "Preload the next track near the end for a clean handoff.",
-                    settings_switch(
-                        "seamless-playback",
-                        self.draft.seamless_playback,
-                        cx.listener(|this, checked: &bool, _, cx| {
-                            this.update_draft_and_persist(
-                                |draft| draft.seamless_playback = *checked,
-                                cx,
-                            );
-                        }),
-                    )
-                    .into_any_element(),
-                ),
-                control_row(
-                    "Remember shuffle and repeat",
-                    "Keep both playback modes after restarting.",
-                    settings_switch(
-                        "remember-playback-modes",
-                        self.draft.remember_playback_modes,
-                        cx.listener(|this, checked: &bool, _, cx| {
-                            this.update_draft_and_persist(
-                                |draft| draft.remember_playback_modes = *checked,
-                                cx,
-                            );
-                        }),
-                    )
-                    .into_any_element(),
-                ),
-                control_row(
-                    "Default lyrics provider",
-                    "You can still switch providers from the lyrics pane.",
-                    settings_select(&self.lyrics_source_select, 130.).into_any_element(),
-                ),
-                control_row(
-                    "Share activity with Discord",
-                    "Show the current track in Discord Rich Presence.",
-                    settings_switch(
-                        "discord-presence",
-                        self.draft.discord_presence,
-                        cx.listener(|this, checked: &bool, _, cx| {
-                            this.update_draft_and_persist(
-                                |draft| draft.discord_presence = *checked,
-                                cx,
-                            );
-                        }),
-                    )
-                    .into_any_element(),
-                ),
-            ]))
+            .child(control_list({
+                let mut playback_rows = vec![
+                    control_row(
+                        "Output device",
+                        "Choose where ralgruM plays audio.",
+                        settings_select(&self.output_device_select, 180.).into_any_element(),
+                    ),
+                    control_row(
+                        "ASIO mode",
+                        "Play through an ASIO driver instead of the Windows audio stack.",
+                        settings_switch(
+                            "asio-mode",
+                            self.draft.asio_mode,
+                            cx.listener(|this, checked: &bool, window, cx| {
+                                this.update_draft_and_persist(
+                                    |draft| draft.asio_mode = *checked,
+                                    cx,
+                                );
+                                // The dropdown contents depend on the mode,
+                                // so the picker re-renders with the other
+                                // list and that mode's saved selection.
+                                this.refresh_output_device_select(window, cx);
+                            }),
+                        )
+                        .into_any_element(),
+                    ),
+                ];
+                if self.draft.asio_mode {
+                    playback_rows.push(asio_mode_hint_row());
+                }
+                playback_rows.extend([
+                    control_row(
+                        "Seamless transitions",
+                        "Preload the next track near the end for a clean handoff.",
+                        settings_switch(
+                            "seamless-playback",
+                            self.draft.seamless_playback,
+                            cx.listener(|this, checked: &bool, _, cx| {
+                                this.update_draft_and_persist(
+                                    |draft| draft.seamless_playback = *checked,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .into_any_element(),
+                    ),
+                    control_row(
+                        "Remember shuffle and repeat",
+                        "Keep both playback modes after restarting.",
+                        settings_switch(
+                            "remember-playback-modes",
+                            self.draft.remember_playback_modes,
+                            cx.listener(|this, checked: &bool, _, cx| {
+                                this.update_draft_and_persist(
+                                    |draft| draft.remember_playback_modes = *checked,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .into_any_element(),
+                    ),
+                    control_row(
+                        "Default lyrics provider",
+                        "You can still switch providers from the lyrics pane.",
+                        settings_select(&self.lyrics_source_select, 130.).into_any_element(),
+                    ),
+                    control_row(
+                        "Share activity with Discord",
+                        "Show the current track in Discord Rich Presence.",
+                        settings_switch(
+                            "discord-presence",
+                            self.draft.discord_presence,
+                            cx.listener(|this, checked: &bool, _, cx| {
+                                this.update_draft_and_persist(
+                                    |draft| draft.discord_presence = *checked,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .into_any_element(),
+                    ),
+                ]);
+                playback_rows
+            }))
             .into_any_element()
     }
 }
@@ -406,6 +433,20 @@ fn control_list(rows: Vec<Div>) -> Div {
         }
     }
     list
+}
+
+/// Secondary hint under the ASIO mode toggle, shown only while the mode is
+/// on so the mixer trade-off is visible exactly when it applies.
+fn asio_mode_hint_row() -> Div {
+    div()
+        .w_full()
+        .py(px(6.))
+        .text_size(px(11.))
+        .text_color(rgb(MUTED))
+        .child(
+            "ASIO plays straight through the driver, bypassing the Windows mixer. \
+             Multi-client drivers keep other apps audible.",
+        )
 }
 
 fn cache_usage_box(status: String, visual: CacheMeterVisual) -> Div {
