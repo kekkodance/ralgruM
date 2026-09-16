@@ -1,13 +1,14 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs::{self, OpenOptions},
-    io::{self, Write},
+    fs,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, LazyLock, Mutex},
 };
 
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use super::cache_store::flush_write_behind;
+use super::cache_store::{WriteHookSlot, schedule_write};
 use super::model::{DiscoverAction, DiscoverSection};
 use crate::smart_mix_title::specific_smart_mix_title;
 
@@ -19,6 +20,11 @@ const LEGACY_CACHE_VERSION: u32 = 1;
 const MAX_SMART_TITLE_ENTRIES: usize = 32;
 const MAX_CACHE_FILE_BYTES: usize = 64 * 1024;
 const MAX_STABLE_ID_CHARS: usize = 128;
+
+/// Test observation point for this cache's durable writes. The slot is
+/// per cache, so tests of other Discover caches can never clear or fire
+/// this hook, and every queued write carries it to the shared writer.
+static WRITE_HOOK: WriteHookSlot = WriteHookSlot::new();
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SmartTitleCache {
@@ -221,7 +227,10 @@ impl SmartTitleCache {
         let Some(path) = self.storage_path.clone() else {
             return;
         };
-        schedule_write(path, self.snapshot());
+        let Ok(bytes) = serde_json::to_vec_pretty(&self.snapshot()) else {
+            return;
+        };
+        schedule_write(path, bytes, &WRITE_HOOK);
     }
 
     fn snapshot(&self) -> PersistedSmartTitles {
@@ -273,203 +282,13 @@ fn normalized_stable_id(value: &str) -> Option<String> {
     }
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cache path"))?;
-    fs::create_dir_all(parent)?;
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cache filename"))?;
-    for _ in 0..8 {
-        let temporary = parent.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(mut file) => {
-                let result = file
-                    .write_all(bytes)
-                    .and_then(|_| file.sync_all())
-                    .and_then(|_| atomic_replace(&temporary, path));
-                if result.is_err() {
-                    let _ = fs::remove_file(&temporary);
-                }
-                return result;
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "cache temporary file contention",
-    ))
-}
-
-#[cfg(windows)]
-fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    };
-    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
-    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    if unsafe {
-        MoveFileExW(
-            from.as_ptr(),
-            to.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    } == 0
-    {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(not(windows))]
-fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
-    fs::rename(from, to)
-}
-
-/// Pending durable writes, keyed by cache path so the latest snapshot
-/// replaces any earlier one that has not reached disk yet.
-#[derive(Default)]
-struct WriteBehindState {
-    pending: HashMap<PathBuf, PersistedSmartTitles>,
-    enqueued: u64,
-    written: u64,
-}
-
-/// Single background writer for title-cache snapshots. The in-memory map
-/// stays authoritative for the session; durable writes happen off the
-/// state-update path and coalesce per path, so the last state wins.
-#[derive(Default)]
-struct WriteBehind {
-    state: Mutex<WriteBehindState>,
-    idle: Condvar,
-}
-
-static WRITE_BEHIND: LazyLock<Option<Arc<WriteBehind>>> = LazyLock::new(|| {
-    let worker = Arc::new(WriteBehind::default());
-    let spawned = worker.clone();
-    std::thread::Builder::new()
-        .name("discover-title-cache-writer".to_owned())
-        .spawn(move || run_write_behind(spawned))
-        .is_ok()
-        .then_some(worker)
-});
-
-/// Hand a snapshot to the writer thread. Returns as soon as the snapshot
-/// is queued; the durable write happens in the background. If the writer
-/// thread could not be spawned, fall back to a synchronous write, matching
-/// the old behavior.
-fn schedule_write(path: PathBuf, document: PersistedSmartTitles) {
-    let Some(worker) = WRITE_BEHIND.as_ref() else {
-        durable_write(&path, &document);
-        return;
-    };
-    let mut state = worker
-        .state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.pending.insert(path, document);
-    state.enqueued += 1;
-    drop(state);
-    worker.idle.notify_all();
-}
-
-fn run_write_behind(worker: Arc<WriteBehind>) {
-    loop {
-        let mut state = worker
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        while state.pending.is_empty() {
-            state = worker
-                .idle
-                .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-        }
-        let batch = std::mem::take(&mut state.pending);
-        let written_through = state.enqueued;
-        drop(state);
-        for (path, document) in &batch {
-            durable_write(path, document);
-        }
-        let mut state = worker
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.written = state.written.max(written_through);
-        worker.idle.notify_all();
-    }
-}
-
-fn durable_write(path: &Path, document: &PersistedSmartTitles) {
-    #[cfg(test)]
-    run_test_write_hook(path);
-    let Ok(bytes) = serde_json::to_vec_pretty(document) else {
-        return;
-    };
-    let _ = write_atomic(path, &bytes);
-}
-
-#[cfg(test)]
-type TestWriteHook = Box<dyn Fn(&Path) + Send>;
-
-#[cfg(test)]
-static TEST_WRITE_HOOK: Mutex<Option<TestWriteHook>> = Mutex::new(None);
-
-#[cfg(test)]
-fn set_write_hook(hook: Option<TestWriteHook>) {
-    *TEST_WRITE_HOOK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = hook;
-}
-
-/// Tests install this hook to observe and delay durable writes. It runs
-/// before the real write, which still happens once the hook returns.
-#[cfg(test)]
-fn run_test_write_hook(path: &Path) {
-    let guard = TEST_WRITE_HOOK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(hook) = guard.as_ref() {
-        hook(path);
-    }
-}
-
-/// Block until every queued snapshot has been written. Test-only
-/// determinism helper; production relies on the writer draining promptly.
-#[cfg(test)]
-fn flush_write_behind() {
-    let Some(worker) = WRITE_BEHIND.as_ref() else {
-        return;
-    };
-    let mut state = worker
-        .state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let target = state.enqueued;
-    while state.written < target {
-        state = worker
-            .idle
-            .wait(state)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::search::{Card, Provider, ResultType};
     use std::{
         sync::{
+            Arc, Mutex,
             atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc,
         },
@@ -497,7 +316,7 @@ mod tests {
         }]
     }
 
-    /// Serializes tests that install a write hook: they block the single
+    /// Serializes tests that install a write hook: they block the shared
     /// writer thread, so they must not overlap each other.
     static HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -507,7 +326,7 @@ mod tests {
 
     impl Drop for WriteHookGuard {
         fn drop(&mut self) {
-            set_write_hook(None);
+            WRITE_HOOK.set(None);
         }
     }
 
@@ -646,7 +465,7 @@ mod tests {
         let _guard = WriteHookGuard;
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        set_write_hook(Some(Box::new(move |path: &Path| {
+        WRITE_HOOK.set(Some(Box::new(move |path: &Path| {
             if !path.starts_with(&base) {
                 return;
             }
@@ -704,7 +523,7 @@ mod tests {
         let (release_tx, release_rx) = mpsc::channel();
         let counted = writes.clone();
         let gate = first.clone();
-        set_write_hook(Some(Box::new(move |path: &Path| {
+        WRITE_HOOK.set(Some(Box::new(move |path: &Path| {
             if !path.starts_with(&base) {
                 return;
             }

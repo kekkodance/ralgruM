@@ -1,3 +1,4 @@
+mod cache_store;
 mod client;
 mod deezer;
 mod model;

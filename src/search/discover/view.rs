@@ -270,7 +270,8 @@ fn render_feed(
 /// too: one contiguous block per loading provider, emitted at that
 /// provider's position, never interleaved rows. Each block uses the
 /// section count remembered for that provider so the rows can replay the
-/// remembered card shapes position by position.
+/// remembered card shapes position by position, capped at what the
+/// viewport can show.
 fn plan_loading_blocks(
     view: &SearchView,
     source: Source,
@@ -304,21 +305,56 @@ fn plan_loading_blocks(
 }
 
 /// Row count for each loading provider's stand-in block. Remembered section
-/// counts win when they exist; every loading provider keeps at least one
-/// row, and a shortfall against the viewport target is distributed in
-/// provider order so the blocks fill the page without interleaving.
+/// counts win when they fit the viewport: the plan keeps them and grows
+/// round-robin up to the target so the blocks fill the page without
+/// interleaving. When the remembered counts together exceed the target the
+/// plan is capped there instead and trimmed proportionally to the
+/// remembered counts, so the skeleton never builds far more rows than the
+/// viewport shows. Every loading provider keeps at least one row either
+/// way, so a provider with nothing remembered still shows up.
 fn loading_block_plan(recorded: &[usize], target: usize) -> Vec<usize> {
     let mut counts: Vec<usize> = recorded
         .iter()
         .map(|remembered| (*remembered).max(1))
         .collect();
     let mut total: usize = counts.iter().sum();
+    if total > target {
+        return trim_to_target(&counts, target);
+    }
     let mut next = 0;
     while total < target {
         let slot = next % counts.len();
         counts[slot] += 1;
         total += 1;
         next += 1;
+    }
+    counts
+}
+
+/// Cap the plan at the viewport target by sharing the target out in
+/// proportion to the per-provider weights. Every provider starts from its
+/// guaranteed single row; the rows beyond that follow the largest exact
+/// shares, and rows lost to flooring go to the largest fractional shares
+/// first with provider order breaking ties, so the split stays
+/// deterministic.
+fn trim_to_target(weights: &[usize], target: usize) -> Vec<usize> {
+    let providers = weights.len();
+    let total_weight: usize = weights.iter().sum();
+    let spare = target.saturating_sub(providers);
+    let mut counts = vec![1; providers];
+    let mut remainders: Vec<usize> = Vec::with_capacity(providers);
+    let mut allocated: usize = 0;
+    for (count, weight) in counts.iter_mut().zip(weights) {
+        let exact = spare * weight;
+        let share = exact / total_weight;
+        *count += share;
+        allocated += share;
+        remainders.push(exact % total_weight);
+    }
+    let mut order: Vec<usize> = (0..providers).collect();
+    order.sort_by(|&a, &b| remainders[b].cmp(&remainders[a]));
+    for index in order.into_iter().take(spare - allocated) {
+        counts[index] += 1;
     }
     counts
 }
@@ -1268,9 +1304,9 @@ mod tests {
         // Remembered section counts decide each provider's stand-in block,
         // so the skeleton mirrors the grouped layout of the loaded feed.
         assert_eq!(
-            loading_block_plan(&[6, 4], 8),
+            loading_block_plan(&[6, 4], 10),
             vec![6, 4],
-            "remembered counts already fill the target"
+            "remembered counts that exactly fill the target are kept"
         );
         assert_eq!(
             loading_block_plan(&[6, 4], 12),
@@ -1283,7 +1319,25 @@ mod tests {
         assert_eq!(loading_block_plan(&[0, 0], 7), vec![4, 3]);
         assert_eq!(loading_block_plan(&[0], 5), vec![5]);
         // A remembered count below the minimum still shows the provider.
-        assert_eq!(loading_block_plan(&[0, 3], 3), vec![1, 3]);
+        assert_eq!(loading_block_plan(&[0, 3], 3), vec![1, 2]);
+        // Remembered counts together beyond the target are trimmed back
+        // to it in proportion, so the skeleton never builds far more
+        // rows than the viewport shows.
+        assert_eq!(
+            loading_block_plan(&[32, 32], 8),
+            vec![4, 4],
+            "equal remembered counts trim to an equal split"
+        );
+        assert_eq!(
+            loading_block_plan(&[6, 4], 8),
+            vec![5, 3],
+            "unequal remembered counts keep their proportions"
+        );
+        assert_eq!(
+            loading_block_plan(&[32, 0], 8),
+            vec![7, 1],
+            "a provider with nothing remembered keeps only its one row"
+        );
     }
 
     #[test]
