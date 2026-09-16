@@ -34,7 +34,6 @@ jobs:
         with:
           path: |
             vendor/libclang
-            vendor/asio-sdk
           key: asio-toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup-asio-toolchain.ps1') }}
 
       - name: Set up the ASIO toolchain

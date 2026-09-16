@@ -1,13 +1,12 @@
 # Build-time environment for the cpal ASIO feature (asio-sys).
 # - LIBCLANG_PATH: bindgen loads libclang.dll from here when generating the
-#   ASIO bindings. Populated once by copying the libclang.dll from the
-#   libclang PyPI wheel (16.0.6) into vendor/libclang/.
-# - CPAL_ASIO_DIR: the Steinberg ASIO SDK 2.3.3 sources asio-sys compiles
-#   and binds against. Populated once from the asio-sys build-script
-#   download into vendor/asio-sdk/.
-# Both vendor directories are gitignored (the SDK license does not allow
-# redistribution in this repository). Without them the asio feature cannot
-# build; plain builds without the feature are unaffected.
+#   ASIO bindings. Populated once by running scripts/setup-asio-toolchain.ps1,
+#   which fetches the libclang.dll from the libclang PyPI wheel into
+#   vendor/libclang/ (gitignored, machine-local build tool).
+# - CPAL_ASIO_DIR: the Steinberg ASIO SDK sources asio-sys compiles and
+#   binds against. They are committed under vendor/asio-sdk and distributed
+#   under the GPLv3 option of the Steinberg dual license, so every checkout
+#   already has them.
 [env]
 LIBCLANG_PATH = { value = "vendor/libclang", relative = true }
 CPAL_ASIO_DIR = { value = "vendor/asio-sdk", relative = true }

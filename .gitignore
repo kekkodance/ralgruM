@@ -33,6 +33,7 @@ Thumbs.db
 *.userosscache
 *.sln.docstates
 
-# ASIO build toolchain, populated locally, not redistributable
+# ASIO build toolchain. The Steinberg ASIO SDK sources under vendor/asio-sdk
+# are committed and distributed under the GPLv3 option of the Steinberg
+# dual license. Only libclang is a local, machine-specific build tool.
 vendor/libclang/
-vendor/asio-sdk/
