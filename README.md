@@ -139,4 +139,5 @@ On Windows, the session is stored under `%APPDATA%\ralgruM` in `auth_session.dat
 
 ## License
 
-Copyright 2026 kekkodance. The public codebase is licensed under the GNU General Public License v3.0 or later. See LICENSE.
+Copyright © 2026 kekkodance. The public codebase is licensed under the GNU General Public License v3.0 or later.
+See LICENSE.
