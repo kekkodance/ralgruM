@@ -204,6 +204,7 @@ pub(crate) struct AppSettings {
     pub(crate) motion_preference: MotionPreference,
     pub(crate) block_explicit_content: bool,
     pub(crate) seamless_playback: bool,
+    pub(crate) output_device: Option<String>,
     pub(crate) remember_playback_modes: bool,
     pub(crate) lyrics_source: LyricsSource,
     pub(crate) volume: f32,
@@ -372,6 +373,7 @@ impl Default for AppSettings {
             motion_preference: MotionPreference::System,
             block_explicit_content: false,
             seamless_playback: true,
+            output_device: None,
             remember_playback_modes: true,
             lyrics_source: LyricsSource::Musixmatch,
             volume: 0.8,
@@ -635,8 +637,29 @@ mod tests {
                 ,"searchHistory": []
                 ,"rightSidebarOpen": false
                 ,"rightSidebarView": "lyrics"
+                ,"outputDevice": null
             })
         );
+    }
+
+    #[test]
+    fn output_device_round_trips_and_old_settings_default_to_none() {
+        let mut settings = AppSettings::default();
+        settings.output_device = Some("Speakers (Realtek Audio)".into());
+        let encoded = serde_json::to_value(&settings).unwrap();
+        assert_eq!(encoded["outputDevice"], "Speakers (Realtek Audio)");
+        assert_eq!(
+            serde_json::from_value::<AppSettings>(encoded)
+                .unwrap()
+                .output_device,
+            Some("Speakers (Realtek Audio)".into())
+        );
+
+        let legacy = serde_json::from_value::<AppSettings>(json!({
+            "seamlessPlayback": true,
+        }))
+        .unwrap();
+        assert_eq!(legacy.output_device, None);
     }
 
     #[test]

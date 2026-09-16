@@ -49,6 +49,7 @@ impl RalgrumApp {
                 window,
                 cx,
             );
+            playback.set_output_device(imported.output_device.clone(), cx);
         });
 
         let source = source_from_stored(imported.source_filter);

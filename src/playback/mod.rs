@@ -5,6 +5,7 @@ mod engine;
 mod fade;
 mod listen_history;
 pub(crate) mod media_source;
+pub(crate) mod output_devices;
 mod player_bar;
 pub(crate) mod progressive;
 mod queue;

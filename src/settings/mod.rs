@@ -24,7 +24,7 @@ use crate::{
     navigation_state::{
         AppSettings, LyricsSource, RightSidebarView, SettingsError, SettingsStore, StartPage,
     },
-    playback::{AudioCache, LIMITS_MB, Overview},
+    playback::{AudioCache, LIMITS_MB, Overview, output_devices},
     theme::{BACKGROUND, BORDER, FOREGROUND, MUTED},
 };
 mod about_panel;
@@ -175,6 +175,7 @@ pub(crate) struct SettingsView {
     pub(super) soundcloud_mobile: Entity<InputState>,
     pub(super) start_page_select: Entity<SelectState<Vec<SharedString>>>,
     pub(super) lyrics_source_select: Entity<SelectState<Vec<SharedString>>>,
+    pub(super) output_device_select: Entity<SelectState<Vec<SharedString>>>,
     pub(super) cache_limit_select: Entity<SelectState<Vec<SharedString>>>,
     pub(super) cache: AudioCache,
     pub(super) cache_overview: Option<Overview>,
@@ -359,6 +360,11 @@ impl SettingsView {
                 window,
                 cx,
             ),
+            output_device_select: {
+                let (labels, selected) =
+                    Self::output_device_picker(saved_for_selects.output_device.as_deref());
+                Self::make_select(labels, Some(selected), window, cx)
+            },
             cache_limit_select: Self::make_select(
                 LIMITS_MB
                     .iter()
@@ -401,6 +407,25 @@ impl SettingsView {
         all.iter().position(|item| *item == value).unwrap_or(0)
     }
 
+    /// Entries and selected row for the output device picker. A saved device
+    /// that is no longer attached selects the system default row.
+    fn output_device_picker(saved: Option<&str>) -> (Vec<SharedString>, usize) {
+        let options = output_devices::output_device_options(&output_devices::list_output_devices());
+        if let Some(name) = saved
+            && !options.iter().any(|option| option == name)
+        {
+            diagnostics::event(
+                "WARN",
+                format!("the saved output device \"{name}\" is not available"),
+            );
+        }
+        let selected = output_devices::output_device_selected_index(&options, saved);
+        (
+            options.into_iter().map(SharedString::from).collect(),
+            selected,
+        )
+    }
+
     fn subscribe_selects(&mut self, cx: &mut Context<Self>) {
         cx.subscribe(
             &self.start_page_select,
@@ -437,6 +462,20 @@ impl SettingsView {
                         .find(|limit| cache_limit_label(**limit).as_str() == value.as_ref())
                 {
                     this.update_draft_and_persist(|draft| draft.audio_cache_limit_mb = *limit, cx);
+                }
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &self.output_device_select,
+            |this, _, event: &SelectEvent<Vec<SharedString>>, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event {
+                    let device = if value.as_ref() == output_devices::SYSTEM_DEFAULT_OUTPUT_LABEL {
+                        None
+                    } else {
+                        Some(value.to_string())
+                    };
+                    this.update_draft_and_persist(|draft| draft.output_device = device, cx);
                 }
             },
         )
@@ -507,6 +546,10 @@ impl SettingsView {
                 window,
                 cx,
             )
+        });
+        let (_, output_device) = Self::output_device_picker(self.draft.output_device.as_deref());
+        self.output_device_select.update(cx, |select, cx| {
+            select.set_selected_index(Some(IndexPath::default().row(output_device)), window, cx)
         });
     }
 

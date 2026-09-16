@@ -269,6 +269,11 @@ impl SettingsView {
             .child(card_heading(LocalIcon::Play, "Playback"))
             .child(control_list(vec![
                 control_row(
+                    "Output device",
+                    "Choose where ralgruM plays audio.",
+                    settings_select(&self.output_device_select, 180.).into_any_element(),
+                ),
+                control_row(
                     "Seamless transitions",
                     "Preload the next track near the end for a clean handoff.",
                     settings_switch(

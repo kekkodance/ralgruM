@@ -9,6 +9,7 @@ use tokio::runtime::Runtime;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    diagnostics,
     discord::DiscordPresence,
     downloads::format_bitrate,
     media_control::{MediaRequest, MediaSession},
@@ -25,7 +26,9 @@ use super::{
     PlaybackStatus, PlaybackTrack, PreviousAction, QueueExtensionTicket, ResolvedTrackInfo,
     RightSidebar,
     deezer_extension::{self, ExtensionObserverKey},
-    engine::{AudioEngine, RodioEngine, SeekCompletion, SeekOutcome},
+    engine::{
+        AudioEngine, AudioOutputTarget, OutputSwitch, RodioEngine, SeekCompletion, SeekOutcome,
+    },
     fade::{
         USER_FADE_FRAME, USER_FADE_SETTLE_TIMEOUT, UserFadeSupervisor, UserToggleFadeDecision,
         user_toggle_fade_decision,
@@ -33,6 +36,7 @@ use super::{
     listen_history::{
         DeezerListenSession, ListenHistorySignal, SoundCloudListenReport, deezer_next_media,
     },
+    output_devices,
     progressive::TimelineSuffixState,
     resolver::{ProgressCallback, ProgressUpdate, StreamResolver},
     standby::{self, ArmedStandby, PreparedSource, SinkProbe, StandbyPhase, WatchTick},
@@ -299,6 +303,24 @@ fn pause_silently(set_volume: impl FnOnce(), pause: impl FnOnce()) {
     pause();
 }
 
+/// Resolves the saved output device setting into an engine target, falling
+/// back to the system default when the device is no longer attached.
+fn resolve_saved_output_target(device: Option<&str>) -> AudioOutputTarget {
+    let target =
+        output_devices::resolve_output_target(device, &output_devices::list_output_devices());
+    if let Some(name) = device
+        && target == AudioOutputTarget::SystemDefault
+    {
+        diagnostics::event(
+            "WARN",
+            format!(
+                "the saved audio output device \"{name}\" is unavailable, using the system default"
+            ),
+        );
+    }
+    target
+}
+
 impl PlaybackModel {
     fn reset_download_progress(&self) {
         if let Ok(mut progress) = self.download_progress.lock() {
@@ -312,6 +334,7 @@ impl PlaybackModel {
         discord_presence: bool,
         cache: AudioCache,
         background_audio_cache: bool,
+        output_device: Option<String>,
         seamless_playback: bool,
         record_deezer_plays: bool,
         listen_history_changed: Arc<ListenHistorySignal>,
@@ -341,7 +364,7 @@ impl PlaybackModel {
                 .step(0.01)
                 .default_value(volume)
         });
-        let engine = RodioEngine::new();
+        let engine = RodioEngine::new(resolve_saved_output_target(output_device.as_deref()));
         if let Ok(engine) = &engine {
             engine.set_volume(volume);
         }
@@ -1548,6 +1571,44 @@ impl PlaybackModel {
             Err(error) => self.state.error = Some(error),
         }
         self.arm_seek_completion(completion, cx);
+    }
+
+    /// Moves the audio stream onto the saved output device. The engine no
+    /// ops when it already plays through that target, so imports and repeat
+    /// changes never rebuild the stream.
+    pub(crate) fn set_output_device(&mut self, device: Option<String>, cx: &mut Context<Self>) {
+        let target = resolve_saved_output_target(device.as_deref());
+        if !self
+            .engine
+            .as_ref()
+            .is_ok_and(|engine| *engine.output_target() != target)
+        {
+            return;
+        }
+        self.cancel_user_fade_and_sync_transport();
+        let switch = match self.engine.as_mut() {
+            Ok(engine) => engine.set_output(target),
+            Err(_) => return,
+        };
+        match switch {
+            // The armed standby died with the old sink, so the poll loop
+            // arms a fresh one on the new stream.
+            Ok(OutputSwitch::SourceRestored) => self.standby = StandbyPhase::Idle,
+            Ok(OutputSwitch::SourceLost) => {
+                self.standby = StandbyPhase::Idle;
+                // The in-flight buffer could not survive the stream swap,
+                // so the current track reloads on the new device through
+                // the normal load path.
+                if let Some(index) = self.state.current_index
+                    && let Some(generation) = self.state.select(index)
+                {
+                    self.start(generation, cx);
+                    return;
+                }
+            }
+            Err(error) => self.state.error = Some(error),
+        }
+        cx.notify();
     }
 
     pub(crate) fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {

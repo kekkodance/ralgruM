@@ -661,6 +661,7 @@ impl RalgrumApp {
                 saved.discord_presence,
                 cache.clone(),
                 saved.background_audio_cache,
+                saved.output_device.clone(),
                 saved.seamless_playback,
                 saved.record_deezer_plays,
                 listen_history_changed.clone(),
@@ -1040,6 +1041,7 @@ impl RalgrumApp {
                 saved.lyrics_source,
                 saved.soundcloud_search_suggestions,
                 saved.motion_preference.is_reduced(),
+                saved.output_device.clone(),
             )
         };
         cx.observe(&settings, move |this, _, cx| {
@@ -1054,10 +1056,10 @@ impl RalgrumApp {
                 saved.lyrics_source,
                 saved.soundcloud_search_suggestions,
                 saved.motion_preference.is_reduced(),
+                saved.output_device.clone(),
             );
             if last_applied_settings != current {
                 let previous_motion_reduced = last_applied_settings.8;
-                last_applied_settings = current;
                 let (
                     discord_presence,
                     cache_limit,
@@ -1068,7 +1070,9 @@ impl RalgrumApp {
                     lyrics_source,
                     soundcloud_search_suggestions,
                     motion_reduced,
-                ) = current;
+                    output_device,
+                ) = current.clone();
+                last_applied_settings = current;
                 this.playback.update(cx, |playback, cx| {
                     playback.set_discord_presence(discord_presence);
                     playback.set_cache_limit(cache_limit);
@@ -1076,6 +1080,7 @@ impl RalgrumApp {
                     playback.set_seamless_playback(seamless_playback);
                     playback.set_provider_play_reporting(record_deezer_plays);
                     playback.set_skip_explicit(block_explicit, cx);
+                    playback.set_output_device(output_device, cx);
                 });
                 match motion_transition(previous_motion_reduced, motion_reduced) {
                     MotionTransition::Unchanged => {}

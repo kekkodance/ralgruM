@@ -1249,7 +1249,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn mid_download_mp3_seek_applies_during_the_download() {
         use super::super::super::engine::{
-            AudioEngine, RodioEngine, RodioEngine as Engine, SeekOutcome,
+            AudioEngine, AudioOutputTarget, RodioEngine, RodioEngine as Engine, SeekOutcome,
         };
         use super::super::super::progressive::ProgressiveFile;
         use super::super::super::standby::PreparedSource;
@@ -1302,7 +1302,7 @@ mod tests {
                 .is_some_and(|seek| seek.timeline_seek_session.is_some())
         );
 
-        let Ok(mut engine) = RodioEngine::new() else {
+        let Ok(mut engine) = RodioEngine::new(AudioOutputTarget::SystemDefault) else {
             eprintln!("no audio device; skipping mid download seek test");
             return;
         };
@@ -1341,7 +1341,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn mid_download_flac_seek_applies_during_the_download() {
         use super::super::super::engine::{
-            AudioEngine, RodioEngine, RodioEngine as Engine, SeekOutcome,
+            AudioEngine, AudioOutputTarget, RodioEngine, RodioEngine as Engine, SeekOutcome,
         };
         use super::super::super::progressive::ProgressiveFile;
         use super::super::super::standby::PreparedSource;
@@ -1398,7 +1398,7 @@ mod tests {
                 .is_some_and(|seek| seek.timeline_seek_session.is_some())
         );
 
-        let Ok(mut engine) = RodioEngine::new() else {
+        let Ok(mut engine) = RodioEngine::new(AudioOutputTarget::SystemDefault) else {
             eprintln!("no audio device; skipping mid download FLAC seek test");
             return;
         };
@@ -1442,7 +1442,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn seek_spam_never_loses_the_live_track_buffer() {
         use super::super::super::engine::{
-            AudioEngine, RodioEngine, RodioEngine as Engine, SeekOutcome,
+            AudioEngine, AudioOutputTarget, RodioEngine, RodioEngine as Engine, SeekOutcome,
         };
         use super::super::super::progressive::ProgressiveFile;
         use super::super::super::standby::PreparedSource;
@@ -1494,7 +1494,7 @@ mod tests {
         let prepared = PreparedSource::new(source, Some(duration), file)
             .with_progressive_seek(progressive_seek.unwrap());
 
-        let Ok(mut engine) = RodioEngine::new() else {
+        let Ok(mut engine) = RodioEngine::new(AudioOutputTarget::SystemDefault) else {
             eprintln!("no audio device; skipping seek spam test");
             return;
         };
@@ -1606,7 +1606,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn near_end_seek_lands_while_the_front_download_is_paused() {
         use super::super::super::engine::{
-            AudioEngine, RodioEngine, RodioEngine as Engine, SeekOutcome,
+            AudioEngine, AudioOutputTarget, RodioEngine, RodioEngine as Engine, SeekOutcome,
         };
         use super::super::super::progressive::ProgressiveFile;
         use super::super::super::standby::PreparedSource;
@@ -1682,7 +1682,7 @@ mod tests {
         let prepared = PreparedSource::new(source, Some(duration), file)
             .with_progressive_seek(progressive_seek.unwrap());
 
-        let Ok(mut engine) = RodioEngine::new() else {
+        let Ok(mut engine) = RodioEngine::new(AudioOutputTarget::SystemDefault) else {
             eprintln!("no audio device; skipping near end seek test");
             return;
         };

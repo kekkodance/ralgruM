@@ -8,7 +8,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures::channel::oneshot;
@@ -20,6 +20,10 @@ use rodio::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::diagnostics;
+
+use super::fade::{USER_FADE_FRAME, USER_FADE_SETTLE_TIMEOUT};
+use super::output_devices::find_output_device;
 use super::progressive::{
     ProgressiveCompletion, ProgressiveReader, TimelineSeekSession, TimelineSuffixState,
 };
@@ -79,6 +83,8 @@ pub(crate) trait AudioEngine {
     fn set_volume(&self, volume: f32);
     fn position(&self) -> Duration;
     fn ended(&self) -> bool;
+    fn set_output(&mut self, target: AudioOutputTarget) -> Result<OutputSwitch, String>;
+    fn output_target(&self) -> &AudioOutputTarget;
     fn append_standby(&mut self, prepared: PreparedSource);
     fn skip_to_standby(&mut self);
     fn activate_standby(&mut self);
@@ -91,6 +97,25 @@ pub(crate) enum SeekOutcome {
     Applied,
     AppliedStandbyDropped,
     Deferred,
+}
+
+/// Output device the engine plays through. Device names are the endpoint
+/// names the default host reports, which stay stable on Windows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AudioOutputTarget {
+    SystemDefault,
+    Device(String),
+}
+
+/// Outcome of switching the engine to another output target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OutputSwitch {
+    /// The front source was re-created at the same position, or nothing
+    /// was playing to begin with.
+    SourceRestored,
+    /// The stream moved, but the front buffer could not be re-created, for
+    /// example while its download is still in flight.
+    SourceLost,
 }
 
 pub(crate) struct RodioEngine {
@@ -109,12 +134,12 @@ pub(crate) struct RodioEngine {
     active_suffix: Option<Duration>,
     playback_intent: Arc<AtomicBool>,
     transport_gain: Arc<RampedGain>,
+    output_target: AudioOutputTarget,
 }
 
 impl RodioEngine {
-    pub(crate) fn new() -> Result<Self, String> {
-        let stream = OutputStreamBuilder::open_default_stream()
-            .map_err(|_| "No usable audio output device was found".to_string())?;
+    pub(crate) fn new(output_target: AudioOutputTarget) -> Result<Self, String> {
+        let stream = Self::open_output_stream(&output_target)?;
         let sink = Arc::new(Sink::connect_new(stream.mixer()));
         Ok(Self {
             stream,
@@ -130,7 +155,59 @@ impl RodioEngine {
             active_suffix: None,
             playback_intent: Arc::new(AtomicBool::new(false)),
             transport_gain: Arc::new(RampedGain::default()),
+            output_target,
         })
+    }
+
+    fn open_output_stream(target: &AudioOutputTarget) -> Result<OutputStream, String> {
+        match target {
+            AudioOutputTarget::SystemDefault => OutputStreamBuilder::open_default_stream()
+                .map_err(|_| "No usable audio output device was found".to_string()),
+            AudioOutputTarget::Device(name) => {
+                let device = find_output_device(name).ok_or_else(|| {
+                    format!("The audio output device \"{name}\" is not available")
+                })?;
+                OutputStreamBuilder::from_device(device)
+                    .and_then(|builder| {
+                        builder
+                            .with_error_callback(log_output_stream_error)
+                            .open_stream_or_fallback()
+                    })
+                    .map_err(|_| format!("The audio output device \"{name}\" could not be opened"))
+            }
+        }
+    }
+
+    /// Waits until the shared transport ramp settles on `target`. Bounded
+    /// by the user fade settle timeout so a stalled output device cannot
+    /// wedge the caller; on timeout the ramp is forced to the target.
+    fn wait_for_transport_gain(&self, target: f32) {
+        let started = Instant::now();
+        while !self.transport_gain.is_at_target(target) {
+            if started.elapsed() >= USER_FADE_SETTLE_TIMEOUT {
+                self.transport_gain.reset(target);
+                return;
+            }
+            thread::sleep(USER_FADE_FRAME);
+        }
+    }
+
+    /// Decodes a fresh front source at `position` from the current buffer.
+    /// Only completed buffers can be reloaded; an in-flight download has no
+    /// complete file yet to position a decoder in.
+    fn reload_front_source(&self, position: Duration) -> Option<DecodedSource> {
+        let progressive_seek = self.progressive_seek.as_ref()?;
+        if !progressive_seek.completion.is_complete() {
+            return None;
+        }
+        if progressive_seek.format == AudioFormat::OggOpus {
+            // rodio cannot decode Ogg Opus, so the hand decoder rebuilds
+            // the buffer and discards samples up to the position.
+            let mut samples = Self::opus(&progressive_seek.path).ok()?;
+            discard_decoder_samples(&mut samples, position, None).ok()?;
+            return Some(Box::new(samples));
+        }
+        Self::decoder_at(&progressive_seek.path, progressive_seek.format, position).ok()
     }
 
     fn wrap_source(&self, source: DecodedSource) -> DecodedSource {
@@ -581,6 +658,10 @@ impl RodioEngine {
     }
 }
 
+fn log_output_stream_error(error: rodio::cpal::StreamError) {
+    diagnostics::event("WARN", format!("audio output stream error: {error}"));
+}
+
 fn cancel_active_timeline_cancellation(active: &mut Option<CancellationToken>) {
     if let Some(cancellation) = active.take() {
         cancellation.cancel();
@@ -930,6 +1011,85 @@ impl AudioEngine for RodioEngine {
     }
     fn transport_gain_settled(&self, target: f32) -> bool {
         self.transport_gain.is_at_target(target)
+    }
+    /// Moves playback onto another output device. The replacement stream is
+    /// opened first, so a failed open leaves the current device and every
+    /// queued source exactly as they were. The live source is faded out
+    /// through the transport ramp, the old stream and sink are torn down,
+    /// and the front buffer is re-decoded at the captured position on the
+    /// new stream. A buffer that cannot be re-created yet, such as one
+    /// whose download is still in flight, is reported as lost so the model
+    /// can reload the track.
+    fn set_output(&mut self, target: AudioOutputTarget) -> Result<OutputSwitch, String> {
+        if target == self.output_target {
+            return Ok(OutputSwitch::SourceRestored);
+        }
+        let stream = Self::open_output_stream(&target)?;
+
+        let was_paused = self.sink.is_paused();
+        let was_playing = self.playback_intent.load(Ordering::Acquire);
+        let had_source = !self.sink.empty();
+        let position = self.reported_position();
+
+        // A paused sink never pulls samples, so its ramp cannot settle and
+        // nothing is audible anyway; only a playing source needs the fade.
+        if had_source && !was_paused {
+            self.transport_gain.set_target(0.0);
+            self.wait_for_transport_gain(0.0);
+        }
+        // Decode the replacement front source before tearing anything down,
+        // while the backing buffer is still known to be intact.
+        let replacement = if had_source {
+            self.reload_front_source(position)
+        } else {
+            None
+        };
+        let restored = replacement.is_some();
+
+        // The pending reload workers and the armed standby die with the old
+        // sink; their buffers can no longer reach a mixer.
+        self.cancel_pending_progressive_reload();
+        discard_progressive_seek(&mut self.standby_progressive_seek);
+        self.sink.stop();
+        self.stream = stream;
+
+        if let Some(source) = replacement {
+            // The positioned install recreates the sink on the new stream
+            // through the same path a completed-buffer seek uses, rebasing
+            // the position probe onto the reloaded source.
+            self.install_progressive_source(source, position, None, Some(was_playing), None);
+            if was_playing {
+                self.transport_gain.set_target(1.0);
+            }
+        } else {
+            let sink = Arc::new(Sink::connect_new(self.stream.mixer()));
+            sink.set_volume(self.sink.volume());
+            if had_source {
+                // The buffer could not be reloaded. Keep the position probe
+                // at the captured timeline spot and hold the sink paused so
+                // an empty sink is not mistaken for a finished track while
+                // the model reloads it on the new device.
+                self.position_base = position;
+                sink.pause();
+            } else if was_paused {
+                sink.pause();
+            }
+            self.sink = sink;
+        }
+        let label = match &target {
+            AudioOutputTarget::SystemDefault => "the system default".to_owned(),
+            AudioOutputTarget::Device(name) => format!("\"{name}\""),
+        };
+        diagnostics::event("INFO", format!("audio output switched to {label}"));
+        self.output_target = target;
+        Ok(if had_source && !restored {
+            OutputSwitch::SourceLost
+        } else {
+            OutputSwitch::SourceRestored
+        })
+    }
+    fn output_target(&self) -> &AudioOutputTarget {
+        &self.output_target
     }
     fn set_volume(&self, volume: f32) {
         self.sink.set_volume(volume);
@@ -1519,7 +1679,7 @@ mod tests {
             declared_bitrate: Some(160),
         };
         let prepared = RodioEngine::decode(audio).unwrap();
-        let Ok(mut engine) = RodioEngine::new() else {
+        let Ok(mut engine) = RodioEngine::new(AudioOutputTarget::SystemDefault) else {
             eprintln!("no audio device; skipping standby M4A engine seek test");
             return;
         };
