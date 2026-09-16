@@ -19,8 +19,8 @@ use crate::{
 const FAVORITE_PINK: u32 = 0xec4899;
 use super::{
     detail::{
-        ArtistSection, DetailRoute, DetailState, artist_section_should_render,
-        artist_section_shows_action, soundcloud_tracks_only,
+        ArtistSection, DetailRoute, DetailState, artist_page_expanded_section,
+        artist_section_should_render, artist_section_shows_action, soundcloud_tracks_only,
     },
     models::{Card, Provider, ResultType, Track},
     view::SearchView,
@@ -172,8 +172,10 @@ fn render_artist_page(
     view: &SearchView,
     cx: &mut gpui::Context<SearchView>,
 ) -> AnyElement {
-    let tracks_only = soundcloud_tracks_only(route.provider, artist);
-    let expanded = if tracks_only { None } else { expanded };
+    // Tracks-only SoundCloud artist pages always render the full tracklist
+    // through the section-list layout: their inline section body would be a
+    // zero-basis flex item that collapses inside the page scroll.
+    let expanded = artist_page_expanded_section(route.provider, artist, expanded);
     let host = cx.entity();
     let mut page = div()
         .w_full()
@@ -228,11 +230,13 @@ fn render_artist_page(
             artist.popular_total,
             artist.popular_tracks.len(),
             expanded,
-            tracks_only,
+            false,
+            // Tracks-only pages render above, so the collapsed page always
+            // shows the five-row preview here.
             super::rows_view::render_tracks(
                 view,
                 &artist.popular_tracks,
-                artist_tracks_preview(tracks_only, expanded),
+                true,
                 narrow,
                 provider_icon_only,
                 false,
@@ -983,10 +987,6 @@ fn artist_popular_actions(provider: Provider) -> bool {
 
 fn artist_tracks_title() -> &'static str {
     "Tracks"
-}
-
-fn artist_tracks_preview(tracks_only: bool, expanded: Option<ArtistSection>) -> bool {
-    !tracks_only && expanded != Some(ArtistSection::PopularTracks)
 }
 
 #[cfg(test)]

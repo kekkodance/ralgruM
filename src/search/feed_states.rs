@@ -457,16 +457,10 @@ impl SearchView {
             ) || matches!(
                 &self.detail.state,
                 DetailState::Results(page)
-                    if (page.artist.is_none() && !page.tracks.is_empty())
-                        || matches!(
-                            self.detail.expanded_artist_section,
-                            Some(super::detail::ArtistSection::PopularTracks)
-                        ) && page
-                            .artist
-                            .as_ref()
-                            .is_some_and(|artist| !artist.popular_tracks.is_empty())
-                        || self.detail.expanded_artist_section.is_some()
-                            && page.artist.is_some()
+                    if super::detail::detail_results_use_virtualized_scroll(
+                        page,
+                        self.detail.expanded_artist_section,
+                    )
             );
         }
         should_virtualize_results(

@@ -69,6 +69,39 @@ pub(crate) fn soundcloud_tracks_only(provider: Provider, artist: &ArtistPage) ->
         && artist.playlists.is_empty()
 }
 
+/// The section an artist page renders as its expanded section list.
+///
+/// A tracks-only SoundCloud artist page is always the full tracklist: the
+/// inline section body is a zero-basis flex item that collapses to nothing
+/// inside the page scroll, so the page must take the section-list layout
+/// that fills the viewport instead.
+pub(crate) fn artist_page_expanded_section(
+    provider: Provider,
+    artist: &ArtistPage,
+    expanded: Option<ArtistSection>,
+) -> Option<ArtistSection> {
+    if soundcloud_tracks_only(provider, artist) {
+        Some(ArtistSection::PopularTracks)
+    } else {
+        expanded
+    }
+}
+
+/// Whether a loaded detail page renders content that owns a virtualized
+/// scroll surface filling the viewport. Collection pages with tracks and
+/// expanded or tracks-only artist pages do; every other page scrolls the
+/// plain page surface.
+pub(crate) fn detail_results_use_virtualized_scroll(
+    page: &DetailPage,
+    expanded_artist_section: Option<ArtistSection>,
+) -> bool {
+    if let Some(artist) = &page.artist {
+        return artist_page_expanded_section(page.route.provider, artist, expanded_artist_section)
+            .is_some();
+    }
+    !page.tracks.is_empty()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DetailRoute {
     pub(crate) provider: Provider,
@@ -745,6 +778,109 @@ mod tests {
             Provider::SoundCloud,
             &with_featured
         ));
+    }
+
+    #[test]
+    fn tracks_only_artist_pages_always_render_the_section_list() {
+        let tracks_only = ArtistPage {
+            popular_tracks: vec![Track::default()],
+            ..ArtistPage::default()
+        };
+        // The full tracklist must render through the section-list layout
+        // even before the user expands anything, and any remembered
+        // expansion must not redirect the page.
+        assert_eq!(
+            artist_page_expanded_section(Provider::SoundCloud, &tracks_only, None),
+            Some(ArtistSection::PopularTracks)
+        );
+        assert_eq!(
+            artist_page_expanded_section(
+                Provider::SoundCloud,
+                &tracks_only,
+                Some(ArtistSection::Albums)
+            ),
+            Some(ArtistSection::PopularTracks)
+        );
+
+        let with_albums = ArtistPage {
+            popular_tracks: vec![Track::default()],
+            albums: vec![Card::default()],
+            ..ArtistPage::default()
+        };
+        assert_eq!(
+            artist_page_expanded_section(Provider::SoundCloud, &with_albums, None),
+            None
+        );
+        assert_eq!(
+            artist_page_expanded_section(
+                Provider::SoundCloud,
+                &with_albums,
+                Some(ArtistSection::Albums)
+            ),
+            Some(ArtistSection::Albums)
+        );
+
+        // Deezer artist pages keep the plain preview layout.
+        assert_eq!(
+            artist_page_expanded_section(Provider::Deezer, &tracks_only, None),
+            None
+        );
+    }
+
+    #[test]
+    fn detail_results_own_the_viewport_only_for_virtualized_content() {
+        let route = |provider| DetailRoute {
+            provider,
+            kind: ResultType::Artists,
+            id: "7".into(),
+            title: String::new(),
+            subtitle: String::new(),
+            artwork: String::new(),
+            release_date: String::new(),
+            service_url: String::new(),
+        };
+        let artist_page = |artist| DetailPage {
+            route: route(Provider::SoundCloud),
+            tracks: Vec::new(),
+            total: None,
+            raw_loaded_count: 0,
+            normalized_count: 0,
+            authoritative_total: None,
+            artist: Some(artist),
+            description: String::new(),
+            album_info: None,
+        };
+
+        // A tracks-only SoundCloud artist page fills the viewport: the
+        // inline section body would collapse inside the page scroll and
+        // hide the tracklist.
+        let tracks_only = artist_page(ArtistPage {
+            popular_tracks: vec![Track::default()],
+            ..ArtistPage::default()
+        });
+        assert!(detail_results_use_virtualized_scroll(&tracks_only, None));
+
+        // Artist pages with other sections stay on the page scroll until a
+        // section is expanded.
+        let with_albums = artist_page(ArtistPage {
+            popular_tracks: vec![Track::default()],
+            albums: vec![Card::default()],
+            ..ArtistPage::default()
+        });
+        assert!(!detail_results_use_virtualized_scroll(&with_albums, None));
+        assert!(detail_results_use_virtualized_scroll(
+            &with_albums,
+            Some(ArtistSection::PopularTracks)
+        ));
+
+        // Collection pages own the viewport while they have tracks.
+        let mut collection = tracks_only;
+        collection.route = route(Provider::SoundCloud);
+        collection.artist = None;
+        collection.tracks = vec![Track::default()];
+        assert!(detail_results_use_virtualized_scroll(&collection, None));
+        collection.tracks.clear();
+        assert!(!detail_results_use_virtualized_scroll(&collection, None));
     }
 
     #[test]

@@ -11,6 +11,170 @@ fn favorite_track(provider: Provider, id: &str, favorite: Option<bool>) -> Track
     }
 }
 
+#[gpui::test]
+fn tracks_only_artist_page_fills_the_viewport_with_its_tracklist(cx: &mut gpui::TestAppContext) {
+    use gpui::prelude::*;
+
+    const TRACKS: usize = 108;
+    let row = crate::library::virtualization::row_height();
+    let overdraw = crate::library::virtualization::overdraw();
+
+    // The fixed tracks-only artist page: the section list is a direct
+    // flex child of a bounded chain, like render_artist_section_list
+    // builds it once uses_virtualized_scroll treats the page as filled.
+    struct SectionListPage(ListState);
+    impl gpui::Render for SectionListPage {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let row_height = crate::library::virtualization::row_height();
+            let state = self.0.clone();
+            gpui::div().size_full().flex().flex_col().child(
+                gpui::div().flex_1().min_h_0().overflow_hidden().child(
+                    gpui::div().size_full().flex().flex_col().min_h_0().child(
+                        gpui::div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .gap(px(12.))
+                            .child(
+                                gpui::div()
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .gap(px(6.))
+                                    .child(gpui::div().h(px(76.)))
+                                    .child(
+                                        gpui::div().w_full().flex_1().min_h_0().relative().child(
+                                            gpui::list(state, move |_, _, _| {
+                                                gpui::div().h(row_height).into_any_element()
+                                            })
+                                            .w_full()
+                                            .h_full()
+                                            .min_h_0(),
+                                        ),
+                                    ),
+                            ),
+                    ),
+                ),
+            )
+        }
+    }
+
+    let state = ListState::new(TRACKS, ListAlignment::Top, overdraw).measure_all();
+    let cx = cx.add_empty_window();
+    let view = cx.update(|_, cx| cx.new(|_| SectionListPage(state.clone())));
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        cx.draw(
+            gpui::point(px(0.), px(0.)),
+            gpui::size(px(800.), px(600.)),
+            {
+                let view = view.clone();
+                move |_, _| view.into_any_element()
+            },
+        );
+    };
+    draw(cx);
+
+    // The list receives the viewport left by the artist header (76px) and
+    // the page gap (6px), so the scrollbar extent is exact: every track is
+    // reachable instead of the list collapsing under the heading.
+    let total = TRACKS as f32 * f32::from(row);
+    let viewport = 600. - 76. - 6.;
+    assert_eq!(
+        f32::from(state.max_offset_for_scrollbar().y),
+        total - viewport
+    );
+
+    state.scroll_to(gpui::ListOffset {
+        item_ix: 10,
+        offset_in_item: px(0.),
+    });
+    draw(cx);
+    assert_eq!(
+        f32::from(state.scroll_px_offset_for_scrollbar().y),
+        -(10. * f32::from(row))
+    );
+
+    // The pre-fix shape: the same virtualized list as a zero-basis flex
+    // item inside the auto-height page scroll. The list sees no viewport,
+    // so the section renders nothing but its heading, which is why the
+    // tracks-only page must take the section-list layout above.
+    struct InlineBodyPage(ListState);
+    impl gpui::Render for InlineBodyPage {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let row_height = crate::library::virtualization::row_height();
+            let state = self.0.clone();
+            gpui::div()
+                .id("inline-body-page-scroll")
+                .size_full()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(
+                    gpui::div().w_full().flex().flex_col().gap(px(12.)).child(
+                        gpui::div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(gpui::div().h(px(76.)))
+                            .child(
+                                gpui::div()
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(9.))
+                                    .child(gpui::div().h(px(15.)))
+                                    .child(
+                                        gpui::div().w_full().flex_1().min_h_0().relative().child(
+                                            gpui::list(state, move |_, _, _| {
+                                                gpui::div().h(row_height).into_any_element()
+                                            })
+                                            .w_full()
+                                            .h_full()
+                                            .min_h_0(),
+                                        ),
+                                    ),
+                            ),
+                    ),
+                )
+        }
+    }
+
+    let inline = ListState::new(TRACKS, ListAlignment::Top, overdraw).with_uniform_item_height(row);
+    let inline_view = cx.update(|_, cx| cx.new(|_| InlineBodyPage(inline.clone())));
+    cx.draw(
+        gpui::point(px(0.), px(0.)),
+        gpui::size(px(800.), px(600.)),
+        {
+            let inline_view = inline_view.clone();
+            move |_, _| inline_view.into_any_element()
+        },
+    );
+    // The inline body stays collapsed: the list receives no viewport, so it
+    // never measures past the overdraw window and the tracks cannot scroll.
+    // That is the shape the tracks-only page must never render again.
+    assert_eq!(
+        f32::from(inline.max_offset_for_scrollbar().y),
+        f32::from(overdraw)
+    );
+    assert!(
+        f32::from(inline.max_offset_for_scrollbar().y) < total - viewport,
+        "the inline body must not expose the full tracklist extent, got {:?}",
+        inline.max_offset_for_scrollbar()
+    );
+}
+
 #[test]
 fn collection_favorites_support_captured_deezer_and_soundcloud_entities() {
     assert_eq!(
