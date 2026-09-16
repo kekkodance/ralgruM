@@ -12,6 +12,10 @@ const AUTHOR_GITHUB_URL: &str = "https://github.com/kekkodance";
 const APP_MARK_PX: f32 = 96.;
 const ABOUT_PANEL_TOP_PADDING_PX: f32 = 12.;
 const HEADING_ICON_OPTICAL_OFFSET_PX: f32 = 1.;
+// The clickable notice name keeps a transparent 1px border so showing focus
+// never moves layout, which leaves its text 1px above the muted note.
+// Nudge it down the same way card_heading nudges its icon.
+const NOTICE_LINK_OPTICAL_OFFSET_PX: f32 = 1.;
 
 impl SettingsView {
     pub(super) fn render_about(&mut self, _: &mut Context<Self>) -> AnyElement {
@@ -69,6 +73,13 @@ impl SettingsView {
                 " is licensed under Apache 2.0.",
                 crate::external_url::open_gpui_component,
                 "Could Not Open gpui-component",
+            ))
+            .child(linked_notice_line(
+                "about-asio-sdk",
+                "Steinberg ASIO SDK",
+                " 2.3.3 sources are used under the GPLv3 option.",
+                crate::external_url::open_asio_sdk,
+                "Could Not Open ASIO SDK",
             ))
             .into_any_element();
 
@@ -166,6 +177,8 @@ fn linked_notice_line(
                 .tab_stop(true)
                 .role(Role::Button)
                 .aria_label(format!("Open {name}"))
+                .relative()
+                .top(px(NOTICE_LINK_OPTICAL_OFFSET_PX))
                 .flex_none()
                 .rounded(px(3.))
                 .border_1()

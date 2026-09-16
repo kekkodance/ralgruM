@@ -1104,6 +1104,30 @@ impl AudioEngine for RodioEngine {
                 // at the captured timeline spot and hold the sink paused so
                 // an empty sink is not mistaken for a finished track while
                 // the model reloads it on the new device.
+                // The outcome here is SourceLost, so record why the front
+                // source could not be rebuilt. A restart from 0 after a
+                // switch is then diagnosable from the log.
+                {
+                    let (has_seek, download_in_flight, format_label) =
+                        match self.progressive_seek.as_ref() {
+                            None => (false, false, None),
+                            Some(seek) => (
+                                true,
+                                !seek.completion.is_complete(),
+                                Some(seek.format.label()),
+                            ),
+                        };
+                    let detail = format!(
+                        "audio output switch lost front source at {}ms, playing={}, paused={}, has_seek={}, download_in_flight={}, format={}",
+                        position.as_millis(),
+                        was_playing,
+                        was_paused,
+                        has_seek,
+                        download_in_flight,
+                        format_label.unwrap_or("none"),
+                    );
+                    diagnostics::event("INFO", detail);
+                }
                 self.position_base = position;
                 sink.pause();
             } else if was_paused {

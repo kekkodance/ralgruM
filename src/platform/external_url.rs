@@ -12,6 +12,7 @@ const CHROMIUM_URL: &str =
     "https://chromium.googlesource.com/chromium/src/+/main/ui/resources/cursors/";
 const GPUI_URL: &str = "https://github.com/zed-industries/zed";
 const GPUI_COMPONENT_URL: &str = "https://github.com/longbridge/gpui-component";
+const ASIO_SDK_URL: &str = "https://www.steinberg.net/asiosdk";
 
 pub(crate) fn open_payment_url(value: &str) -> Result<(), String> {
     let url = validate_payment_url(value)?;
@@ -41,6 +42,10 @@ pub(crate) fn open_gpui() -> Result<(), String> {
 
 pub(crate) fn open_gpui_component() -> Result<(), String> {
     open(GPUI_COMPONENT_URL, "gpui-component project")
+}
+
+pub(crate) fn open_asio_sdk() -> Result<(), String> {
+    open(ASIO_SDK_URL, "ASIO SDK site")
 }
 
 fn validate_payment_url(value: &str) -> Result<reqwest::Url, String> {
@@ -138,6 +143,7 @@ mod tests {
             super::GPUI_COMPONENT_URL,
             "https://github.com/longbridge/gpui-component"
         );
+        assert_eq!(super::ASIO_SDK_URL, "https://www.steinberg.net/asiosdk");
     }
 
     #[test]

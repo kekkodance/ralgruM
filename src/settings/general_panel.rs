@@ -294,9 +294,6 @@ impl SettingsView {
                         .into_any_element(),
                     ),
                 ];
-                if self.draft.asio_mode {
-                    playback_rows.push(asio_mode_hint_row());
-                }
                 playback_rows.extend([
                     control_row(
                         "Seamless transitions",
@@ -433,20 +430,6 @@ fn control_list(rows: Vec<Div>) -> Div {
         }
     }
     list
-}
-
-/// Secondary hint under the ASIO mode toggle, shown only while the mode is
-/// on so the mixer trade-off is visible exactly when it applies.
-fn asio_mode_hint_row() -> Div {
-    div()
-        .w_full()
-        .py(px(6.))
-        .text_size(px(11.))
-        .text_color(rgb(MUTED))
-        .child(
-            "ASIO plays straight through the driver, bypassing the Windows mixer. \
-             Multi-client drivers keep other apps audible.",
-        )
 }
 
 fn cache_usage_box(status: String, visual: CacheMeterVisual) -> Div {

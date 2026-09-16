@@ -1670,7 +1670,12 @@ impl PlaybackModel {
                     return;
                 }
             }
-            Err(error) => self.state.error = Some(error),
+            Err(error) => crate::toast::push_global(
+                cx,
+                crate::toast::ToastKind::Error,
+                "Could Not Switch Output",
+                Some(error.into()),
+            ),
         }
         cx.notify();
     }
