@@ -157,8 +157,6 @@ impl RalgrumApp {
     }
 
     pub(crate) fn open_general_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.search
-            .update(cx, |search, cx| search.close_detail_for_main_navigation(cx));
         self.settings.update(cx, |settings, cx| {
             settings.begin_session(SettingsCategory::General, window, cx);
         });
