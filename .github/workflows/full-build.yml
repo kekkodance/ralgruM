@@ -42,6 +42,18 @@ jobs:
           token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
           persist-credentials: false
 
+      - name: Cache ASIO toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/libclang
+            vendor/asio-sdk
+          key: asio-toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup-asio-toolchain.ps1') }}
+
+      - name: Set up the ASIO toolchain
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/setup-asio-toolchain.ps1
+
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
