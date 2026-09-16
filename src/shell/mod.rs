@@ -1,6 +1,6 @@
 use gpui::{
     AnimationExt as _, AnyElement, ClickEvent, Context, Entity, FocusHandle, IntoElement, Render,
-    ScrollHandle, Task, WeakEntity, Window, div, prelude::*, px, rgb,
+    Task, WeakEntity, Window, div, prelude::*, px, rgb,
 };
 use gpui_component::Root;
 use std::sync::Arc;
@@ -115,7 +115,7 @@ pub(crate) struct RalgrumApp {
     source_tab_focus: Vec<FocusHandle>,
     library_service_tab_focus: Vec<FocusHandle>,
     settings_category_focus: Vec<FocusHandle>,
-    downloads_scroll: ScrollHandle,
+    downloads_list_state: gpui::ListState,
     downloads_browser_scroll: BrowserScrollState,
     _window_state: Entity<WindowStateManager>,
 }
@@ -1176,7 +1176,12 @@ impl RalgrumApp {
             settings_category_focus: (0..SettingsCategory::ALL.len())
                 .map(|_| cx.focus_handle())
                 .collect(),
-            downloads_scroll: ScrollHandle::new(),
+            downloads_list_state: gpui::ListState::new(
+                0,
+                gpui::ListAlignment::Top,
+                gpui::px(downloads::DOWNLOAD_LIST_OVERDRAW_PX),
+            )
+            .with_uniform_item_height(gpui::px(downloads::DOWNLOAD_ROW_PITCH_PX)),
             downloads_browser_scroll: BrowserScrollState::new(),
             _window_state: window_state,
         }

@@ -56,7 +56,13 @@ pub(crate) struct DownloadModel {
     capabilities: CapabilityCache,
     capability_cancellations: CapabilityProbeRegistry,
     capability_tasks: HashMap<CapabilityKey, Task<()>>,
-    file_stat_probes: std::collections::HashSet<u64>,
+    /// File-stat probes in flight, by job id. Each entry pairs the probed
+    /// destination with a token from `next_file_stat_probe`; installing a
+    /// result requires both to still match, so a probe whose expectation
+    /// was dropped or replaced cannot cache facts about an obsolete
+    /// destination or a superseded probe.
+    file_stat_probes: HashMap<u64, (PathBuf, u64)>,
+    next_file_stat_probe: u64,
 }
 
 /// Capability notification for an open download row. `None` invalidates an
@@ -152,7 +158,8 @@ impl DownloadModel {
             capabilities: CapabilityCache::default(),
             capability_cancellations: CapabilityProbeRegistry::default(),
             capability_tasks: HashMap::new(),
-            file_stat_probes: std::collections::HashSet::new(),
+            file_stat_probes: HashMap::new(),
+            next_file_stat_probe: 0,
         }
     }
 
@@ -705,7 +712,7 @@ impl DownloadModel {
         let targets: Vec<(u64, PathBuf)> = self
             .jobs
             .iter()
-            .filter(|job| !self.file_stat_probes.contains(&job.id))
+            .filter(|job| !self.file_stat_probes.contains_key(&job.id))
             .filter_map(|job| {
                 file_destination(&job.status)
                     .filter(|_| job.file.is_none())
@@ -713,31 +720,70 @@ impl DownloadModel {
             })
             .collect();
         for (id, path) in targets {
-            self.file_stat_probes.insert(id);
+            self.next_file_stat_probe = self.next_file_stat_probe.wrapping_add(1);
+            let token = self.next_file_stat_probe;
+            self.file_stat_probes.insert(id, (path.clone(), token));
+            let probe_path = path.clone();
             let probe = cx
                 .background_executor()
-                .spawn(async move { DownloadFileStat::probe(&path) });
+                .spawn(async move { DownloadFileStat::probe(&probe_path) });
             let entity = cx.entity().clone();
             cx.spawn(async move |_, cx| {
                 let stat = probe.await;
                 entity.update(cx, |model, cx| {
-                    model.file_stat_probes.remove(&id);
-                    if let Some(job) = model.job_mut(id) {
-                        job.file = Some(stat);
-                        cx.notify();
-                    }
+                    model.retire_file_stat_probe(id, path, token, stat, cx);
                 });
             })
             .detach();
         }
     }
 
+    /// Install a completed probe unless it has gone stale. The probe
+    /// answers exactly one destination, so its result is cached only
+    /// while the tracked expectation still belongs to this probe and the
+    /// job still exists, still has no cached stat, and still points at
+    /// the probed path. Any status or destination change in between
+    /// discards the result instead of caching facts about an obsolete
+    /// destination.
+    fn retire_file_stat_probe(
+        &mut self,
+        id: u64,
+        path: PathBuf,
+        token: u64,
+        stat: DownloadFileStat,
+        cx: &mut Context<Self>,
+    ) {
+        let owns_expectation =
+            self.file_stat_probes
+                .get(&id)
+                .is_some_and(|(expected_path, expected_token)| {
+                    *expected_token == token && expected_path.as_path() == path.as_path()
+                });
+        if !owns_expectation {
+            // A newer probe took over this job; its expectation must
+            // survive this retirement.
+            return;
+        }
+        self.file_stat_probes.remove(&id);
+        let install = self.job(id).is_some_and(|job| {
+            job.file.is_none() && file_destination(&job.status) == Some(path.as_path())
+        });
+        if install {
+            self.job_mut(id).unwrap().file = Some(stat);
+            cx.notify();
+        }
+    }
+
     /// Drop the cached stat for a job whose destination just changed and
-    /// queue a fresh background probe.
+    /// queue a fresh background probe. The in-flight expectation is
+    /// dropped too: its result would be discarded by the staleness guard,
+    /// but keeping the entry would delay the fresh probe until the
+    /// obsolete one lands.
     fn invalidate_file_stat(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(job) = self.job_mut(id) {
             job.file = None;
         }
+        self.file_stat_probes.remove(&id);
         self.refresh_file_stats(cx);
     }
 
@@ -820,6 +866,9 @@ impl DownloadModel {
         job.unread = false;
         job.quality = None;
         job.file = None;
+        // A retry abandons whatever destination the failure described, so
+        // any in-flight stat expectation for it is obsolete.
+        self.file_stat_probes.remove(&id);
         self.requests
             .insert(id, (deezer_arl, soundcloud_token, variant));
         self.start_next(cx);
@@ -1041,8 +1090,17 @@ impl DownloadModel {
         let resolver = self.resolver.clone();
         let cache = self.cache.clone();
         let part = part_path(&path, id, generation);
-        let (progress_sender, progress_receiver) = tokio::sync::mpsc::unbounded_channel();
+        // Latest-value progress channel: every tick overwrites the
+        // previous sample, so a fast publisher can never queue more than
+        // one update no matter how long the receiver is starved.
+        // Completion, failure, and cancellation travel the transfer task
+        // result instead, so overwriting a superseded tick cannot lose
+        // the outcome.
+        let (progress_sender, progress_receiver) =
+            tokio::sync::watch::channel((0_u64, None::<u64>));
         let progress: ProgressCallback = Arc::new(move |update: ProgressUpdate| {
+            // Sending fails only once the pump is gone, which means the
+            // transfer was already retired.
             let _ = progress_sender.send((update.downloaded, update.total));
         });
         let cached_progress = {
@@ -1289,24 +1347,25 @@ impl DownloadModel {
     }
 }
 
-/// Forward coalesced progress updates into the job status. The transfer
-/// publishes a tick for every buffered chunk, so the pump drains the
-/// queue down to the newest sample before touching the entity: a fast
-/// download collapses into one update per wake instead of leaving an
-/// unbounded backlog of queued ticks. Terminal states travel through the
-/// transfer task result, never this channel, so coalescing cannot drop
-/// them and the job still converges to its final state.
+/// Forward the newest progress sample into the job status. The channel is
+/// latest-value: every published tick overwrites the previous sample, so
+/// the queue is structurally bounded to one entry no matter how fast the
+/// publisher runs or how long the pump is starved, and each wake reads
+/// the newest byte counts. Terminal states travel through the transfer
+/// task result, never this channel, and the transfer dropping its sender
+/// ends the pump, so skipping superseded ticks cannot lose the outcome
+/// and the job still converges to its final state.
 fn spawn_progress_pump(
     cx: &mut Context<DownloadModel>,
     id: u64,
     generation: u64,
-    mut receiver: tokio::sync::mpsc::UnboundedReceiver<(u64, Option<u64>)>,
+    mut receiver: tokio::sync::watch::Receiver<(u64, Option<u64>)>,
 ) {
     let progress_entity = cx.entity().clone();
     cx.spawn(async move |_, cx| {
         let mut last_notify: Option<Instant> = None;
-        while let Some((downloaded, total)) = receiver.recv().await {
-            let (downloaded, total) = coalesce_progress((downloaded, total), &mut receiver);
+        while receiver.changed().await.is_ok() {
+            let (downloaded, total) = *receiver.borrow_and_update();
             let is_complete = total.is_some_and(|total| downloaded >= total);
             let should_notify = is_complete
                 || last_notify.is_none_or(|last| last.elapsed() >= Duration::from_millis(100));
@@ -1324,21 +1383,6 @@ fn spawn_progress_pump(
         }
     })
     .detach();
-}
-
-/// Collapse the progress messages already queued behind a received one,
-/// keeping only the newest byte counts. Byte counts are monotonic, so
-/// the latest sample subsumes every collapsed tick.
-fn coalesce_progress(
-    latest: (u64, Option<u64>),
-    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<(u64, Option<u64>)>,
-) -> (u64, Option<u64>) {
-    let (mut downloaded, mut total) = latest;
-    while let Ok((next_downloaded, next_total)) = receiver.try_recv() {
-        downloaded = next_downloaded;
-        total = next_total;
-    }
-    (downloaded, total)
 }
 
 fn quality_label(job: &DownloadJob, downloaded_size: Option<u64>) -> String {
@@ -1751,30 +1795,137 @@ mod tests {
         });
     }
 
-    #[test]
-    fn coalescing_keeps_only_the_newest_progress_sample() {
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let total = 2_000 * 64 * 1024;
-        for tick in 1..2_000 {
-            sender.send((tick * 64 * 1024, Some(total))).unwrap();
-        }
-        sender.send((total, Some(total))).unwrap();
+    #[gpui::test]
+    fn file_stat_probe_results_are_discarded_when_the_destination_changes(cx: &mut TestAppContext) {
+        let directory = tempdir().unwrap();
+        let first = directory.path().join("song.mp3");
+        std::fs::write(&first, vec![0; 160_000]).unwrap();
 
-        let (downloaded, reported_total) = coalesce_progress((0, None), &mut receiver);
+        let account = error_account(cx);
+        let model = cx.new(|_| {
+            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
+            let mut job = quality_job();
+            job.status = DownloadStatus::Completed(first.clone());
+            model.jobs.push(job);
+            model.next_id = 1;
+            model
+        });
 
-        assert_eq!(downloaded, total);
-        assert_eq!(reported_total, Some(total));
-        // The whole backlog is drained in one pass.
-        assert!(receiver.try_recv().is_err());
+        model.update(cx, |model, cx| {
+            model.refresh_file_stats(cx);
+            assert_eq!(model.file_stat_probes.len(), 1);
+            // The destination changes while the probe is still in flight.
+            model.jobs[0].status = DownloadStatus::Completed(directory.path().join("renamed.flac"));
+        });
+        cx.run_until_parked();
+
+        model.update(cx, |model, _| {
+            // The probe answered the old destination, so its result is
+            // dropped instead of being cached for the new one.
+            assert!(model.jobs[0].file.is_none());
+            assert!(model.file_stat_probes.is_empty());
+        });
     }
 
-    #[test]
-    fn coalescing_an_empty_queue_keeps_the_received_sample() {
-        let (_sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<(u64, Option<u64>)>();
-        assert_eq!(
-            coalesce_progress((128, Some(256)), &mut receiver),
-            (128, Some(256))
-        );
+    #[gpui::test]
+    fn an_invalidated_stat_is_reprobed_for_the_new_destination(cx: &mut TestAppContext) {
+        let directory = tempdir().unwrap();
+        let first = directory.path().join("song.mp3");
+        let second = directory.path().join("song.flac");
+        std::fs::write(&first, vec![0; 160_000]).unwrap();
+        std::fs::write(&second, vec![0; 80_000]).unwrap();
+
+        let account = error_account(cx);
+        let model = cx.new(|_| {
+            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
+            let mut job = quality_job();
+            job.status = DownloadStatus::Completed(first.clone());
+            model.jobs.push(job);
+            model.next_id = 1;
+            model
+        });
+
+        // Start a probe for the first destination, then change the
+        // destination and invalidate before it can land.
+        model.update(cx, |model, cx| model.refresh_file_stats(cx));
+        model.update(cx, |model, cx| {
+            model.jobs[0].status = DownloadStatus::Completed(second.clone());
+            model.invalidate_file_stat(1, cx);
+        });
+        cx.run_until_parked();
+
+        model.update(cx, |model, _| {
+            // Both probes land, but only the one that still owns the
+            // job's expectation may install its result.
+            let stat = model.jobs[0]
+                .file
+                .as_ref()
+                .expect("the fresh probe should have landed");
+            assert_eq!(stat.size, Some(80_000));
+            assert!(model.file_stat_probes.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn a_superseded_probe_cannot_install_its_result(cx: &mut TestAppContext) {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("song.mp3");
+        std::fs::write(&path, vec![0; 160_000]).unwrap();
+
+        let account = error_account(cx);
+        let model = cx.new(|_| {
+            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
+            let mut job = quality_job();
+            job.status = DownloadStatus::Completed(path.clone());
+            model.jobs.push(job);
+            model.next_id = 1;
+            model
+        });
+
+        model.update(cx, |model, cx| {
+            // A newer probe owns the job's expectation when an older
+            // probe for the same destination lands.
+            model.file_stat_probes.insert(1, (path.clone(), 2));
+            model.retire_file_stat_probe(1, path.clone(), 1, DownloadFileStat::probe(&path), cx);
+            assert!(model.jobs[0].file.is_none());
+            assert_eq!(model.file_stat_probes.get(&1), Some(&(path.clone(), 2)));
+
+            // The newer probe still installs normally.
+            model.retire_file_stat_probe(1, path.clone(), 2, DownloadFileStat::probe(&path), cx);
+            assert_eq!(
+                model.jobs[0].file.as_ref().map(|stat| stat.size),
+                Some(Some(160_000))
+            );
+            assert!(model.file_stat_probes.is_empty());
+        });
+    }
+
+    #[tokio::test]
+    async fn a_burst_producer_leaves_exactly_one_pending_progress_sample() {
+        let (sender, mut receiver) = tokio::sync::watch::channel((0_u64, None::<u64>));
+
+        // The receiver is blocked for the whole burst: it never polls
+        // while the publisher runs, which is the starvation window the
+        // latest-value channel has to survive without buffering.
+        let total = 10_000 * 64 * 1024;
+        for tick in 1..=10_000 {
+            sender.send((tick * 64 * 1024, Some(total))).unwrap();
+        }
+
+        // Every send succeeded without backpressure, and a single
+        // observation drains the entire burst: the receiver sees only the
+        // final sample and nothing remains pending afterwards, so the
+        // channel holds at most one entry no matter how many sends
+        // preceded it.
+        receiver.changed().await.unwrap();
+        assert_eq!(*receiver.borrow_and_update(), (total, Some(total)));
+        assert!(!receiver.has_changed().unwrap());
+
+        // Closing the producer wakes the receiver once more with an
+        // error, which is how the pump exits; the terminal state arrives
+        // on the transfer result path instead.
+        drop(sender);
+        assert!(receiver.changed().await.is_err());
     }
 
     #[gpui::test]
@@ -1793,7 +1944,7 @@ mod tests {
             model
         });
 
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, receiver) = tokio::sync::watch::channel((0_u64, None::<u64>));
         model.update(cx, |_, cx| spawn_progress_pump(cx, 1, 0, receiver));
 
         let total = 2_000 * 64 * 1024;
@@ -1832,7 +1983,7 @@ mod tests {
             model
         });
 
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, receiver) = tokio::sync::watch::channel((0_u64, None::<u64>));
         model.update(cx, |_, cx| spawn_progress_pump(cx, 1, 0, receiver));
 
         let total = 2_000 * 64 * 1024;
