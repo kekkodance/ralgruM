@@ -811,7 +811,7 @@ mod tests {
         let mut state = SearchState::default();
         let job = state.submit(" query ").unwrap();
         assert_eq!(job.requests.len(), 8);
-        for pair in job.requests.chunks_exact(2) {
+        for pair in job.requests.as_chunks::<2>().0 {
             assert_eq!(pair[0].provider, Provider::Deezer);
             assert_eq!(pair[1].provider, Provider::SoundCloud);
             assert_eq!(pair[0].category, pair[1].category);

@@ -94,8 +94,8 @@ impl DeezerStripeStream {
 
 pub(super) fn decrypt_cbc(cipher: &Blowfish, bytes: &mut [u8]) {
     let mut previous = [0, 1, 2, 3, 4, 5, 6, 7];
-    for block in bytes.chunks_exact_mut(8) {
-        let encrypted: [u8; 8] = block.try_into().expect("exact block");
+    for block in bytes.as_chunks_mut::<8>().0 {
+        let encrypted = *block;
         cipher.decrypt_block(GenericArray::from_mut_slice(block));
         for index in 0..8 {
             block[index] ^= previous[index];

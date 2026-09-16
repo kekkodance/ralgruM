@@ -1148,7 +1148,9 @@ mod tests {
     fn transport_glyphs_have_visible_pixels_and_distinct_play_states() {
         let opaque_count = |glyph| {
             transport_pixels(glyph, 16, 16)
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[3] != 0)
                 .count()
         };
@@ -1172,7 +1174,9 @@ mod tests {
         ] {
             assert!(
                 transport_pixels(glyph, 16, 16)
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|pixel| pixel[3] > 0 && pixel[3] < 255)
             );
         }

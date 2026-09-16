@@ -1393,7 +1393,7 @@ fn render_section_page_list(
             section.total,
             section.show_count,
             section.layout == SectionLayout::Cards,
-            section.preview_limit.map_or(usize::MAX, |limit| limit),
+            section.preview_limit.unwrap_or(usize::MAX),
             section.card_row,
         ));
         builders.push(Rc::new(move |_, _| render_section_header(&section_header)));

@@ -2111,13 +2111,13 @@ async fn deezer_stream_decryption_writes_a_partial_stripe_on_finish() {
 
 fn encrypt_cbc_for_test(cipher: &Blowfish, bytes: &mut [u8]) {
     let mut previous = [0, 1, 2, 3, 4, 5, 6, 7];
-    for block in bytes.chunks_exact_mut(8) {
-        let plaintext: [u8; 8] = block.try_into().expect("exact block");
+    for block in bytes.as_chunks_mut::<8>().0 {
+        let plaintext = *block;
         for index in 0..8 {
             block[index] = plaintext[index] ^ previous[index];
         }
         cipher.encrypt_block(GenericArray::from_mut_slice(block));
-        previous = block.try_into().expect("exact block");
+        previous = *block;
     }
 }
 
