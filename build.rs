@@ -7,10 +7,47 @@ fn main() {
     select_murglar_backend();
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        embed_resource::compile("windows.rc", embed_resource::NONE)
-            .manifest_required()
-            .expect("Windows application resources must compile");
+        compile_windows_resources();
     }
+}
+
+fn compile_windows_resources() {
+    println!("cargo:rerun-if-changed=windows.rc");
+    println!("cargo:rerun-if-changed=assets/icon.ico");
+    println!("cargo:rerun-if-env-changed=CARGO_PKG_VERSION");
+
+    let version = env::var("CARGO_PKG_VERSION").expect("Cargo must provide the package version");
+    let version_numbers = ["MAJOR", "MINOR", "PATCH"]
+        .map(|part| {
+            let name = format!("CARGO_PKG_VERSION_{part}");
+            env::var(&name)
+                .unwrap_or_else(|_| panic!("Cargo must provide {name}"))
+                .parse::<u16>()
+                .unwrap_or_else(|_| panic!("{name} must fit a Windows version component"))
+        })
+        .map(|part| part.to_string())
+        .join(",");
+
+    let manifest_dir = PathBuf::from(
+        env::var_os("CARGO_MANIFEST_DIR").expect("Cargo must provide CARGO_MANIFEST_DIR"),
+    );
+    let icon_path = manifest_dir.join("assets/icon.ico");
+    let template = fs::read_to_string(manifest_dir.join("windows.rc"))
+        .expect("Windows resource template must be readable");
+    let resources = template
+        .replace(
+            "@ICON_PATH@",
+            &icon_path.to_string_lossy().replace('\\', "/"),
+        )
+        .replace("@VERSION_NUMBERS@", &format!("{version_numbers},0"))
+        .replace("@VERSION_STRING@", &version);
+
+    let resource_path = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"))
+        .join("ralgrum.rc");
+    fs::write(&resource_path, resources).expect("Windows resources must be writable");
+    embed_resource::compile(&resource_path, embed_resource::NONE)
+        .manifest_required()
+        .expect("Windows application resources must compile");
 }
 
 fn select_murglar_backend() {

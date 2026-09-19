@@ -1,0 +1,54 @@
+name: Set up release Windows build
+description: Prepare the private backend, ASIO toolchain, Rust cache, and release version
+inputs:
+  private-token:
+    description: Token with read access to the private backend
+    required: true
+  version:
+    description: Validated release version
+    required: true
+  cache-key:
+    description: Stable cache namespace for this job
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Initialize the private submodule
+      shell: pwsh
+      env:
+        PRIVATE_TOKEN: ${{ inputs.private-token }}
+      run: |
+        $privateUrl = 'https://github.com/kekkodance/ralgrum-murglar-private.git'
+        $authUrl = "https://x-access-token:$env:PRIVATE_TOKEN@github.com/kekkodance/ralgrum-murglar-private.git"
+        $configKey = "url.$authUrl.insteadOf"
+        git config --global $configKey $privateUrl
+        try {
+          git submodule update --init --recursive
+        } finally {
+          git config --global --unset-all $configKey
+        }
+
+    - name: Cache ASIO toolchain
+      uses: actions/cache@v6
+      with:
+        path: vendor/libclang
+        key: asio-toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup-asio-toolchain.ps1') }}
+
+    - name: Set up the ASIO toolchain
+      shell: pwsh
+      run: powershell -ExecutionPolicy Bypass -File scripts/setup-asio-toolchain.ps1
+
+    - name: Install stable Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Cargo dependencies and workspace crates
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.cache-key }}
+        cache-workspace-crates: true
+
+    - name: Update Cargo package version
+      shell: pwsh
+      env:
+        RELEASE_VERSION: ${{ inputs.version }}
+      run: powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version $env:RELEASE_VERSION -NoBuild

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Semantic version, for example 0.5.0 or 0.5.0-rc.1'
+        description: 'Semantic version, for example 0.6.0 or 0.6.0-rc.1'
         required: true
         type: string
 
@@ -16,10 +16,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  require-private-access:
-    name: Check private repository access
+  prepare:
+    name: Validate release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
+      - name: Check out the parent repository
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
       - name: Require the private repository token
         env:
           PRIVATE_TOKEN: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
@@ -30,70 +38,15 @@ jobs:
             exit 1
           fi
 
-  release:
-    name: Build and publish release
-    needs: require-private-access
-    runs-on: windows-latest
-    timeout-minutes: 60
-    env:
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: 1
-      RELEASE_VERSION: ${{ inputs.version }}
-    steps:
-      - name: Check out the parent repository
-        uses: actions/checkout@v7
-        with:
-          submodules: false
-          token: ${{ github.token }}
-          persist-credentials: true
-
-      - name: Require the main branch
+      - name: Validate branch, version, and tag
+        id: version
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           if ($env:GITHUB_REF -ne 'refs/heads/main') {
             throw "Releases must be dispatched from the main branch, not '$env:GITHUB_REF'."
           }
-
-      - name: Initialize the private submodule
-        env:
-          PRIVATE_TOKEN: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
-        shell: pwsh
-        run: |
-          $privateUrl = 'https://github.com/kekkodance/ralgrum-murglar-private.git'
-          $authUrl = "https://x-access-token:$env:PRIVATE_TOKEN@github.com/kekkodance/ralgrum-murglar-private.git"
-          $configKey = "url.$authUrl.insteadOf"
-          git config --global $configKey $privateUrl
-          try {
-            git submodule update --init --recursive
-          } finally {
-            git config --global --unset-all $configKey
-          }
-
-      - name: Cache ASIO toolchain
-        uses: actions/cache@v6
-        with:
-          path: |
-            vendor/libclang
-          key: asio-toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup-asio-toolchain.ps1') }}
-
-      - name: Set up the ASIO toolchain
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/setup-asio-toolchain.ps1
-
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Configure Git identity
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Validate version and tag
-        shell: pwsh
-        run: |
           $version = $env:RELEASE_VERSION.Trim()
           if ($version.StartsWith('v')) {
             $version = $version.Substring(1)
@@ -102,45 +55,141 @@ jobs:
             throw "Invalid semantic version '$version'."
           }
           $tag = "v$version"
-          $lsRemote = Start-Process -FilePath git -ArgumentList 'ls-remote', '--exit-code', 'origin', "refs/tags/$tag" -NoNewWindow -Wait -PassThru
-          if ($lsRemote.ExitCode -eq 0) {
+          $remoteTag = git ls-remote origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not check whether tag '$tag' exists (git exit code $LASTEXITCODE)."
+          }
+          if ($remoteTag) {
             throw "Tag '$tag' already exists."
           }
-          if ($lsRemote.ExitCode -ne 2) {
-            throw "Could not check whether tag '$tag' exists (git exit code $($lsRemote.ExitCode))."
-          }
-          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          if (-not (Test-Path $env:GITHUB_ENV)) {
-            throw "Could not write to the GitHub environment file."
-          }
-          $LASTEXITCODE = 0
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Update Cargo package version
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version $env:RELEASE_VERSION -NoBuild
+  test:
+    name: Test full release
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - name: Check out the parent repository
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Set up the full Windows build
+        uses: ./.github/actions/setup-release-windows
+        with:
+          private-token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          version: ${{ needs.prepare.outputs.version }}
+          cache-key: release-tests
 
       - name: Run full release tests
         run: cargo test --locked --all-targets
 
+  build:
+    name: Build full release
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+    outputs:
+      sha256: ${{ steps.binary-hash.outputs.sha256 }}
+    steps:
+      - name: Check out the parent repository
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Set up the full Windows build
+        uses: ./.github/actions/setup-release-windows
+        with:
+          private-token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          version: ${{ needs.prepare.outputs.version }}
+          cache-key: release
+
       - name: Build the full release
         run: cargo build --locked --release
+
+      - name: Verify Windows executable version
+        shell: pwsh
+        run: |
+          $info = (Get-Item -LiteralPath 'target\release\ralgruM.exe').VersionInfo
+          if ($info.FileVersion -ne $env:RELEASE_VERSION -or $info.ProductVersion -ne $env:RELEASE_VERSION) {
+            throw "EXE version mismatch: file '$($info.FileVersion)', product '$($info.ProductVersion)', expected '$env:RELEASE_VERSION'."
+          }
+
+      - name: Record release executable hash
+        id: binary-hash
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -LiteralPath 'target\release\ralgruM.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Transfer the release executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: ralgruM-${{ github.run_id }}
+          path: target/release/ralgruM.exe
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Publish tested release
+    needs: [prepare, test, build]
+    runs-on: windows-latest
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      EXPECTED_SHA256: ${{ needs.build.outputs.sha256 }}
+    steps:
+      - name: Check out the parent repository
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+          token: ${{ github.token }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Download the tested executable
+        uses: actions/download-artifact@v7
+        with:
+          name: ralgruM-${{ github.run_id }}
+          path: artifacts
+
+      - name: Verify the transferred executable
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'artifacts\ralgruM.exe'
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:EXPECTED_SHA256) {
+            throw "Transferred EXE hash mismatch: got '$hash', expected '$env:EXPECTED_SHA256'."
+          }
+          "RELEASE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Write commit-by-commit release notes
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/write-release-notes.ps1 -Version $env:RELEASE_VERSION -OutputPath artifacts/release-notes.md
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Update Cargo package version
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version $env:RELEASE_VERSION -NoBuild
 
       - name: Commit the version bump
         shell: pwsh
         run: |
           git add Cargo.toml Cargo.lock
           git commit -m "Release $env:RELEASE_TAG"
-
-      - name: Package the release
-        shell: pwsh
-        run: |
-          $sha = (git rev-parse HEAD).Trim()
-          $shortSha = $sha.Substring(0, 12)
-          $exe = Join-Path $env:GITHUB_WORKSPACE "artifacts\ralgruM.exe"
-          New-Item -ItemType Directory -Path (Split-Path $exe) -Force | Out-Null
-          Copy-Item target\release\ralgruM.exe $exe
-          "RELEASE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Push version commit and release tag
         shell: pwsh
@@ -153,4 +202,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release create $env:RELEASE_TAG $env:RELEASE_EXE --title "ralgruM $env:RELEASE_VERSION" --generate-notes
+          gh release create $env:RELEASE_TAG $env:RELEASE_EXE --title "ralgruM $env:RELEASE_VERSION" --notes-file artifacts/release-notes.md
