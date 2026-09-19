@@ -145,14 +145,7 @@ fn collection_heading() -> impl IntoElement {
         .flex()
         .items_center()
         .gap(px(12.))
-        .child(
-            div()
-                .size(px(64.))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(rgb(BORDER))
-                .bg(rgb(SURFACE_RAISED)),
-        )
+        .child(div().size(px(64.)).rounded(px(6.)).bg(rgb(SURFACE_RAISED)))
         .child(
             div()
                 .flex()

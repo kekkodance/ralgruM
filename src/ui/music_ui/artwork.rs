@@ -33,8 +33,6 @@ pub(super) fn card_artwork(
         .aspect_square()
         .overflow_hidden()
         .rounded(px(8.))
-        .border_1()
-        .border_color(rgb(BORDER))
         .bg(rgb(SURFACE_RAISED))
         // The kind icon remains visible while remote artwork loads. The
         // reveal element fades the downloaded image in over this placeholder.

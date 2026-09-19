@@ -254,8 +254,6 @@ fn crop_preview<T: PlaylistCoverEditor>(
         .flex_none()
         .overflow_hidden()
         .rounded(px(6.))
-        .border_1()
-        .border_color(rgb(BORDER))
         .bg(rgb(BACKGROUND));
 
     let Some(cover) = dialog.cover() else {

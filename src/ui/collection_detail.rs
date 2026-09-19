@@ -510,8 +510,6 @@ fn artwork(url: &str, size: gpui::Pixels, radius: gpui::Pixels) -> AnyElement {
         .flex_none()
         .overflow_hidden()
         .rounded(radius)
-        .border_1()
-        .border_color(rgb(BORDER))
         .bg(rgb(SURFACE_RAISED))
         .when(!url.is_empty(), |this| {
             this.child(
@@ -534,8 +532,6 @@ fn header_artwork(source: HeaderArtwork, size: gpui::Pixels, radius: gpui::Pixel
         .flex_none()
         .overflow_hidden()
         .rounded(radius)
-        .border_1()
-        .border_color(rgb(BORDER))
         .bg(rgb(SURFACE_RAISED))
         .flex()
         .items_center()

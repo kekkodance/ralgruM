@@ -4,7 +4,6 @@ use gpui::{
 use gpui_component::{Sizable, Size, spinner::Spinner};
 
 use crate::{
-    app_button::SETTINGS_SECONDARY_ICON_SIZE,
     app_tooltip::AppTooltipExt,
     assets::{LocalIcon, local_icon, widget_icon},
     theme::FOREGROUND,
@@ -12,7 +11,10 @@ use crate::{
     updater::model::Status,
 };
 
-use super::RalgrumApp;
+use super::{
+    RalgrumApp,
+    sidebar::{SIDEBAR_ICON_GLYPH_SIZE, SIDEBAR_ICON_SLOT_SIZE_PX},
+};
 
 fn update_icon(status: &Status) -> LocalIcon {
     if matches!(status, Status::Ready | Status::Installing) {
@@ -167,7 +169,7 @@ impl RalgrumApp {
                     })
                     .child(
                         div()
-                            .size(px(SETTINGS_SECONDARY_ICON_SIZE))
+                            .size(px(SIDEBAR_ICON_SLOT_SIZE_PX))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -176,14 +178,13 @@ impl RalgrumApp {
                                 this.child(
                                     Spinner::new()
                                         .icon(widget_icon(LocalIcon::Spinner))
-                                        .with_size(Size::Size(px(SETTINGS_SECONDARY_ICON_SIZE)))
+                                        .with_size(Size::Size(px(SIDEBAR_ICON_GLYPH_SIZE)))
                                         .color(rgb(FOREGROUND).into()),
                                 )
                             })
                             .when(!spinning, |this| {
                                 this.child(
-                                    local_icon(icon, FOREGROUND)
-                                        .size(px(SETTINGS_SECONDARY_ICON_SIZE)),
+                                    local_icon(icon, FOREGROUND).size(px(SIDEBAR_ICON_GLYPH_SIZE)),
                                 )
                             }),
                     )

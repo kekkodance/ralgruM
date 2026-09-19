@@ -277,8 +277,6 @@ pub(super) fn render_current(
                 .flex_none()
                 .overflow_hidden()
                 .rounded(px(6.))
-                .border_1()
-                .border_color(rgb(BORDER))
                 .bg(rgb(SURFACE))
                 .when_some(
                     track.filter(|track| !track.artwork.is_empty()),

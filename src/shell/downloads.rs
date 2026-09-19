@@ -325,8 +325,6 @@ fn job_artwork(id: u64, artwork: &str) -> impl IntoElement {
         .flex_none()
         .overflow_hidden()
         .rounded(px(6.))
-        .border_1()
-        .border_color(rgb(BORDER))
         .bg(rgb(SURFACE_RAISED))
         .when(!artwork.is_empty(), |this| {
             this.child(

@@ -238,8 +238,6 @@ fn heading() -> impl IntoElement {
                 .size(px(76.))
                 .flex_none()
                 .rounded(px(6.))
-                .border_1()
-                .border_color(rgb(BORDER))
                 .bg(rgb(SURFACE_RAISED)),
         )
         .child(
@@ -276,8 +274,6 @@ fn artist_heading() -> impl IntoElement {
                         .size(px(76.))
                         .flex_none()
                         .rounded(px(6.))
-                        .border_1()
-                        .border_color(rgb(BORDER))
                         .bg(rgb(SURFACE_RAISED)),
                 )
                 .child(
