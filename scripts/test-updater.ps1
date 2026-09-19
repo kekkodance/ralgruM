@@ -3,6 +3,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$running = @(Get-Process -Name 'ralgruM' -ErrorAction SilentlyContinue)
+if ($running.Count -gt 0) {
+    throw 'Quit ralgruM from the system tray before starting the updater test. Closing its window may only hide it.'
+}
 $previous = [Environment]::GetEnvironmentVariable('RALGRUM_UPDATE_TEST_CURRENT_VERSION', 'Process')
 try {
     $env:RALGRUM_UPDATE_TEST_CURRENT_VERSION = $CurrentVersion
