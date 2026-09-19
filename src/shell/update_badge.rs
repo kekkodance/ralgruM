@@ -1,14 +1,24 @@
-use gpui::{Context, IntoElement, KeyDownEvent, Role, Window, div, prelude::*, px, rgb, rgba};
+use gpui::{
+    Context, FontWeight, IntoElement, KeyDownEvent, Role, Window, div, prelude::*, px, rgb, rgba,
+};
 
 use crate::{
     app_tooltip::AppTooltipExt,
     assets::{LocalIcon, local_icon},
-    theme::FOREGROUND,
+    theme::{FOREGROUND, MUTED},
     toast::{ToastKind, push_global},
     updater::model::Status,
 };
 
 use super::RalgrumApp;
+
+fn update_icon(status: &Status) -> LocalIcon {
+    if matches!(status, Status::Ready | Status::Installing) {
+        LocalIcon::RotateRight
+    } else {
+        LocalIcon::Download
+    }
+}
 
 impl RalgrumApp {
     fn activate_update(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -86,6 +96,7 @@ impl RalgrumApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let updater = self.updater.read(cx);
+        let icon = update_icon(&updater.status);
         let version = updater
             .release
             .as_ref()
@@ -123,7 +134,7 @@ impl RalgrumApp {
             _ => (String::new(), String::new(), false),
         };
         let visible = !label.is_empty();
-        div().when(visible, |this| {
+        div().w_full().when(visible, |this| {
             this.child(
                 div()
                     .id("sidebar-update-button")
@@ -140,12 +151,35 @@ impl RalgrumApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .gap(px(8.))
-                    .text_size(px(12.))
+                    .gap(px(7.))
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(FOREGROUND))
-                    .cursor_pointer()
-                    .hover(|this| this.bg(rgba(0x6366f166)))
-                    .child(local_icon(LocalIcon::Download, FOREGROUND).size(px(15.)))
+                    .when(enabled, |this| {
+                        this.group("sidebar-update")
+                            .cursor_pointer()
+                            .hover(|this| this.bg(rgba(0x6366f166)))
+                    })
+                    .child(
+                        div()
+                            .relative()
+                            .size(px(13.))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .group_hover("sidebar-update", |style| style.invisible())
+                                    .child(local_icon(icon, MUTED).size_full()),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .invisible()
+                                    .group_hover("sidebar-update", |style| style.visible())
+                                    .child(local_icon(icon, FOREGROUND).size_full()),
+                            ),
+                    )
                     .when(!compact, |this| this.child(label))
                     .when(compact, |this| this.app_tooltip_right(tooltip))
                     .when(enabled, |this| {
@@ -165,5 +199,17 @@ impl RalgrumApp {
                     }),
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LocalIcon, Status, update_icon};
+
+    #[test]
+    fn downloaded_update_uses_restart_icon() {
+        assert_eq!(update_icon(&Status::Available), LocalIcon::Download);
+        assert_eq!(update_icon(&Status::Ready), LocalIcon::RotateRight);
+        assert_eq!(update_icon(&Status::Installing), LocalIcon::RotateRight);
     }
 }

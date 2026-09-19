@@ -61,6 +61,32 @@ const SIDEBAR_BOTTOM_HOST_HEIGHT_PX: f32 = 3. * COMPACT_SETTINGS_BUTTON_SIZE
     + SIDEBAR_COMPACT_SETTINGS_ACTION_GROUP_GAP_PX
     + SIDEBAR_COMPACT_CONTROL_GAP_PX
     + SIDEBAR_BOTTOM_ACCOUNT_HEADROOM_PX;
+const SIDEBAR_UPDATE_COMPACT_HOST_HEIGHT_PX: f32 =
+    SIDEBAR_BOTTOM_HOST_HEIGHT_PX + COMPACT_SETTINGS_BUTTON_SIZE + SIDEBAR_COMPACT_CONTROL_GAP_PX;
+const SIDEBAR_UPDATE_EXPANDED_BOTTOM_PX: f32 = SIDEBAR_EXPANDED_TRANSFER_BOTTOM_PX
+    + DangerSecondaryButtonOptions::SIDEBAR.height
+    + SIDEBAR_COMPACT_CONTROL_GAP_PX;
+const SIDEBAR_UPDATE_COMPACT_DEFAULT_BOTTOM_PX: f32 =
+    COMPACT_SETTINGS_BUTTON_SIZE + SIDEBAR_COMPACT_SETTINGS_ACTION_GROUP_GAP_PX;
+const SIDEBAR_UPDATE_COMPACT_SETTINGS_BOTTOM_PX: f32 = SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX
+    + COMPACT_SETTINGS_BUTTON_SIZE
+    + SIDEBAR_COMPACT_CONTROL_GAP_PX;
+
+fn update_badge_bottom(compact: bool, settings_mode: bool) -> f32 {
+    match (compact, settings_mode) {
+        (false, _) => SIDEBAR_UPDATE_EXPANDED_BOTTOM_PX,
+        (true, false) => SIDEBAR_UPDATE_COMPACT_DEFAULT_BOTTOM_PX,
+        (true, true) => SIDEBAR_UPDATE_COMPACT_SETTINGS_BOTTOM_PX,
+    }
+}
+
+fn sidebar_bottom_host_height(compact: bool, show_update: bool) -> f32 {
+    if compact && show_update {
+        SIDEBAR_UPDATE_COMPACT_HOST_HEIGHT_PX
+    } else {
+        SIDEBAR_BOTTOM_HOST_HEIGHT_PX
+    }
+}
 const SIDEBAR_BOTTOM_EXPANDED_ACCOUNT_LAYER_ID: &str = "sidebar-bottom-expanded-account";
 const SIDEBAR_BOTTOM_EXPANDED_LOGOUT_LAYER_ID: &str = "sidebar-bottom-expanded-logout";
 const SIDEBAR_BOTTOM_EXPANDED_TRANSFER_LAYER_ID: &str = "sidebar-bottom-expanded-settings-transfer";
@@ -840,16 +866,14 @@ pub(super) fn render_sidebar(
             )
         })
         .child(div().flex_1())
-        .when(show_update && metrics.compact_desktop, |this| {
-            this.child(app.update_badge(true, cx))
-        })
         .child(sidebar_bottom(
             app,
             sidebar_username,
             sidebar_premium,
             sidebar_pass,
             metrics.narrow_content,
-            show_update && !metrics.compact_desktop,
+            metrics.compact_desktop,
+            show_update,
             bottom_visual,
             cx,
         ))
@@ -861,6 +885,7 @@ fn sidebar_bottom(
     sidebar_premium: &'static str,
     sidebar_pass: SidebarPass,
     narrow_content: bool,
+    compact: bool,
     show_update: bool,
     bottom_visual: SidebarBottomVisual,
     cx: &mut Context<RalgrumApp>,
@@ -880,79 +905,69 @@ fn sidebar_bottom(
         .child(
             div()
                 .w_full()
+                .p(px(12.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(SURFACE))
                 .flex()
                 .flex_col()
                 .gap(px(8.))
-                .when(show_update, |this| this.child(app.update_badge(false, cx)))
+                .text_size(px(11.5))
+                .text_color(rgb(MUTED))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(7.))
+                        .child(local_icon(LocalIcon::User, MUTED).size_3())
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(17.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(FOREGROUND))
+                                .child(sidebar_username),
+                        ),
+                )
                 .child(
                     div()
                         .w_full()
-                        .p(px(12.))
-                        .rounded(px(6.))
-                        .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(SURFACE))
                         .flex()
-                        .flex_col()
-                        .gap(px(8.))
-                        .text_size(px(11.5))
-                        .text_color(rgb(MUTED))
+                        .items_center()
+                        .justify_between()
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .justify_center()
-                                .gap(px(7.))
-                                .child(local_icon(LocalIcon::User, MUTED).size_3())
+                                .gap(px(4.))
+                                .child("Premium:")
                                 .child(
                                     div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(px(17.))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(rgb(FOREGROUND))
-                                        .child(sidebar_username),
+                                        .relative()
+                                        .top(px(ACCOUNT_STATUS_ICON_OFFSET_PX))
+                                        .child(if sidebar_premium == "Yes" {
+                                            local_icon(LocalIcon::Check, 0x22c55e).size(px(10.))
+                                        } else {
+                                            local_icon(LocalIcon::X, FOREGROUND).size(px(10.))
+                                        }),
                                 ),
                         )
                         .child(
                             div()
-                                .w_full()
                                 .flex()
                                 .items_center()
-                                .justify_between()
-                                .child(
+                                .gap(px(4.))
+                                .child("Pass:")
+                                .child({
+                                    let (value, color) = sidebar_pass_value(sidebar_pass);
                                     div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(4.))
-                                        .child("Premium:")
-                                        .child(
-                                            div()
-                                                .relative()
-                                                .top(px(ACCOUNT_STATUS_ICON_OFFSET_PX))
-                                                .child(if sidebar_premium == "Yes" {
-                                                    local_icon(LocalIcon::Check, 0x22c55e)
-                                                        .size(px(10.))
-                                                } else {
-                                                    local_icon(LocalIcon::X, FOREGROUND)
-                                                        .size(px(10.))
-                                                }),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(4.))
-                                        .child("Pass:")
-                                        .child({
-                                            let (value, color) = sidebar_pass_value(sidebar_pass);
-                                            div()
-                                                .font_weight(gpui::FontWeight::MEDIUM)
-                                                .text_color(rgb(color))
-                                                .child(value)
-                                        }),
-                                ),
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(rgb(color))
+                                        .child(value)
+                                }),
                         ),
                 ),
         )
@@ -1111,7 +1126,7 @@ fn sidebar_bottom(
         .id("sidebar-bottom-host")
         .relative()
         .w_full()
-        .h(px(SIDEBAR_BOTTOM_HOST_HEIGHT_PX))
+        .h(px(sidebar_bottom_host_height(compact, show_update)))
         .flex_none()
         .overflow_x_hidden()
         .child(account_layer)
@@ -1120,6 +1135,16 @@ fn sidebar_bottom(
         .child(compact_logout_layer)
         .child(compact_transfer_layer)
         .child(compact_settings_layer)
+        .when(show_update, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .bottom(px(update_badge_bottom(compact, app.settings_mode)))
+                    .w_full()
+                    .child(app.update_badge(compact, cx)),
+            )
+        })
 }
 
 #[cfg(test)]
@@ -1136,8 +1161,9 @@ mod tests {
         SIDEBAR_DESKTOP_WIDTH_PX, SIDEBAR_EXPANDED_CONTENT_WIDTH_PX, SIDEBAR_EXPANDED_LOGOUT_ID,
         SIDEBAR_EXPANDED_TRANSFER_BOTTOM_PX, SIDEBAR_EXPANDED_TRANSFER_ID,
         SIDEBAR_HORIZONTAL_PADDING_PX, SIDEBAR_NAV_ACTIVE_BACKGROUND, SIDEBAR_NAV_HOVER_BACKGROUND,
-        SIDEBAR_RIGHT_PADDING_PX, SIDEBAR_SETTINGS_CATEGORY_GAP_PX, sidebar_bottom_opacities,
-        sidebar_expanded_content_width, sidebar_pass_value,
+        SIDEBAR_RIGHT_PADDING_PX, SIDEBAR_SETTINGS_CATEGORY_GAP_PX, sidebar_bottom_host_height,
+        sidebar_bottom_opacities, sidebar_expanded_content_width, sidebar_pass_value,
+        update_badge_bottom,
     };
     use crate::{
         settings::SidebarPass,
@@ -1266,6 +1292,18 @@ mod tests {
             sidebar_expanded_content_width(true),
             crate::music_ui::MOBILE_DRAWER_WIDTH - 32.
         );
+    }
+
+    #[test]
+    fn updater_sits_above_the_visible_bottom_controls_in_every_sidebar_mode() {
+        assert_eq!(update_badge_bottom(false, false), 76.);
+        assert_eq!(update_badge_bottom(false, true), 76.);
+        assert_eq!(update_badge_bottom(true, false), 44.);
+        assert_eq!(update_badge_bottom(true, true), 124.);
+        assert_eq!(sidebar_bottom_host_height(false, true), 128.);
+        assert_eq!(sidebar_bottom_host_height(true, false), 128.);
+        assert_eq!(sidebar_bottom_host_height(true, true), 168.);
+        assert!(sidebar_bottom_host_height(true, true) >= update_badge_bottom(true, true) + 36.);
     }
 
     #[test]
