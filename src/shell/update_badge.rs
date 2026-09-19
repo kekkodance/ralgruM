@@ -1,10 +1,11 @@
 use gpui::{
     Context, FontWeight, IntoElement, KeyDownEvent, Role, Window, div, prelude::*, px, rgb, rgba,
 };
+use gpui_component::{Sizable, Size, spinner::Spinner};
 
 use crate::{
     app_tooltip::AppTooltipExt,
-    assets::{LocalIcon, local_icon},
+    assets::{LocalIcon, local_icon, widget_icon},
     theme::{FOREGROUND, MUTED},
     toast::{ToastKind, push_global},
     updater::model::Status,
@@ -97,6 +98,10 @@ impl RalgrumApp {
     ) -> impl IntoElement + use<> {
         let updater = self.updater.read(cx);
         let icon = update_icon(&updater.status);
+        let spinning = matches!(
+            updater.status,
+            Status::Downloading { .. } | Status::Installing
+        );
         let version = updater
             .release
             .as_ref()
@@ -154,31 +159,53 @@ impl RalgrumApp {
                     .gap(px(7.))
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(FOREGROUND))
+                    .text_color(rgb(MUTED))
                     .when(enabled, |this| {
                         this.group("sidebar-update")
                             .cursor_pointer()
-                            .hover(|this| this.bg(rgba(0x6366f166)))
+                            .hover(|this| this.bg(rgba(0x6366f166)).text_color(rgb(FOREGROUND)))
                     })
                     .child(
                         div()
-                            .relative()
                             .size(px(13.))
-                            .child(
-                                div()
-                                    .absolute()
-                                    .inset_0()
-                                    .group_hover("sidebar-update", |style| style.invisible())
-                                    .child(local_icon(icon, MUTED).size_full()),
-                            )
-                            .child(
-                                div()
-                                    .absolute()
-                                    .inset_0()
-                                    .invisible()
-                                    .group_hover("sidebar-update", |style| style.visible())
-                                    .child(local_icon(icon, FOREGROUND).size_full()),
-                            ),
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(spinning, |this| {
+                                this.child(
+                                    Spinner::new()
+                                        .icon(widget_icon(LocalIcon::Spinner))
+                                        .with_size(Size::Size(px(11.)))
+                                        .color(rgb(MUTED).into()),
+                                )
+                            })
+                            .when(!spinning, |this| {
+                                this.child(
+                                    div()
+                                        .relative()
+                                        .size(px(11.))
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .inset_0()
+                                                .group_hover("sidebar-update", |style| {
+                                                    style.invisible()
+                                                })
+                                                .child(local_icon(icon, MUTED).size_full()),
+                                        )
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .inset_0()
+                                                .invisible()
+                                                .group_hover("sidebar-update", |style| {
+                                                    style.visible()
+                                                })
+                                                .child(local_icon(icon, FOREGROUND).size_full()),
+                                        ),
+                                )
+                            }),
                     )
                     .when(!compact, |this| this.child(label))
                     .when(compact, |this| this.app_tooltip_right(tooltip))

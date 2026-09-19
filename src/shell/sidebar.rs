@@ -902,6 +902,12 @@ fn sidebar_bottom(
         .w(px(expanded_width))
         .opacity(initial_opacities.account)
         .when(initial_opacities.account == 0.0, |this| this.invisible())
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .when(show_update && !compact && !app.settings_mode, |this| {
+            this.child(app.update_badge(false, cx))
+        })
         .child(
             div()
                 .w_full()
@@ -1135,7 +1141,7 @@ fn sidebar_bottom(
         .child(compact_logout_layer)
         .child(compact_transfer_layer)
         .child(compact_settings_layer)
-        .when(show_update, |this| {
+        .when(show_update && (compact || app.settings_mode), |this| {
             this.child(
                 div()
                     .absolute()

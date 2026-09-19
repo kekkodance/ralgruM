@@ -176,7 +176,11 @@ impl UpdaterModel {
         if !matches!(self.status, Status::Ready) {
             return Err("The update is not ready".into());
         }
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && !cfg!(windows) {
+            return Err("Automatic installation is currently available only on Windows".into());
+        }
+        #[cfg(debug_assertions)]
+        if super::test_fixture::candidate_path().is_none() {
             return Err("Debug builds only download and verify updates. Automatic installation is enabled in release builds.".into());
         }
         let staged = self

@@ -43,6 +43,13 @@ pub(crate) fn current_version() -> Version {
 }
 
 pub(crate) async fn fetch_latest(client: &reqwest::Client) -> Result<Option<Release>, String> {
+    #[cfg(debug_assertions)]
+    if let Some(candidate) = super::test_fixture::candidate_path() {
+        return tokio::task::spawn_blocking(move || fixture_release(&candidate))
+            .await
+            .map_err(|error| format!("Could not inspect the updater test fixture: {error}"))?
+            .map(Some);
+    }
     let response = client
         .get(RELEASE_API)
         .header("Accept", "application/vnd.github+json")
@@ -61,6 +68,39 @@ pub(crate) async fn fetch_latest(client: &reqwest::Client) -> Result<Option<Rele
         .await
         .map_err(|error| format!("Could not read the GitHub release: {error}"))?;
     parse_release(body, &current_version())
+}
+
+#[cfg(debug_assertions)]
+fn fixture_release(candidate: &std::path::Path) -> Result<Release, String> {
+    use sha2::{Digest as _, Sha256};
+    let mut file = std::fs::File::open(candidate)
+        .map_err(|error| format!("Could not open the updater test candidate: {error}"))?;
+    let size = file.metadata().map_err(|error| error.to_string())?.len();
+    if size == 0 || size > MAX_ASSET_BYTES {
+        return Err("The updater test candidate has an invalid size".into());
+    }
+    let mut hash = Sha256::new();
+    std::io::copy(&mut file, &mut hash).map_err(|error| error.to_string())?;
+    let mut version =
+        Version::parse(env!("CARGO_PKG_VERSION")).expect("the package version must be SemVer");
+    if version <= current_version() {
+        version = current_version();
+        version.patch += 1;
+    }
+    let tag = format!("v{version}");
+    Ok(Release {
+        version,
+        asset_url: Url::parse(&format!(
+            "https://github.com/kekkodance/ralgruM/releases/download/{tag}/ralgruM.exe"
+        ))
+        .map_err(|error| error.to_string())?,
+        page_url: Url::parse(&format!(
+            "https://github.com/kekkodance/ralgruM/releases/tag/{tag}"
+        ))
+        .map_err(|error| error.to_string())?,
+        size,
+        digest: hash.finalize().into(),
+    })
 }
 
 fn parse_release(body: GithubRelease, current: &Version) -> Result<Option<Release>, String> {

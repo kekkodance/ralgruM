@@ -5,6 +5,8 @@ use std::{
 
 use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
+#[cfg(debug_assertions)]
+use tokio::io::AsyncReadExt as _;
 use tokio::io::AsyncWriteExt as _;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -65,6 +67,10 @@ async fn download_into(
     cancellation: &CancellationToken,
     mut progress: impl FnMut(u64),
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    if let Some(candidate) = super::test_fixture::candidate_path() {
+        return copy_fixture_into(&candidate, release, path, cancellation, progress).await;
+    }
     let response = tokio::select! {
         _ = cancellation.cancelled() => return Err("Update download was cancelled".into()),
         response = client.get(release.asset_url.clone()).timeout(Duration::from_secs(300)).send() => {
@@ -120,6 +126,61 @@ async fn download_into(
         .map_err(|error| format!("Could not sync the update: {error}"))?;
     if received != release.size || hash.finalize().as_slice() != release.digest {
         return Err("The update failed the GitHub SHA-256 and size verification".into());
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+async fn copy_fixture_into(
+    candidate: &Path,
+    release: &Release,
+    path: &Path,
+    cancellation: &CancellationToken,
+    mut progress: impl FnMut(u64),
+) -> Result<(), String> {
+    let mut source = tokio::fs::File::open(candidate)
+        .await
+        .map_err(|error| format!("Could not open the updater test candidate: {error}"))?;
+    let mut destination = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await
+        .map_err(|error| format!("Could not stage the updater test candidate: {error}"))?;
+    let mut hash = Sha256::new();
+    let mut received = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = tokio::select! {
+            _ = cancellation.cancelled() => return Err("Update download was cancelled".into()),
+            read = source.read(&mut buffer) => read.map_err(|error| error.to_string())?,
+        };
+        if count == 0 {
+            break;
+        }
+        received = received
+            .checked_add(count as u64)
+            .ok_or("The updater test candidate is too large")?;
+        if received > release.size {
+            return Err("The updater test candidate exceeds its declared size".into());
+        }
+        hash.update(&buffer[..count]);
+        destination
+            .write_all(&buffer[..count])
+            .await
+            .map_err(|error| error.to_string())?;
+        progress(received);
+    }
+    destination
+        .flush()
+        .await
+        .map_err(|error| error.to_string())?;
+    destination
+        .sync_all()
+        .await
+        .map_err(|error| error.to_string())?;
+    if received != release.size || hash.finalize().as_slice() != release.digest {
+        return Err("The updater test candidate failed SHA-256 and size verification".into());
     }
     Ok(())
 }

@@ -25,6 +25,13 @@ fn report_error(error: &str) {
     let _ = fs::write(path, error);
 }
 
+fn restart_command(target: &Path) -> Command {
+    let mut command = Command::new(target);
+    command.env_remove("RALGRUM_UPDATE_TEST_ASSET");
+    command.env_remove("RALGRUM_UPDATE_TEST_CURRENT_VERSION");
+    command
+}
+
 pub(crate) fn take_last_error() -> Option<String> {
     let path = last_error_path();
     let error = fs::read_to_string(&path).ok()?;
@@ -250,16 +257,16 @@ fn run_helper(raw_id: &str) -> Result<(), String> {
     if let Err(error) = verify(&tx.staged, tx.digest) {
         let _ = fs::write(dir.join("error.txt"), &error);
         report_error(&error);
-        let _ = Command::new(&tx.target).spawn();
+        let _ = restart_command(&tx.target).spawn();
         return Err(error);
     }
     if let Err(error) = replace_with_retry(&tx.target, &tx.staged, Some(&tx.backup)) {
         let _ = fs::write(dir.join("error.txt"), &error);
         report_error(&error);
-        let _ = Command::new(&tx.target).spawn();
+        let _ = restart_command(&tx.target).spawn();
         return Err(error);
     }
-    let mut child = match Command::new(&tx.target)
+    let mut child = match restart_command(&tx.target)
         .arg(CONFIRM_ARG)
         .arg(id.to_string())
         .spawn()
@@ -268,7 +275,7 @@ fn run_helper(raw_id: &str) -> Result<(), String> {
         Err(error) => {
             replace_with_retry(&tx.target, &tx.backup, None)?;
             report_error(&format!("Updated app did not launch: {error}"));
-            let _ = Command::new(&tx.target).spawn();
+            let _ = restart_command(&tx.target).spawn();
             return Err(format!("Updated app did not launch: {error}"));
         }
     };
@@ -290,7 +297,7 @@ fn run_helper(raw_id: &str) -> Result<(), String> {
             report_error(
                 "Updated app exited before its window was ready; restored the previous version",
             );
-            let _ = Command::new(&tx.target).spawn();
+            let _ = restart_command(&tx.target).spawn();
             return Err(
                 "Updated app exited before its window was ready; restored the previous version"
                     .into(),
