@@ -131,8 +131,6 @@ pub(super) fn row(
                     .flex_none()
                     .overflow_hidden()
                     .rounded(px(5.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
                     .bg(rgb(SURFACE_RAISED))
                     .flex()
                     .items_center()
