@@ -4,6 +4,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
@@ -212,7 +213,7 @@ impl TryFrom<StoredItem> for LocalTrack {
 #[derive(Clone, Debug)]
 pub(crate) struct LocalLibraryStore {
     directory: PathBuf,
-    tracks: Vec<LocalTrack>,
+    tracks: Arc<Vec<LocalTrack>>,
 }
 
 impl LocalLibraryStore {
@@ -254,7 +255,7 @@ impl LocalLibraryStore {
         };
         Ok(Self {
             directory: directory.to_owned(),
-            tracks,
+            tracks: Arc::new(tracks),
         })
     }
 
@@ -272,7 +273,7 @@ impl LocalLibraryStore {
         {
             return Err(LocalLibraryError::DuplicateItem);
         }
-        let mut tracks = self.tracks.clone();
+        let mut tracks = self.tracks.as_ref().clone();
         tracks.push(track);
         self.persist_tracks(tracks)
     }
@@ -280,7 +281,7 @@ impl LocalLibraryStore {
     #[allow(dead_code)]
     pub(crate) fn upsert_track(&mut self, track: LocalTrack) -> Result<(), LocalLibraryError> {
         let track = normalize_track(track)?;
-        let mut tracks = self.tracks.clone();
+        let mut tracks = self.tracks.as_ref().clone();
         if let Some(existing) = tracks
             .iter_mut()
             .find(|existing| existing.provider == track.provider && existing.id == track.id)
@@ -299,7 +300,7 @@ impl LocalLibraryStore {
         id: &str,
     ) -> Result<bool, LocalLibraryError> {
         let id = normalize_id(id.to_owned())?;
-        let mut tracks = self.tracks.clone();
+        let mut tracks = self.tracks.as_ref().clone();
         let before = tracks.len();
         tracks.retain(|track| !(track.provider == provider && track.id == id));
         if before == tracks.len() {
@@ -317,7 +318,7 @@ impl LocalLibraryStore {
         if from >= self.tracks.len() || to >= self.tracks.len() || from == to {
             return Ok(false);
         }
-        let mut tracks = self.tracks.clone();
+        let mut tracks = self.tracks.as_ref().clone();
         let track = tracks.remove(from);
         tracks.insert(to, track);
         self.persist_tracks(tracks)?;
@@ -329,7 +330,7 @@ impl LocalLibraryStore {
         fs::create_dir_all(&self.directory).map_err(|_| LocalLibraryError::Filesystem)?;
         write_atomic(&self.directory.join(BACKUP_FILE), &encoded)?;
         write_atomic(&self.directory.join(PRIMARY_FILE), &encoded)?;
-        self.tracks = tracks;
+        self.tracks = Arc::new(tracks);
         Ok(())
     }
 }
@@ -567,6 +568,15 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let store = load_store(&temp);
         assert!(store.tracks().is_empty());
+    }
+
+    #[test]
+    fn response_snapshot_shares_track_storage() {
+        let temp = TempDir::new().unwrap();
+        let mut store = load_store(&temp);
+        store.add_track(track(Provider::Deezer, "42")).unwrap();
+        let snapshot = store.clone();
+        assert!(Arc::ptr_eq(&store.tracks, &snapshot.tracks));
     }
 
     #[test]
