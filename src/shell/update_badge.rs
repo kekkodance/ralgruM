@@ -4,9 +4,10 @@ use gpui::{
 use gpui_component::{Sizable, Size, spinner::Spinner};
 
 use crate::{
+    app_button::SETTINGS_SECONDARY_ICON_SIZE,
     app_tooltip::AppTooltipExt,
     assets::{LocalIcon, local_icon, widget_icon},
-    theme::{FOREGROUND, MUTED},
+    theme::FOREGROUND,
     toast::{ToastKind, push_global},
     updater::model::Status,
 };
@@ -159,15 +160,14 @@ impl RalgrumApp {
                     .gap(px(7.))
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(FOREGROUND))
                     .when(enabled, |this| {
-                        this.group("sidebar-update")
-                            .cursor_pointer()
-                            .hover(|this| this.bg(rgba(0x6366f166)).text_color(rgb(FOREGROUND)))
+                        this.cursor_pointer()
+                            .hover(|this| this.bg(rgba(0x6366f166)))
                     })
                     .child(
                         div()
-                            .size(px(13.))
+                            .size(px(SETTINGS_SECONDARY_ICON_SIZE))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -176,34 +176,14 @@ impl RalgrumApp {
                                 this.child(
                                     Spinner::new()
                                         .icon(widget_icon(LocalIcon::Spinner))
-                                        .with_size(Size::Size(px(11.)))
-                                        .color(rgb(MUTED).into()),
+                                        .with_size(Size::Size(px(SETTINGS_SECONDARY_ICON_SIZE)))
+                                        .color(rgb(FOREGROUND).into()),
                                 )
                             })
                             .when(!spinning, |this| {
                                 this.child(
-                                    div()
-                                        .relative()
-                                        .size(px(11.))
-                                        .child(
-                                            div()
-                                                .absolute()
-                                                .inset_0()
-                                                .group_hover("sidebar-update", |style| {
-                                                    style.invisible()
-                                                })
-                                                .child(local_icon(icon, MUTED).size_full()),
-                                        )
-                                        .child(
-                                            div()
-                                                .absolute()
-                                                .inset_0()
-                                                .invisible()
-                                                .group_hover("sidebar-update", |style| {
-                                                    style.visible()
-                                                })
-                                                .child(local_icon(icon, FOREGROUND).size_full()),
-                                        ),
+                                    local_icon(icon, FOREGROUND)
+                                        .size(px(SETTINGS_SECONDARY_ICON_SIZE)),
                                 )
                             }),
                     )
