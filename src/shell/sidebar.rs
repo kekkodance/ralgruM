@@ -705,7 +705,7 @@ impl RalgrumApp {
             }),
         );
         button
-            .app_tooltip_right(LOGOUT_ALL_TOOLTIP)
+            .when(compact, |this| this.app_tooltip_right(LOGOUT_ALL_TOOLTIP))
             .tab_stop(interactive)
             .when(!interactive, |this| this.invisible())
     }
@@ -737,7 +737,9 @@ impl RalgrumApp {
             }),
         );
         button
-            .app_tooltip_right(SETTINGS_TRANSFER_TOOLTIP)
+            .when(compact, |this| {
+                this.app_tooltip_right(SETTINGS_TRANSFER_TOOLTIP)
+            })
             .tab_stop(interactive)
             .when(!interactive, |this| this.invisible())
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
