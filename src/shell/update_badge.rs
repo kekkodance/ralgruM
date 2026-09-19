@@ -96,7 +96,9 @@ impl RalgrumApp {
 
     pub(super) fn update_badge(
         &self,
+        button_id: &'static str,
         compact: bool,
+        interactive: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let updater = self.updater.read(cx);
@@ -145,11 +147,10 @@ impl RalgrumApp {
         div().w_full().when(visible, |this| {
             this.child(
                 div()
-                    .id("sidebar-update-button")
+                    .id(button_id)
                     .role(Role::Button)
                     .aria_label(label.clone())
-                    .focusable()
-                    .tab_stop(true)
+                    .when(interactive, |this| this.focusable().tab_stop(true))
                     .w_full()
                     .h(px(36.))
                     .rounded(px(6.))
@@ -163,7 +164,7 @@ impl RalgrumApp {
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(FOREGROUND))
-                    .when(enabled, |this| {
+                    .when(enabled && interactive, |this| {
                         this.cursor_pointer()
                             .hover(|this| this.bg(rgba(0x6366f166)))
                     })
@@ -190,7 +191,7 @@ impl RalgrumApp {
                     )
                     .when(!compact, |this| this.child(label))
                     .when(compact, |this| this.app_tooltip_right(tooltip))
-                    .when(enabled, |this| {
+                    .when(enabled && interactive, |this| {
                         this.on_click(
                             cx.listener(|this, _, window, cx| this.activate_update(window, cx)),
                         )

@@ -22,6 +22,8 @@ use super::{
     },
 };
 
+mod sidebar_update;
+
 const SIDEBAR_NAV_HOVER_BACKGROUND: u32 = 0xffffff0a;
 const SIDEBAR_NAV_ACTIVE_BACKGROUND: u32 = 0xffffff12;
 const FULL_SETTINGS_BUTTON_SIZE: f32 = 30.;
@@ -50,6 +52,8 @@ const SIDEBAR_SETTINGS_CATEGORY_GAP_PX: f32 = 4.;
 const SIDEBAR_COMPACT_CONTROL_GAP_PX: f32 = SIDEBAR_SETTINGS_CATEGORY_GAP_PX;
 const SIDEBAR_COMPACT_SETTINGS_ACTION_GROUP_GAP_PX: f32 = 8.;
 const SIDEBAR_BOTTOM_ACCOUNT_HEADROOM_PX: f32 = 8.;
+const SIDEBAR_ACCOUNT_CARD_HEIGHT_PX: f32 = 80.;
+const SIDEBAR_UPDATE_ACCOUNT_GAP_PX: f32 = 8.;
 const SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX: f32 =
     COMPACT_SETTINGS_BUTTON_SIZE + SIDEBAR_COMPACT_SETTINGS_ACTION_GROUP_GAP_PX;
 const SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX: f32 = SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX
@@ -66,6 +70,8 @@ const SIDEBAR_UPDATE_COMPACT_HOST_HEIGHT_PX: f32 =
 const SIDEBAR_UPDATE_EXPANDED_BOTTOM_PX: f32 = SIDEBAR_EXPANDED_TRANSFER_BOTTOM_PX
     + DangerSecondaryButtonOptions::SIDEBAR.height
     + SIDEBAR_COMPACT_CONTROL_GAP_PX;
+const SIDEBAR_UPDATE_EXPANDED_DEFAULT_BOTTOM_PX: f32 =
+    SIDEBAR_ACCOUNT_CARD_HEIGHT_PX + SIDEBAR_UPDATE_ACCOUNT_GAP_PX;
 const SIDEBAR_UPDATE_COMPACT_DEFAULT_BOTTOM_PX: f32 =
     COMPACT_SETTINGS_BUTTON_SIZE + SIDEBAR_COMPACT_SETTINGS_ACTION_GROUP_GAP_PX;
 const SIDEBAR_UPDATE_COMPACT_SETTINGS_BOTTOM_PX: f32 = SIDEBAR_COMPACT_TRANSFER_BOTTOM_PX
@@ -74,10 +80,20 @@ const SIDEBAR_UPDATE_COMPACT_SETTINGS_BOTTOM_PX: f32 = SIDEBAR_COMPACT_TRANSFER_
 
 fn update_badge_bottom(compact: bool, settings_mode: bool) -> f32 {
     match (compact, settings_mode) {
-        (false, _) => SIDEBAR_UPDATE_EXPANDED_BOTTOM_PX,
+        (false, false) => SIDEBAR_UPDATE_EXPANDED_DEFAULT_BOTTOM_PX,
+        (false, true) => SIDEBAR_UPDATE_EXPANDED_BOTTOM_PX,
         (true, false) => SIDEBAR_UPDATE_COMPACT_DEFAULT_BOTTOM_PX,
         (true, true) => SIDEBAR_UPDATE_COMPACT_SETTINGS_BOTTOM_PX,
     }
+}
+
+fn update_badge_bottom_at(compact: bool, visual: SidebarBottomVisual, delta: f32) -> f32 {
+    let (_, settings) = visual.fractions_at(delta);
+    crate::motion::lerp(
+        update_badge_bottom(compact, false),
+        update_badge_bottom(compact, true),
+        settings,
+    )
 }
 
 fn sidebar_bottom_host_height(compact: bool, show_update: bool) -> f32 {
@@ -127,6 +143,15 @@ fn sidebar_bottom_opacities(compact: f32, settings: f32) -> SidebarBottomOpaciti
 fn sidebar_bottom_opacities_at(visual: SidebarBottomVisual, delta: f32) -> SidebarBottomOpacities {
     let (compact, settings) = visual.fractions_at(delta);
     sidebar_bottom_opacities(compact, settings)
+}
+
+fn sidebar_update_opacities_at(visual: SidebarBottomVisual, delta: f32) -> (f32, f32, f32) {
+    let (compact, settings) = visual.fractions_at(delta);
+    (
+        1.0 - compact,
+        compact * (1.0 - settings),
+        compact * settings,
+    )
 }
 
 fn sidebar_expanded_content_width(narrow_content: bool) -> f32 {
@@ -902,15 +927,10 @@ fn sidebar_bottom(
         .w(px(expanded_width))
         .opacity(initial_opacities.account)
         .when(initial_opacities.account == 0.0, |this| this.invisible())
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .when(show_update && !compact && !app.settings_mode, |this| {
-            this.child(app.update_badge(false, cx))
-        })
         .child(
             div()
                 .w_full()
+                .h(px(SIDEBAR_ACCOUNT_CARD_HEIGHT_PX))
                 .p(px(12.))
                 .rounded(px(6.))
                 .border_1()
@@ -918,6 +938,7 @@ fn sidebar_bottom(
                 .bg(rgb(SURFACE))
                 .flex()
                 .flex_col()
+                .justify_center()
                 .gap(px(8.))
                 .text_size(px(11.5))
                 .text_color(rgb(MUTED))
@@ -1141,15 +1162,14 @@ fn sidebar_bottom(
         .child(compact_logout_layer)
         .child(compact_transfer_layer)
         .child(compact_settings_layer)
-        .when(show_update && (compact || app.settings_mode), |this| {
-            this.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .bottom(px(update_badge_bottom(compact, app.settings_mode)))
-                    .w_full()
-                    .child(app.update_badge(compact, cx)),
-            )
+        .when(show_update, |this| {
+            this.child(sidebar_update::render_update_layers(
+                app,
+                compact,
+                expanded_width,
+                bottom_visual,
+                cx,
+            ))
         })
 }
 
@@ -1158,8 +1178,8 @@ mod tests {
     use super::{
         ACCOUNT_STATUS_ICON_OFFSET_PX, COMPACT_SETTINGS_BUTTON_RADIUS_PX,
         COMPACT_SETTINGS_BUTTON_SIZE, COMPACT_SETTINGS_ICON_SIZE, FULL_SETTINGS_BUTTON_SIZE,
-        LOGOUT_ALL_TOOLTIP, SETTINGS_ICON_SIZE, SIDEBAR_BORDER_WIDTH_PX,
-        SIDEBAR_BOTTOM_ACCOUNT_HEADROOM_PX, SIDEBAR_BOTTOM_HOST_HEIGHT_PX,
+        LOGOUT_ALL_TOOLTIP, SETTINGS_ICON_SIZE, SIDEBAR_ACCOUNT_CARD_HEIGHT_PX,
+        SIDEBAR_BORDER_WIDTH_PX, SIDEBAR_BOTTOM_ACCOUNT_HEADROOM_PX, SIDEBAR_BOTTOM_HOST_HEIGHT_PX,
         SIDEBAR_COMPACT_CONTENT_WIDTH_PX, SIDEBAR_COMPACT_CONTROL_GAP_PX,
         SIDEBAR_COMPACT_LOGOUT_BOTTOM_PX, SIDEBAR_COMPACT_LOGOUT_ID,
         SIDEBAR_COMPACT_SETTINGS_ACTION_GROUP_GAP_PX, SIDEBAR_COMPACT_SETTINGS_ID,
@@ -1169,7 +1189,7 @@ mod tests {
         SIDEBAR_HORIZONTAL_PADDING_PX, SIDEBAR_NAV_ACTIVE_BACKGROUND, SIDEBAR_NAV_HOVER_BACKGROUND,
         SIDEBAR_RIGHT_PADDING_PX, SIDEBAR_SETTINGS_CATEGORY_GAP_PX, sidebar_bottom_host_height,
         sidebar_bottom_opacities, sidebar_expanded_content_width, sidebar_pass_value,
-        update_badge_bottom,
+        sidebar_update_opacities_at, update_badge_bottom, update_badge_bottom_at,
     };
     use crate::{
         settings::SidebarPass,
@@ -1302,14 +1322,44 @@ mod tests {
 
     #[test]
     fn updater_sits_above_the_visible_bottom_controls_in_every_sidebar_mode() {
-        assert_eq!(update_badge_bottom(false, false), 76.);
+        assert_eq!(update_badge_bottom(false, false), 88.);
         assert_eq!(update_badge_bottom(false, true), 76.);
         assert_eq!(update_badge_bottom(true, false), 44.);
         assert_eq!(update_badge_bottom(true, true), 124.);
         assert_eq!(sidebar_bottom_host_height(false, true), 128.);
         assert_eq!(sidebar_bottom_host_height(true, false), 128.);
         assert_eq!(sidebar_bottom_host_height(true, true), 168.);
+        assert_eq!(
+            update_badge_bottom(false, false) - SIDEBAR_ACCOUNT_CARD_HEIGHT_PX,
+            8.
+        );
+        assert!(sidebar_bottom_host_height(false, true) >= update_badge_bottom(false, false) + 36.);
         assert!(sidebar_bottom_host_height(true, true) >= update_badge_bottom(true, true) + 36.);
+    }
+
+    #[test]
+    fn updater_follows_settings_motion_in_expanded_and_compact_sidebar() {
+        let expanded = super::SidebarBottomVisual {
+            compact_from: 0.0,
+            compact_target: 0.0,
+            settings_from: 0.0,
+            settings_target: 1.0,
+            epoch: 1,
+        };
+        assert_eq!(update_badge_bottom_at(false, expanded, 0.0), 88.);
+        assert_eq!(update_badge_bottom_at(false, expanded, 0.5), 82.);
+        assert_eq!(update_badge_bottom_at(false, expanded, 1.0), 76.);
+
+        let compact = super::SidebarBottomVisual {
+            compact_from: 1.0,
+            compact_target: 1.0,
+            ..expanded
+        };
+        assert_eq!(sidebar_update_opacities_at(compact, 0.0), (0.0, 1.0, 0.0));
+        assert_eq!(sidebar_update_opacities_at(compact, 0.5), (0.0, 0.5, 0.5));
+        assert_eq!(sidebar_update_opacities_at(compact, 1.0), (0.0, 0.0, 1.0));
+        assert_eq!(update_badge_bottom_at(true, compact, 0.0), 44.);
+        assert_eq!(update_badge_bottom_at(true, compact, 1.0), 124.);
     }
 
     #[test]
