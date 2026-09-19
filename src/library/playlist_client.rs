@@ -645,7 +645,6 @@ fn graphql_request(
     authorization.set_sensitive(true);
     Ok(client
         .post(GRAPHQL_URL)
-        .header(header::COOKIE, session.cookie.clone())
         .header(header::AUTHORIZATION, authorization)
         .header(header::ORIGIN, "https://www.deezer.com")
         .header(header::REFERER, "https://www.deezer.com/")
@@ -1048,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn graphql_authorization_and_cookie_headers_are_sensitive() {
+    fn graphql_uses_sensitive_authorization_without_gateway_cookies() {
         let mut cookie = header::HeaderValue::from_static("arl=cookie-secret");
         cookie.set_sensitive(true);
         let session = Session {
@@ -1068,7 +1067,7 @@ mod tests {
         .build()
         .unwrap();
         assert!(request.headers()[header::AUTHORIZATION].is_sensitive());
-        assert!(request.headers()[header::COOKIE].is_sensitive());
+        assert!(!request.headers().contains_key(header::COOKIE));
         let debug = format!("{request:?}");
         assert!(!debug.contains("token-secret"));
         assert!(!debug.contains("cookie-secret"));
