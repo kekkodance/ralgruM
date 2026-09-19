@@ -68,11 +68,22 @@ pub(crate) enum LocalLibraryMutationOutcome {
 pub(crate) enum LocalPlaylistMutationOutcome {
     Created,
     Updated,
-    Added { count: usize },
-    AlreadyPresent { playlist_title: String },
-    Deleted { changed: bool },
-    Removed { changed: bool },
-    Reordered { changed: bool },
+    Added {
+        count: usize,
+    },
+    AlreadyPresent {
+        playlist_title: String,
+        count: usize,
+    },
+    Deleted {
+        changed: bool,
+    },
+    Removed {
+        changed: bool,
+    },
+    Reordered {
+        changed: bool,
+    },
 }
 
 pub(crate) struct LocalLibraryMutationResponse {
@@ -268,25 +279,21 @@ fn apply_playlist(
             playlist_id,
             tracks,
         } => {
-            let (playlist_title, duplicate) = store
+            let playlist_title = store
                 .playlist(&playlist_id)
-                .map(|playlist| {
-                    let duplicate = tracks.iter().any(|track| {
-                        playlist.tracks.iter().any(|saved| {
-                            saved.provider == track.provider && saved.id == track.id.trim()
-                        })
-                    });
-                    (playlist.title.clone(), duplicate)
-                })
+                .map(|playlist| playlist.title.clone())
                 .ok_or(LocalPlaylistError::NotFound)?;
-            if duplicate {
-                Ok(LocalPlaylistMutationOutcome::AlreadyPresent { playlist_title })
-            } else {
-                let count = tracks.len();
-                store
-                    .add_tracks(&playlist_id, &tracks)
-                    .map(|()| LocalPlaylistMutationOutcome::Added { count })
-            }
+            let count = tracks.len();
+            store.add_tracks(&playlist_id, &tracks).map(|added| {
+                if added == 0 {
+                    LocalPlaylistMutationOutcome::AlreadyPresent {
+                        playlist_title,
+                        count,
+                    }
+                } else {
+                    LocalPlaylistMutationOutcome::Added { count: added }
+                }
+            })
         }
         LocalPlaylistMutation::Delete { id } => store
             .delete(&id)

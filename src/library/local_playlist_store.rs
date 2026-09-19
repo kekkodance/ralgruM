@@ -116,7 +116,7 @@ pub(crate) struct LocalPlaylist {
 #[derive(Clone, Debug)]
 pub(crate) struct LocalPlaylistStore {
     directory: PathBuf,
-    playlists: Vec<LocalPlaylist>,
+    playlists: std::sync::Arc<Vec<LocalPlaylist>>,
 }
 
 impl LocalPlaylistStore {
@@ -156,7 +156,7 @@ impl LocalPlaylistStore {
         };
         Ok(Self {
             directory: directory.to_owned(),
-            playlists,
+            playlists: std::sync::Arc::new(playlists),
         })
     }
 
@@ -199,7 +199,7 @@ impl LocalPlaylistStore {
                 .unwrap_or_default(),
             tracks: Vec::new(),
         };
-        let mut playlists = self.playlists.clone();
+        let mut playlists = self.playlists.as_ref().clone();
         playlists.push(playlist.clone());
         if let Err(error) = self.persist(playlists) {
             if error == LocalPlaylistError::Serialization
@@ -258,7 +258,7 @@ impl LocalPlaylistStore {
                 .unwrap_or_default(),
             tracks: normalized_tracks,
         };
-        let mut playlists = self.playlists.clone();
+        let mut playlists = self.playlists.as_ref().clone();
         playlists.push(playlist.clone());
         if let Err(error) = self.persist(playlists) {
             if error == LocalPlaylistError::Serialization
@@ -303,7 +303,7 @@ impl LocalPlaylistStore {
         let written = artwork_jpeg
             .map(|jpeg| super::local_playlist_artwork::write(&self.directory, &playlist_id, jpeg))
             .transpose()?;
-        let mut playlists = self.playlists.clone();
+        let mut playlists = self.playlists.as_ref().clone();
         let playlist = playlists
             .iter_mut()
             .find(|playlist| playlist.id == playlist_id)
@@ -337,7 +337,7 @@ impl LocalPlaylistStore {
 
     pub(crate) fn delete(&mut self, id: &str) -> Result<bool, LocalPlaylistError> {
         let id = normalize_id(id.to_owned())?;
-        let mut playlists = self.playlists.clone();
+        let mut playlists = self.playlists.as_ref().clone();
         let old_artwork = playlists
             .iter()
             .find(|playlist| playlist.id == id)
@@ -362,9 +362,9 @@ impl LocalPlaylistStore {
         &mut self,
         playlist_id: &str,
         tracks: &[LocalTrack],
-    ) -> Result<(), LocalPlaylistError> {
+    ) -> Result<usize, LocalPlaylistError> {
         let playlist_id = normalize_id(playlist_id.to_owned())?;
-        let mut playlists = self.playlists.clone();
+        let mut playlists = self.playlists.as_ref().clone();
         let playlist = playlists
             .iter_mut()
             .find(|playlist| playlist.id == playlist_id)
@@ -378,12 +378,17 @@ impl LocalPlaylistStore {
         for track in tracks {
             let track = normalize_track(track.clone())?;
             if !seen.insert((track.provider, track.id.clone())) {
-                return Err(LocalPlaylistError::DuplicateItem);
+                continue;
             }
             additions.push(track);
         }
+        if additions.is_empty() {
+            return Ok(0);
+        }
+        let count = additions.len();
         playlist.tracks.extend(additions);
-        self.persist(playlists)
+        self.persist(playlists)?;
+        Ok(count)
     }
 
     pub(crate) fn remove_track(
@@ -394,7 +399,7 @@ impl LocalPlaylistStore {
     ) -> Result<bool, LocalPlaylistError> {
         let playlist_id = normalize_id(playlist_id.to_owned())?;
         let id = normalize_id(id.to_owned())?;
-        let mut playlists = self.playlists.clone();
+        let mut playlists = self.playlists.as_ref().clone();
         let playlist = playlists
             .iter_mut()
             .find(|playlist| playlist.id == playlist_id)
@@ -418,7 +423,7 @@ impl LocalPlaylistStore {
         to: usize,
     ) -> Result<bool, LocalPlaylistError> {
         let playlist_id = normalize_id(playlist_id.to_owned())?;
-        let mut playlists = self.playlists.clone();
+        let mut playlists = self.playlists.as_ref().clone();
         let playlist = playlists
             .iter_mut()
             .find(|playlist| playlist.id == playlist_id)
@@ -437,7 +442,7 @@ impl LocalPlaylistStore {
         let previous = encode_playlists(&self.playlists)?;
         fs::create_dir_all(&self.directory).map_err(|_| LocalPlaylistError::Filesystem)?;
         write_pair(&self.directory, &encoded, &previous)?;
-        self.playlists = playlists;
+        self.playlists = std::sync::Arc::new(playlists);
         Ok(())
     }
 }
@@ -851,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_provider_and_id_is_rejected_but_cross_provider_id_is_allowed() {
+    fn duplicate_provider_and_id_is_skipped_but_cross_provider_id_is_allowed() {
         let directory = TempDir::new().unwrap();
         let mut store = LocalPlaylistStore::load_from_directory(directory.path()).unwrap();
         let playlist = store.create("Mix", "").unwrap();
@@ -860,12 +865,63 @@ mod tests {
             .unwrap();
         assert_eq!(
             store.add_tracks(&playlist.id, &[track(Provider::Deezer, "1")]),
-            Err(LocalPlaylistError::DuplicateItem)
+            Ok(0)
         );
         store
             .add_tracks(&playlist.id, &[track(Provider::SoundCloud, "1")])
             .unwrap();
         assert_eq!(store.playlist(&playlist.id).unwrap().tracks.len(), 2);
+    }
+
+    #[test]
+    fn bulk_add_keeps_new_tracks_when_some_are_already_present() {
+        let directory = TempDir::new().unwrap();
+        let mut store = LocalPlaylistStore::load_from_directory(directory.path()).unwrap();
+        let playlist = store.create("Mix", "").unwrap();
+        store
+            .add_tracks(&playlist.id, &[track(Provider::Deezer, "1")])
+            .unwrap();
+
+        assert_eq!(
+            store.add_tracks(
+                &playlist.id,
+                &[
+                    track(Provider::Deezer, "1"),
+                    track(Provider::Deezer, "2"),
+                    track(Provider::Deezer, "2"),
+                    track(Provider::SoundCloud, "1"),
+                ],
+            ),
+            Ok(2)
+        );
+        let reloaded = LocalPlaylistStore::load_from_directory(directory.path()).unwrap();
+        let ids = reloaded
+            .playlist(&playlist.id)
+            .unwrap()
+            .tracks
+            .iter()
+            .map(|track| (track.provider, track.id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                (Provider::Deezer, "1"),
+                (Provider::Deezer, "2"),
+                (Provider::SoundCloud, "1"),
+            ]
+        );
+    }
+
+    #[test]
+    fn response_snapshot_shares_playlist_storage() {
+        let directory = TempDir::new().unwrap();
+        let mut store = LocalPlaylistStore::load_from_directory(directory.path()).unwrap();
+        store.create("Mix", "").unwrap();
+        let snapshot = store.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &store.playlists,
+            &snapshot.playlists
+        ));
     }
 
     #[test]
@@ -1035,7 +1091,7 @@ mod tests {
             artwork: original.artwork.clone(),
             tracks,
         };
-        let mut next = store.playlists.clone();
+        let mut next = store.playlists.as_ref().clone();
         next[0] = oversized;
 
         assert_eq!(store.persist(next), Err(LocalPlaylistError::Serialization));

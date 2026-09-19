@@ -22,6 +22,7 @@ mod local_playlist_view;
 mod local_store;
 mod model;
 mod normalize;
+mod playlist_add_client;
 mod playlist_client;
 mod playlist_controller;
 mod playlist_cover_editor;

@@ -14,7 +14,7 @@ use std::{
 use futures::channel::oneshot;
 use ogg::reading::PacketReader;
 use opus_decoder::OpusDecoder;
-use rodio::cpal::traits::DeviceTrait;
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{
     Decoder, OutputStream, OutputStreamBuilder, Sink, Source, buffer::SamplesBuffer,
     source::SeekError,
@@ -215,8 +215,7 @@ impl RodioEngine {
     /// process, so a different live ASIO stream makes the lookup fail; the
     /// caller then keeps the previous stream.
     fn open_asio_output_stream(name: &str) -> Result<OutputStream, String> {
-        let device = find_asio_driver(name)
-            .ok_or_else(|| format!("The ASIO driver \"{name}\" could not be started"))?;
+        let device = find_asio_driver(name)?;
         let config = device.default_output_config().ok();
         let stream = OutputStreamBuilder::from_device(device)
             .and_then(|builder| {
@@ -224,7 +223,7 @@ impl RodioEngine {
                     .with_error_callback(log_output_stream_error)
                     .open_stream_or_fallback()
             })
-            .map_err(|_| format!("The ASIO driver \"{name}\" could not be started"))?;
+            .map_err(|error| format!("The ASIO driver \"{name}\" could not be opened: {error}"))?;
         if let Some(config) = config {
             diagnostics::event(
                 "INFO",
@@ -271,7 +270,22 @@ impl RodioEngine {
         target: AudioOutputTarget,
         reload: Option<OutputReloadSpec>,
     ) -> Result<PreparedOutputSwitch, String> {
-        let stream = Self::open_output_stream(&target)?;
+        let (stream, target) = match Self::open_output_stream(&target) {
+            Ok(stream) => (stream, target),
+            Err(error) if matches!(target, AudioOutputTarget::Device(_)) => {
+                diagnostics::event(
+                    "WARN",
+                    format!(
+                        "the selected output could not be opened, using the system default: {error}"
+                    ),
+                );
+                (
+                    Self::open_output_stream(&AudioOutputTarget::SystemDefault)?,
+                    AudioOutputTarget::SystemDefault,
+                )
+            }
+            Err(error) => return Err(error),
+        };
         let position = reload.as_ref().map_or(Duration::ZERO, |spec| spec.position);
         let source = reload.as_ref().and_then(Self::reload_front_source);
         Ok(PreparedOutputSwitch {
@@ -280,6 +294,49 @@ impl RodioEngine {
             position,
             target,
         })
+    }
+
+    /// Move through an unrelated WASAPI endpoint before opening another
+    /// ASIO stream. Some interfaces cannot open ASIO while their own WASAPI
+    /// endpoint is still active, and two ASIO drivers cannot coexist.
+    pub(crate) fn prepare_asio_bridge(
+        driver_name: &str,
+        current_device: Option<&str>,
+        reload: Option<OutputReloadSpec>,
+    ) -> Result<PreparedOutputSwitch, String> {
+        let host = rodio::cpal::default_host();
+        let devices = host
+            .output_devices()
+            .map_err(|error| format!("An ASIO bridge output could not be listed: {error}"))?;
+        for device in devices {
+            let Ok(name) = device.name() else {
+                continue;
+            };
+            if current_device == Some(name.as_str())
+                || asio_endpoint_matches_driver(&name, driver_name)
+            {
+                continue;
+            }
+            let stream = OutputStreamBuilder::from_device(device).and_then(|builder| {
+                builder
+                    .with_error_callback(log_output_stream_error)
+                    .open_stream_or_fallback()
+            });
+            if let Ok(stream) = stream {
+                let position = reload.as_ref().map_or(Duration::ZERO, |spec| spec.position);
+                let source = reload.as_ref().and_then(Self::reload_front_source);
+                return Ok(PreparedOutputSwitch {
+                    stream,
+                    source,
+                    position,
+                    target: AudioOutputTarget::Device(name),
+                });
+            }
+        }
+        if current_device.is_none() {
+            return Self::prepare_output_switch(AudioOutputTarget::SystemDefault, reload);
+        }
+        Err("No independent audio output is available to release the current device before opening ASIO".into())
     }
 
     fn wrap_source(&self, source: DecodedSource) -> DecodedSource {
@@ -735,6 +792,18 @@ impl RodioEngine {
             self.sink.get_pos(),
         )
     }
+}
+
+pub(crate) fn asio_endpoint_matches_driver(device: &str, driver: &str) -> bool {
+    let device = device.to_ascii_lowercase();
+    driver
+        .to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|word| {
+            word.len() >= 5
+                && !matches!(word, "driver" | "audio" | "sound" | "device")
+                && device.contains(word)
+        })
 }
 
 fn log_output_stream_error(error: rodio::cpal::StreamError) {

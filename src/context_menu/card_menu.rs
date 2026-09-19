@@ -29,33 +29,60 @@ pub(super) fn album_add_to_playlist_enabled(
     provider: crate::search::Provider,
     id: &str,
     has_tracks: bool,
-    deezer_arl: bool,
     soundcloud_token: bool,
 ) -> bool {
     matches!(kind, EntityKind::Album)
         && super::links::valid_id(id).is_some()
         && has_tracks
         && match provider {
-            crate::search::Provider::Deezer => deezer_arl,
+            crate::search::Provider::Deezer => true,
             crate::search::Provider::SoundCloud => soundcloud_token,
         }
 }
 
-fn collection_add_to_playlist_item<F>(
+fn collection_add_to_playlist_submenu<F, G>(
     menu: super::PopupMenu,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<super::PopupMenu>,
     enabled: bool,
-    on_click: F,
+    provider: crate::search::Provider,
+    provider_enabled: bool,
+    on_local: F,
+    on_provider: G,
 ) -> super::PopupMenu
 where
     F: Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    G: Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 {
     if enabled {
-        menu.item(items::action_item(
+        let on_local = std::rc::Rc::new(on_local);
+        let on_provider = std::rc::Rc::new(on_provider);
+        super::submenu::styled_submenu_with_icon(
+            menu,
+            LocalIcon::Plus,
             "Add to playlist",
-            Some(LocalIcon::Plus),
-            false,
-            on_click,
-        ))
+            window,
+            cx,
+            move |menu, _, _| {
+                let on_local = on_local.clone();
+                let on_provider = on_provider.clone();
+                menu.item(items::action_item(
+                    "Local",
+                    Some(LocalIcon::FolderOpen),
+                    false,
+                    move |event, window, cx| on_local(event, window, cx),
+                ))
+                .item(items::action_item(
+                    provider.label(),
+                    Some(match provider {
+                        crate::search::Provider::Deezer => LocalIcon::Deezer,
+                        crate::search::Provider::SoundCloud => LocalIcon::SoundCloud,
+                    }),
+                    !provider_enabled,
+                    move |event, window, cx| on_provider(event, window, cx),
+                ))
+            },
+        )
     } else {
         menu.item(items::disabled_action("Add to playlist", LocalIcon::Plus))
     }
@@ -229,16 +256,33 @@ where
                     entity.provider,
                     &entity.id,
                     has_tracks,
-                    deezer_arl,
                     soundcloud_token,
                 );
                 let add_host = host.clone();
                 let add_card = card.clone();
-                collection_add_to_playlist_item(menu, add_enabled, move |_, _, cx| {
-                    add_host.update(cx, |library, cx| {
-                        library.add_collection_to_playlist(add_card.clone(), cx);
-                    });
-                })
+                let local_host = add_host.clone();
+                let local_card = add_card.clone();
+                collection_add_to_playlist_submenu(
+                    menu,
+                    window,
+                    cx,
+                    add_enabled,
+                    entity.provider,
+                    match entity.provider {
+                        crate::search::Provider::Deezer => deezer_arl,
+                        crate::search::Provider::SoundCloud => soundcloud_token,
+                    },
+                    move |_, _, cx| {
+                        local_host.update(cx, |library, cx| {
+                            library.add_collection_to_local_playlist(local_card.clone(), cx);
+                        });
+                    },
+                    move |_, _, cx| {
+                        add_host.update(cx, |library, cx| {
+                            library.add_collection_to_playlist(add_card.clone(), cx);
+                        });
+                    },
+                )
             } else {
                 menu
             };
@@ -600,16 +644,33 @@ where
                     entity.provider,
                     &entity.id,
                     has_tracks,
-                    deezer_arl,
                     soundcloud_token,
                 );
                 let add_search = search.clone();
                 let add_card = card.clone();
-                collection_add_to_playlist_item(menu, add_enabled, move |_, _, cx| {
-                    add_search.update(cx, |search, cx| {
-                        search.add_collection_to_playlist(add_card.clone(), cx);
-                    });
-                })
+                let local_search = add_search.clone();
+                let local_card = add_card.clone();
+                collection_add_to_playlist_submenu(
+                    menu,
+                    window,
+                    cx,
+                    add_enabled,
+                    entity.provider,
+                    match entity.provider {
+                        crate::search::Provider::Deezer => deezer_arl,
+                        crate::search::Provider::SoundCloud => soundcloud_token,
+                    },
+                    move |_, _, cx| {
+                        local_search.update(cx, |search, cx| {
+                            search.add_collection_to_local_playlist(local_card.clone(), cx);
+                        });
+                    },
+                    move |_, _, cx| {
+                        add_search.update(cx, |search, cx| {
+                            search.add_collection_to_playlist(add_card.clone(), cx);
+                        });
+                    },
+                )
             } else {
                 menu
             };

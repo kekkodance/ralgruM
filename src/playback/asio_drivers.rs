@@ -32,16 +32,18 @@ fn registry_asio_driver_names() -> Vec<String> {
 /// loaded per process, so the lookup fails while a different ASIO stream
 /// is still open.
 #[cfg(windows)]
-pub(crate) fn find_asio_driver(name: &str) -> Option<rodio::cpal::Device> {
-    let host = rodio::cpal::host_from_id(rodio::cpal::HostId::Asio).ok()?;
+pub(crate) fn find_asio_driver(name: &str) -> Result<rodio::cpal::Device, String> {
+    let host = rodio::cpal::host_from_id(rodio::cpal::HostId::Asio)
+        .map_err(|error| format!("The ASIO host could not start: {error}"))?;
     host.output_devices()
-        .ok()?
+        .map_err(|error| format!("ASIO drivers could not be enumerated: {error}"))?
         .find(|device| device.name().ok().as_deref() == Some(name))
+        .ok_or_else(|| format!("The ASIO driver \"{name}\" was not found"))
 }
 
 #[cfg(not(windows))]
-pub(crate) fn find_asio_driver(_name: &str) -> Option<rodio::cpal::Device> {
-    None
+pub(crate) fn find_asio_driver(_name: &str) -> Result<rodio::cpal::Device, String> {
+    Err("ASIO is unavailable on this platform".into())
 }
 
 /// Maps the saved output selection onto an engine target. ASIO mode plays

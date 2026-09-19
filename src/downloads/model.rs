@@ -10,12 +10,13 @@ use tokio::{fs, io::AsyncSeekExt, runtime::Runtime};
 use tokio_util::sync::CancellationToken;
 
 use super::capability::{CapabilityCache, CapabilityKey, CapabilityProbeRegistry, CapabilityState};
+use super::naming::BatchTargetInspection;
 use super::{
     BatchConflictPolicy, BatchExistingTarget, BatchNeedsConfirmation, DownloadJob, DownloadStatus,
+    download_filename,
     finalize::{FinalizeError, finalize_download},
     inspect_batch_targets,
     quality::ResolvedQuality,
-    sanitize_filename,
     state::{
         BatchTargetAction, DownloadFileStat, batch_outcome, batch_target_action, current_conflict,
         file_destination,
@@ -343,75 +344,100 @@ impl DownloadModel {
             return ids;
         }
 
-        let batch_key = self.next_batch_key();
-        let extension = ids.first().and_then(|id| {
-            self.job(*id)
-                .and_then(|job| batch_download_extension(job.track.provider, variant))
-        });
-        let existing_targets = match extension {
-            Some(extension) => match self.downloads_dir(cx) {
-                Ok(downloads_dir) => {
-                    let target_paths = ids
-                        .iter()
-                        .filter_map(|id| {
-                            self.job(*id)
-                                .map(|job| destination_guess(&job.track, extension, &downloads_dir))
-                        })
-                        .collect::<Vec<_>>();
-                    let inspection = inspect_batch_targets(target_paths.clone());
-                    let existing_paths = inspection
-                        .existing
-                        .into_iter()
-                        .collect::<std::collections::HashSet<_>>();
-                    ids.iter()
-                        .zip(target_paths)
-                        .filter(|(_, path)| existing_paths.contains(path))
-                        .map(|(id, path)| BatchExistingTarget { id: *id, path })
-                        .collect::<Vec<_>>()
-                }
-                Err(error) => {
-                    // Settings are unavailable, so no destination can be
-                    // determined. Fail the whole batch visibly instead of
-                    // guessing a directory for the conflict pre-check or
-                    // the transfer itself.
-                    for id in &ids {
-                        self.requests.remove(id);
-                        if let Some(job) = self.job_mut(*id) {
-                            job.status = DownloadStatus::Failed(error.clone());
-                            job.unread = true;
-                        }
+        let downloads_dir = match self.downloads_dir(cx) {
+            Ok(directory) => directory,
+            Err(error) => {
+                for id in &ids {
+                    self.requests.remove(id);
+                    if let Some(job) = self.job_mut(*id) {
+                        job.status = DownloadStatus::Failed(error.clone());
+                        job.unread = true;
                     }
-                    self.notify_toast(ToastKind::Error, "Downloads failed", Some(error), cx);
-                    cx.notify();
-                    return ids;
                 }
-            },
-            None => Vec::new(),
+                self.notify_toast(ToastKind::Error, "Downloads failed", Some(error), cx);
+                cx.notify();
+                return ids;
+            }
         };
+        let target_paths = ids
+            .iter()
+            .filter_map(|id| {
+                let job = self.job(*id)?;
+                let extension = batch_download_extension(job.track.provider, variant)?;
+                Some((
+                    *id,
+                    destination_with_extension(&job.track, extension, &downloads_dir),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let batch_key = self.next_batch_key();
         self.begin_batch_tracking(&ids);
-        if !existing_targets.is_empty() {
-            self.pending_batch = Some(BatchNeedsConfirmation {
-                ids: ids.clone(),
-                existing: existing_targets.len(),
-                existing_targets,
-                key: batch_key,
-            });
-            cx.emit(DownloadNotice::BatchConflict {
-                key: batch_key,
-                existing: self
+        self.pending_batch = Some(BatchNeedsConfirmation {
+            ids: ids.clone(),
+            existing: 0,
+            existing_targets: Vec::new(),
+            key: batch_key,
+        });
+        let task = self.runtime.spawn_blocking(move || {
+            let inspection =
+                inspect_batch_targets(target_paths.iter().map(|(_, path)| path.clone()));
+            batch_conflict_targets(target_paths, inspection)
+        });
+        let entity = cx.entity();
+        let batch_ids = ids.clone();
+        cx.spawn(async move |_, cx| {
+            let targets = task.await;
+            entity.update(cx, |model, cx| {
+                let Some(batch) = model
                     .pending_batch
-                    .as_ref()
-                    .map_or(0, |batch| batch.existing),
+                    .as_mut()
+                    .filter(|batch| batch.key == batch_key)
+                else {
+                    return;
+                };
+                match targets {
+                    Ok(targets) if !targets.is_empty() => {
+                        batch.existing = targets.len();
+                        batch.existing_targets = targets;
+                        cx.emit(DownloadNotice::BatchConflict {
+                            key: batch_key,
+                            existing: batch.existing,
+                        });
+                    }
+                    Ok(_) => {
+                        model.pending_batch = None;
+                        model.notify_toast(
+                            ToastKind::Info,
+                            "Downloads started",
+                            Some(format!("Queued {} tracks.", batch_ids.len())),
+                            cx,
+                        );
+                        model.start_next(cx);
+                    }
+                    Err(_) => {
+                        model.pending_batch = None;
+                        let error = "The batch destination check stopped unexpectedly".to_owned();
+                        for id in &batch_ids {
+                            model.requests.remove(id);
+                            if let Some(job) = model.job_mut(*id) {
+                                job.status = DownloadStatus::Failed(error.clone());
+                                job.unread = true;
+                            }
+                            model.batch_ids.remove(id);
+                        }
+                        if model.batch_ids.is_empty() {
+                            model.batch_mode = false;
+                            model.batch_saved = 0;
+                            model.batch_failed = 0;
+                        }
+                        model.notify_toast(ToastKind::Error, "Downloads failed", Some(error), cx);
+                        model.start_next(cx);
+                    }
+                }
+                cx.notify();
             });
-        } else {
-            self.notify_toast(
-                ToastKind::Info,
-                "Downloads started",
-                Some(format!("Queued {} tracks.", ids.len())),
-                cx,
-            );
-            self.start_next(cx);
-        }
+        })
+        .detach();
         cx.notify();
         ids
     }
@@ -438,27 +464,6 @@ impl DownloadModel {
         for target in &batch.existing_targets {
             self.batch_policies
                 .insert(target.id, BatchConflictPolicy::SkipExisting);
-        }
-        let mut skipped = Vec::new();
-        for target in &batch.existing_targets {
-            let can_skip = target.path.exists()
-                && self
-                    .job(target.id)
-                    .is_some_and(|job| matches!(job.status, DownloadStatus::Queued));
-            if can_skip {
-                self.requests.remove(&target.id);
-                if let Some(job) = self.job_mut(target.id) {
-                    job.status = DownloadStatus::Skipped(target.path.clone());
-                    job.unread = true;
-                }
-                skipped.push(target.id);
-            }
-        }
-        for id in skipped {
-            if let Some(status) = self.job(id).map(|job| job.status.clone()) {
-                self.record_outcome(id, &status, cx);
-            }
-            self.invalidate_file_stat(id, cx);
         }
         if !self.batch_ids.is_empty() {
             self.notify_toast(
@@ -661,7 +666,43 @@ impl DownloadModel {
             declared_bitrate,
         });
         self.sources.insert(id, source);
-        if path.exists() {
+        let stat_path = path.clone();
+        let task = self.runtime.spawn_blocking(move || stat_path.exists());
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let exists = task.await;
+            entity.update(cx, |model, cx| {
+                if !model.accepts(id, generation) {
+                    return;
+                }
+                match exists {
+                    Ok(exists) => model.resolved_destination(id, generation, path, exists, cx),
+                    Err(_) => {
+                        model.sources.remove(&id);
+                        model.finish(
+                            id,
+                            generation,
+                            DownloadStatus::Failed(
+                                "The download destination check stopped unexpectedly".into(),
+                            ),
+                            cx,
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn resolved_destination(
+        &mut self,
+        id: u64,
+        generation: u64,
+        path: PathBuf,
+        exists: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if exists {
             if self.batch_ids.contains(&id) {
                 match batch_target_action(self.batch_conflict_policy_for(id), true) {
                     BatchTargetAction::SkipExisting => {
@@ -1392,12 +1433,22 @@ fn quality_label(job: &DownloadJob, downloaded_size: Option<u64>) -> String {
         .unwrap_or_else(|| "Quality unavailable".to_owned())
 }
 
-fn destination_guess(track: &PlaybackTrack, extension: &str, directory: &Path) -> PathBuf {
-    directory.join(format!(
-        "{} - {}.{extension}",
-        sanitize_filename(&track.artist),
-        sanitize_filename(&track.title)
-    ))
+fn batch_conflict_targets(
+    targets: Vec<(u64, PathBuf)>,
+    inspection: BatchTargetInspection,
+) -> Vec<BatchExistingTarget> {
+    let existing = inspection
+        .existing
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let mut seen = std::collections::HashSet::new();
+    targets
+        .into_iter()
+        .filter_map(|(id, path)| {
+            let duplicate = !seen.insert(path.clone());
+            (existing.contains(&path) || duplicate).then_some(BatchExistingTarget { id, path })
+        })
+        .collect()
 }
 
 fn batch_download_extension(
@@ -1415,11 +1466,7 @@ fn batch_download_extension(
 }
 
 fn destination_with_extension(track: &PlaybackTrack, extension: &str, directory: &Path) -> PathBuf {
-    directory.join(format!(
-        "{} - {}.{extension}",
-        sanitize_filename(&track.artist),
-        sanitize_filename(&track.title)
-    ))
+    directory.join(download_filename(&track.artist, &track.title, extension))
 }
 
 fn part_path(path: &Path, id: u64, generation: u64) -> PathBuf {
@@ -1523,6 +1570,26 @@ mod tests {
         assert_eq!(
             batch_download_extension(PlaybackProvider::SoundCloud, DownloadVariant::Standard),
             Some("mp3")
+        );
+    }
+
+    #[test]
+    fn batch_conflicts_include_later_jobs_with_the_same_destination() {
+        let path = PathBuf::from("same.mp3");
+        let other = PathBuf::from("other.flac");
+        let targets = batch_conflict_targets(
+            vec![(1, path.clone()), (2, path.clone()), (3, other.clone())],
+            BatchTargetInspection {
+                existing: vec![other.clone()],
+                duplicates: vec![path.clone()],
+            },
+        );
+        assert_eq!(
+            targets,
+            vec![
+                BatchExistingTarget { id: 2, path },
+                BatchExistingTarget { id: 3, path: other },
+            ]
         );
     }
 

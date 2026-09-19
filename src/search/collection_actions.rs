@@ -18,7 +18,8 @@ use super::{
 enum CollectionAction {
     Queue { last: bool },
     Download { variant: DownloadVariant },
-    AddToPlaylist,
+    AddToLocalPlaylist,
+    AddToProviderPlaylist,
 }
 
 impl SearchView {
@@ -40,7 +41,11 @@ impl SearchView {
     }
 
     pub(crate) fn add_collection_to_playlist(&mut self, card: Card, cx: &mut Context<Self>) {
-        self.run_collection_action(&card, CollectionAction::AddToPlaylist, cx);
+        self.run_collection_action(&card, CollectionAction::AddToProviderPlaylist, cx);
+    }
+
+    pub(crate) fn add_collection_to_local_playlist(&mut self, card: Card, cx: &mut Context<Self>) {
+        self.run_collection_action(&card, CollectionAction::AddToLocalPlaylist, cx);
     }
 
     fn run_collection_action(
@@ -49,7 +54,11 @@ impl SearchView {
         action: CollectionAction,
         cx: &mut Context<Self>,
     ) {
-        if matches!(action, CollectionAction::AddToPlaylist) && !add_to_playlist_eligible(card) {
+        if matches!(
+            action,
+            CollectionAction::AddToLocalPlaylist | CollectionAction::AddToProviderPlaylist
+        ) && !add_to_playlist_eligible(card)
+        {
             return;
         }
         let Some(route) = collection_route(card) else {
@@ -77,12 +86,26 @@ impl SearchView {
             });
             this.update_in(cx, |this, window, cx| {
                 match (result, action) {
-                    (Ok(page), CollectionAction::AddToPlaylist) => {
+                    (Ok(page), CollectionAction::AddToProviderPlaylist) => {
                         let track_ids = playlist_track_ids(&page.tracks);
                         if track_ids.is_empty() {
                             collection_toast(empty_notice.0, empty_notice.1.to_owned(), cx);
                         } else {
                             this.open_add_picker(track_ids, provider, window, cx);
+                        }
+                    }
+                    (Ok(page), CollectionAction::AddToLocalPlaylist) => {
+                        let tracks = page
+                            .tracks
+                            .iter()
+                            .map(PlaybackTrack::from_search)
+                            .collect::<Vec<_>>();
+                        if tracks.is_empty() {
+                            collection_toast(empty_notice.0, empty_notice.1.to_owned(), cx);
+                        } else {
+                            this.library.update(cx, |library, cx| {
+                                library.open_local_playlist_picker_tracks(tracks, window, cx);
+                            });
                         }
                     }
                     (Ok(page), action) if !page.tracks.is_empty() => {
@@ -112,7 +135,8 @@ impl SearchView {
                                     )
                                 });
                             }
-                            CollectionAction::AddToPlaylist => unreachable!(),
+                            CollectionAction::AddToLocalPlaylist
+                            | CollectionAction::AddToProviderPlaylist => unreachable!(),
                         }
                     }
                     (Ok(_), _) => collection_toast(empty_notice.0, empty_notice.1.to_owned(), cx),
@@ -140,7 +164,9 @@ fn empty_collection_action(action: &CollectionAction) -> EmptyCollectionAction {
     match action {
         CollectionAction::Queue { .. } => EmptyCollectionAction::Queue,
         CollectionAction::Download { .. } => EmptyCollectionAction::Download,
-        CollectionAction::AddToPlaylist => EmptyCollectionAction::AddToPlaylist,
+        CollectionAction::AddToLocalPlaylist | CollectionAction::AddToProviderPlaylist => {
+            EmptyCollectionAction::AddToPlaylist
+        }
     }
 }
 

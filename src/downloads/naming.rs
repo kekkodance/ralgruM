@@ -1,4 +1,7 @@
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+
+const MAX_DOWNLOAD_STEM_UTF16: usize = 180;
 
 pub(crate) fn sanitize_filename(value: &str) -> String {
     let sanitized: String = value
@@ -17,6 +20,43 @@ pub(crate) fn sanitize_filename(value: &str) -> String {
     } else {
         sanitized.chars().take(180).collect()
     }
+}
+
+pub(crate) fn download_filename(artist: &str, title: &str, extension: &str) -> String {
+    let artist = sanitize_filename(artist);
+    let title = sanitize_filename(title);
+    let stem = format!("{artist} - {title}");
+    if stem.encode_utf16().count() <= MAX_DOWNLOAD_STEM_UTF16 {
+        return format!("{stem}.{extension}");
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    stem.hash(&mut hasher);
+    let suffix = format!("-{:016x}", hasher.finish());
+    let budget = MAX_DOWNLOAD_STEM_UTF16 - suffix.len() - 3;
+    let artist_units = artist.encode_utf16().count();
+    let title_units = title.encode_utf16().count();
+    let artist_budget = (budget / 2)
+        .max(budget.saturating_sub(title_units))
+        .min(artist_units);
+    let title_budget = budget - artist_budget;
+    let artist = take_utf16(&artist, artist_budget);
+    let title = take_utf16(&title, title_budget);
+    format!("{artist} - {title}{suffix}.{extension}")
+}
+
+fn take_utf16(value: &str, limit: usize) -> &str {
+    let mut units = 0;
+    let mut end = 0;
+    for (index, character) in value.char_indices() {
+        let next = units + character.len_utf16();
+        if next > limit {
+            break;
+        }
+        units = next;
+        end = index + character.len_utf8();
+    }
+    &value[..end]
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -65,6 +105,14 @@ mod tests {
     fn sanitizes_provider_names() {
         assert_eq!(sanitize_filename("A:/B?*\n"), "A__B___");
         assert_eq!(sanitize_filename("..."), "download");
+    }
+
+    #[test]
+    fn long_download_names_leave_room_for_the_transfer_suffix() {
+        let name = download_filename(&"😀".repeat(180), &"b".repeat(180), "flac");
+        assert!(name.encode_utf16().count() <= MAX_DOWNLOAD_STEM_UTF16 + 5);
+        assert!(name.contains(" - b"));
+        assert!(name.ends_with(".flac"));
     }
 
     #[test]

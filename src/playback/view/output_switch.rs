@@ -18,9 +18,19 @@ pub(super) fn restore_output_state(state: &mut PlaybackState, resume: OutputResu
 }
 
 fn needs_asio_bridge(current: &AudioOutputTarget, target: &AudioOutputTarget) -> bool {
-    matches!(current, AudioOutputTarget::AsioDriver(_))
-        && matches!(target, AudioOutputTarget::AsioDriver(_))
-        && current != target
+    let AudioOutputTarget::AsioDriver(driver) = target else {
+        return false;
+    };
+    if current == target {
+        return false;
+    }
+    match current {
+        AudioOutputTarget::AsioDriver(_) => true,
+        AudioOutputTarget::Device(name) => {
+            crate::playback::engine::asio_endpoint_matches_driver(name, driver)
+        }
+        AudioOutputTarget::SystemDefault => false,
+    }
 }
 
 impl PlaybackModel {
@@ -108,16 +118,24 @@ impl PlaybackModel {
             return;
         }
         let bridge_asio = needs_asio_bridge(engine.output_target(), &target);
-        let stage_target = if bridge_asio {
-            AudioOutputTarget::SystemDefault
-        } else {
-            target.clone()
+        if bridge_asio {
+            self.asio_bridge_origin = Some(engine.output_target().clone());
+        } else if !matches!(target, AudioOutputTarget::AsioDriver(_)) {
+            self.asio_bridge_origin = None;
+        }
+        let bridge_driver = match &target {
+            AudioOutputTarget::AsioDriver(name) if bridge_asio => Some(name.clone()),
+            _ => None,
+        };
+        let bridge_current_device = match engine.output_target() {
+            AudioOutputTarget::Device(name) => Some(name.clone()),
+            _ => None,
         };
         let reload = engine.output_reload_spec();
         let had_reload = reload.is_some();
         let probe = engine.sink_probe();
         let generation = self.state.generation;
-        self.pending_output_target = Some(target);
+        self.pending_output_target = Some(target.clone());
         self.cancel_user_fade_and_sync_transport();
         // Freeze the old position while the driver and decoder are prepared
         // on a worker. The engine remains available to other UI actions.
@@ -126,9 +144,13 @@ impl PlaybackModel {
         {
             engine.pause();
         }
-        let task = self
-            .runtime
-            .spawn_blocking(move || RodioEngine::prepare_output_switch(stage_target, reload));
+        let task = self.runtime.spawn_blocking(move || {
+            if let Some(driver) = bridge_driver {
+                RodioEngine::prepare_asio_bridge(&driver, bridge_current_device.as_deref(), reload)
+            } else {
+                RodioEngine::prepare_output_switch(target, reload)
+            }
+        });
         cx.spawn(async move |this, cx| {
             let result = task
                 .await
@@ -142,6 +164,7 @@ impl PlaybackModel {
                     this.queued_output_request.take()
                 {
                     drop(result);
+                    this.asio_bridge_origin = None;
                     this.set_audio_output(asio_mode, output_device, asio_driver, cx);
                     return;
                 }
@@ -180,9 +203,12 @@ impl PlaybackModel {
                         }
                         if bridge_asio {
                             this.set_audio_output(asio_mode, output_device, asio_driver, cx);
+                        } else {
+                            this.asio_bridge_origin = None;
                         }
                     }
                     Err(error) => {
+                        diagnostics::event("WARN", format!("audio output switch failed: {error}"));
                         this.sync_transport_after_fade_cancel();
                         crate::toast::push_global(
                             cx,
@@ -190,6 +216,19 @@ impl PlaybackModel {
                             "Could not switch output",
                             Some(error.into()),
                         );
+                        if let Some(origin) = this.asio_bridge_origin.take() {
+                            match origin {
+                                AudioOutputTarget::SystemDefault => {
+                                    this.set_audio_output(false, None, None, cx)
+                                }
+                                AudioOutputTarget::Device(name) => {
+                                    this.set_audio_output(false, Some(name), None, cx)
+                                }
+                                AudioOutputTarget::AsioDriver(name) => {
+                                    this.set_audio_output(true, None, Some(name), cx)
+                                }
+                            }
+                        }
                     }
                 }
                 cx.notify();
@@ -242,6 +281,14 @@ mod tests {
         assert!(!needs_asio_bridge(
             &first,
             &AudioOutputTarget::SystemDefault
+        ));
+        assert!(needs_asio_bridge(
+            &AudioOutputTarget::Device("Headphones (MiniFuse 2)".into()),
+            &AudioOutputTarget::AsioDriver("MiniFuse ASIO Driver".into()),
+        ));
+        assert!(!needs_asio_bridge(
+            &AudioOutputTarget::Device("T24D390 (NVIDIA High Definition Audio)".into()),
+            &AudioOutputTarget::AsioDriver("MiniFuse ASIO Driver".into()),
         ));
     }
 }

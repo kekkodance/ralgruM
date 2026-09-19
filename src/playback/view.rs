@@ -36,7 +36,6 @@ use super::{
     listen_history::{
         DeezerListenSession, ListenHistorySignal, SoundCloudListenReport, deezer_next_media,
     },
-    output_devices,
     progressive::TimelineSuffixState,
     resolver::{ProgressCallback, ProgressUpdate, StreamResolver},
     standby::{self, ArmedStandby, PreparedSource, SinkProbe, StandbyPhase, WatchTick},
@@ -77,6 +76,7 @@ pub(crate) struct PlaybackModel {
     download_progress: Arc<Mutex<DownloadProgress>>,
     output_switch_epoch: u64,
     pending_output_target: Option<AudioOutputTarget>,
+    asio_bridge_origin: Option<AudioOutputTarget>,
     queued_output_request: Option<(bool, Option<String>, Option<String>)>,
     pending_output_resume: Option<OutputResume>,
 }
@@ -309,23 +309,21 @@ fn pause_silently(set_volume: impl FnOnce(), pause: impl FnOnce()) {
 
 /// Resolves the saved output selection into an engine target. ASIO mode
 /// plays through the saved driver, falling back to the first installed
-/// one; WASAPI mode falls back to the system default when the device is
-/// no longer attached. Either way a vanished selection never blocks
-/// audio.
+/// one. A saved WASAPI endpoint is checked when its stream is opened, so
+/// output changes do not enumerate devices on the UI thread.
 fn resolve_saved_output_target(
     asio_mode: bool,
     output_device: Option<&str>,
     asio_driver: Option<&str>,
 ) -> AudioOutputTarget {
-    let wasapi_devices = output_devices::list_output_devices();
-    let registry_drivers = asio_drivers::list_registry_asio_drivers();
-    let target = asio_drivers::effective_target(
-        asio_mode,
-        asio_driver,
-        &registry_drivers,
-        output_device,
-        &wasapi_devices,
-    );
+    let target = if asio_mode {
+        let registry_drivers = asio_drivers::list_registry_asio_drivers();
+        asio_drivers::effective_target(true, asio_driver, &registry_drivers, output_device, &[])
+    } else {
+        output_device
+            .map(|name| AudioOutputTarget::Device(name.to_owned()))
+            .unwrap_or(AudioOutputTarget::SystemDefault)
+    };
     let saved_name = if asio_mode {
         asio_driver
     } else {
@@ -407,20 +405,19 @@ impl PlaybackModel {
         );
         let engine = match RodioEngine::new(target.clone()) {
             Ok(engine) => Ok(engine),
-            // An unloadable saved ASIO driver must not brick the player:
-            // keep the setting and start on the system default instead.
+            // An unloadable saved endpoint must not brick the player.
             Err(error) => match target {
-                AudioOutputTarget::AsioDriver(name) => {
+                AudioOutputTarget::AsioDriver(name) | AudioOutputTarget::Device(name) => {
                     diagnostics::event(
                         "WARN",
                         format!(
-                            "the ASIO driver \"{name}\" could not be opened at startup, \
+                            "the audio output \"{name}\" could not be opened at startup, \
                              using the system default: {error}"
                         ),
                     );
                     RodioEngine::new(AudioOutputTarget::SystemDefault)
                 }
-                _ => Err(error),
+                AudioOutputTarget::SystemDefault => Err(error),
             },
         };
         if let Ok(engine) = &engine {
@@ -458,6 +455,7 @@ impl PlaybackModel {
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             output_switch_epoch: 0,
             pending_output_target: None,
+            asio_bridge_origin: None,
             queued_output_request: None,
             pending_output_resume: None,
         };

@@ -505,9 +505,12 @@ impl PlaylistPicker {
                                     Ok(LocalPlaylistMutationOutcome::Added { count }) => {
                                         picker.completed = Some(AddTracksResult::Added { count });
                                     }
-                                    Ok(LocalPlaylistMutationOutcome::AlreadyPresent { .. }) => {
+                                    Ok(LocalPlaylistMutationOutcome::AlreadyPresent {
+                                        count,
+                                        ..
+                                    }) => {
                                         picker.completed =
-                                            Some(AddTracksResult::AlreadyPresent { count: 1 });
+                                            Some(AddTracksResult::AlreadyPresent { count });
                                     }
                                     Err(error) => picker.error = Some(error.to_string().into()),
                                     _ => {}

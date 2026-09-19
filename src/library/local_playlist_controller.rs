@@ -53,6 +53,18 @@ impl LibraryView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_local_playlist_picker_tracks(vec![track], window, cx);
+    }
+
+    pub(crate) fn open_local_playlist_picker_tracks(
+        &mut self,
+        tracks: Vec<crate::playback::PlaybackTrack>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if tracks.is_empty() {
+            return;
+        }
         if window.has_active_dialog(cx) {
             return;
         }
@@ -60,7 +72,7 @@ impl LibraryView {
             push_local_error(cx, "Local playlist storage is unavailable", Some(error));
             return;
         }
-        super::playlist_picker::PlaylistPicker::open_local(cx.entity(), vec![track], window, cx);
+        super::playlist_picker::PlaylistPicker::open_local(cx.entity(), tracks, window, cx);
     }
 
     pub(crate) fn open_local_playlist_create(
@@ -247,7 +259,7 @@ impl LibraryView {
                             Some(local_added_tracks_message(*count).into()),
                         );
                     }
-                    Ok(LocalPlaylistMutationOutcome::AlreadyPresent { playlist_title }) => {
+                    Ok(LocalPlaylistMutationOutcome::AlreadyPresent { playlist_title, .. }) => {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Info,

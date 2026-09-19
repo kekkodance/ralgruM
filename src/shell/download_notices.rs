@@ -72,7 +72,7 @@ fn handle_download_notice(
                 toasts.push_actionable_keyed(
                     batch_conflict_toast_key(key),
                     ToastKind::Warning,
-                    "Files already exist",
+                    "Download destinations conflict",
                     Some(batch_conflict_description(*existing).into()),
                     [
                         ToastAction::secondary("Ignore", move |_, _, cx| {
@@ -137,9 +137,12 @@ fn batch_conflict_toast_key(key: u64) -> String {
 
 fn batch_conflict_description(existing: usize) -> String {
     if existing == 1 {
-        "1 track already exists. Choose whether to keep it or replace it.".to_owned()
+        "1 track conflicts with a file or another batch item. Ignore or overwrite the conflict."
+            .to_owned()
     } else {
-        format!("{existing} tracks already exist. Choose whether to keep them or replace them.")
+        format!(
+            "{existing} tracks conflict with files or other batch items. Ignore or overwrite the conflicts."
+        )
     }
 }
 
@@ -258,11 +261,11 @@ mod tests {
     fn batch_conflict_copy_is_actionable_for_one_or_many_tracks() {
         assert_eq!(
             batch_conflict_description(1),
-            "1 track already exists. Choose whether to keep it or replace it."
+            "1 track conflicts with a file or another batch item. Ignore or overwrite the conflict."
         );
         assert_eq!(
             batch_conflict_description(3),
-            "3 tracks already exist. Choose whether to keep them or replace them."
+            "3 tracks conflict with files or other batch items. Ignore or overwrite the conflicts."
         );
         assert_eq!(batch_conflict_toast_key(4), "download-batch-conflict-4");
     }

@@ -139,10 +139,31 @@ function Limit-GpuiLogFile {
 }
 
 if (-not $BuildOnly) {
-    $running = @(Get-Process -Name 'ralgruM','ralgrum-gpui' -ErrorAction SilentlyContinue)
-    if ($running) {
-        $running | Stop-Process -Force
-        Write-Host "Stopped $($running.Count) running ralgruM GPUI process(es)."
+    $profileDirectory = if ($Release) { 'release' } else { 'debug' }
+    $targetExe = [System.IO.Path]::GetFullPath(
+        (Join-Path $projectRoot "target\$profileDirectory\ralgruM.exe")
+    )
+    $running = @(
+        Get-Process -Name 'ralgruM','ralgrum-gpui' -ErrorAction SilentlyContinue |
+            Where-Object {
+                try {
+                    [string]::Equals(
+                        [System.IO.Path]::GetFullPath($_.Path),
+                        $targetExe,
+                        [System.StringComparison]::OrdinalIgnoreCase
+                    )
+                } catch {
+                    $false
+                }
+            }
+    )
+    foreach ($process in $running) {
+        if (-not $process.CloseMainWindow()) {
+            throw "The project app (PID $($process.Id)) has no closable window. Close it manually before rebuilding."
+        }
+        if (-not $process.WaitForExit(5000)) {
+            throw "The project app (PID $($process.Id)) did not close in time. Close it manually before rebuilding."
+        }
     }
 }
 

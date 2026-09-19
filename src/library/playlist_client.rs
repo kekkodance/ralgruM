@@ -222,7 +222,7 @@ impl PlaylistClient {
             .send()
             .await
             .map_err(|_| "Deezer playlist picture upload failed".to_string())?;
-        let envelope = decode(response).await?;
+        let envelope = decode(response, "playlist picture upload").await?;
         envelope
             .get("results")
             .and_then(Value::as_str)
@@ -349,7 +349,23 @@ impl PlaylistClient {
                 add_tracks_variables(&playlist_id, &valid_ids),
                 ADD_TRACKS_MUTATION.into(),
             )
-            .await?;
+            .await;
+        let data = match data {
+            Ok(data) => data,
+            Err(error) if error.starts_with("Deezer AddTracksToPlaylist ") => {
+                return super::playlist_add_client::fallback_add_tracks(
+                    self,
+                    &session,
+                    &playlist_id,
+                    &valid_ids,
+                )
+                .await
+                .map_err(|fallback| {
+                    format!("{error}; Deezer gateway add fallback failed: {fallback}")
+                });
+            }
+            Err(error) => return Err(error),
+        };
         parse_add_tracks_result(&data, &valid_ids)
     }
 
@@ -456,7 +472,7 @@ impl PlaylistClient {
         if let Some(jar) = arl.attached_jar() {
             jar.refresh(&cookies);
         }
-        let value = decode(response).await?;
+        let value = decode(response, "getUserData").await?;
         let results = envelope_results(&value)?;
         // getUserData answering an anonymous session (USER_ID "0") means the
         // saved ARL is no longer authenticated, so the saved user id must
@@ -475,7 +491,7 @@ impl PlaylistClient {
             .send()
             .await
             .map_err(|_| "The Deezer JWT login request could not be completed".to_string())?;
-        let value = decode(response).await?;
+        let value = decode(response, "JWT login").await?;
         let jwt = value
             .get("jwt")
             .and_then(Value::as_str)
@@ -504,7 +520,7 @@ impl PlaylistClient {
             .send()
             .await
             .map_err(|_| format!("Deezer {operation} request failed"))?;
-        let value = decode(response).await?;
+        let value = decode(response, operation).await?;
         if let Some(message) = value
             .get("errors")
             .and_then(Value::as_array)
@@ -535,7 +551,7 @@ impl PlaylistClient {
         format!("Deezer {operation} failed ({provider_message})")
     }
 
-    async fn gateway(
+    pub(super) async fn gateway(
         &self,
         session: &Session,
         operation: &str,
@@ -569,7 +585,10 @@ impl PlaylistClient {
             .send()
             .await
             .map_err(|_| format!("Deezer {operation} request failed"))?;
-        let value = decode(response).await?;
+        let value = decode(response, operation).await?;
+        if value.get("error").is_some_and(deezer_envelope_has_error) {
+            return Err(format!("Deezer {operation} rejected the request"));
+        }
         envelope_results(&value).map(|value| value.to_owned())
     }
 }
@@ -860,12 +879,35 @@ fn deezer_envelope_has_error(error: &Value) -> bool {
     }
 }
 
-async fn decode(response: Response) -> Result<Value, String> {
+async fn decode(response: Response, operation: &str) -> Result<Value, String> {
     if !response.status().is_success() {
-        return Err(format!(
-            "Deezer returned HTTP status {}",
-            response.status().as_u16()
-        ));
+        let status = response.status();
+        let provider_message = response
+            .text()
+            .await
+            .ok()
+            .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+            .and_then(|body| {
+                body.pointer("/errors/0/message")
+                    .or_else(|| body.pointer("/error/message"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .filter(|message| {
+                !message.is_empty()
+                    && message.len() <= 240
+                    && !message.chars().any(char::is_control)
+            });
+        return Err(match provider_message {
+            Some(message) => format!(
+                "Deezer {operation} returned HTTP status {} ({message})",
+                status.as_u16()
+            ),
+            None => format!(
+                "Deezer {operation} returned HTTP status {}",
+                status.as_u16()
+            ),
+        });
     }
     crate::provider_response::json(response)
         .await

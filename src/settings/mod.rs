@@ -176,6 +176,7 @@ pub(crate) struct SettingsView {
     pub(super) start_page_select: Entity<SelectState<Vec<SharedString>>>,
     pub(super) lyrics_source_select: Entity<SelectState<Vec<SharedString>>>,
     pub(super) output_device_select: Entity<SelectState<Vec<SharedString>>>,
+    output_device_refresh_generation: u64,
     pub(super) cache_limit_select: Entity<SelectState<Vec<SharedString>>>,
     pub(super) cache: AudioCache,
     pub(super) cache_overview: Option<Overview>,
@@ -360,14 +361,8 @@ impl SettingsView {
                 window,
                 cx,
             ),
-            output_device_select: {
-                let (labels, selected) = Self::output_device_picker(
-                    saved_for_selects.asio_mode,
-                    saved_for_selects.output_device.as_deref(),
-                    saved_for_selects.asio_driver.as_deref(),
-                );
-                Self::make_select(labels, selected, window, cx)
-            },
+            output_device_select: { Self::make_select(std::iter::empty(), None, window, cx) },
+            output_device_refresh_generation: 0,
             cache_limit_select: Self::make_select(
                 LIMITS_MB
                     .iter()
@@ -391,6 +386,7 @@ impl SettingsView {
         };
         let mut view = this;
         view.subscribe_selects(cx);
+        view.refresh_output_device_select(window, cx);
         view.install_runtime_settings_flush(cx);
         view
     }
@@ -450,19 +446,36 @@ impl SettingsView {
     /// list depends on the ASIO mode, so the toggle and every session
     /// reset refresh both the items and the selected row.
     fn refresh_output_device_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (labels, selected) = Self::output_device_picker(
-            self.draft.asio_mode,
-            self.draft.output_device.as_deref(),
-            self.draft.asio_driver.as_deref(),
-        );
-        self.output_device_select.update(cx, |select, cx| {
-            select.set_items(labels, window, cx);
-            select.set_selected_index(
-                selected.map(|row| IndexPath::default().row(row)),
-                window,
-                cx,
-            );
+        let _ = window;
+        self.output_device_refresh_generation =
+            self.output_device_refresh_generation.wrapping_add(1);
+        let generation = self.output_device_refresh_generation;
+        let asio_mode = self.draft.asio_mode;
+        let output_device = self.draft.output_device.clone();
+        let asio_driver = self.draft.asio_driver.clone();
+        let task = self.runtime.spawn_blocking(move || {
+            Self::output_device_picker(asio_mode, output_device.as_deref(), asio_driver.as_deref())
         });
+        cx.spawn(async move |this, cx| {
+            let Ok((labels, selected)) = task.await else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                if this.output_device_refresh_generation != generation {
+                    return;
+                }
+                this.output_device_select.update(cx, |select, cx| {
+                    select.set_items(labels, window, cx);
+                    select.set_selected_index(
+                        selected.map(|row| IndexPath::default().row(row)),
+                        window,
+                        cx,
+                    );
+                });
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn subscribe_selects(&mut self, cx: &mut Context<Self>) {

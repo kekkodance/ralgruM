@@ -19,7 +19,8 @@ use super::{
 enum CollectionAction {
     Queue { last: bool },
     Download { variant: DownloadVariant },
-    AddToPlaylist,
+    AddToLocalPlaylist,
+    AddToProviderPlaylist,
 }
 
 impl LibraryView {
@@ -49,7 +50,11 @@ impl LibraryView {
     }
 
     pub(crate) fn add_collection_to_playlist(&mut self, card: Card, cx: &mut Context<Self>) {
-        self.run_collection_action(&card, CollectionAction::AddToPlaylist, cx);
+        self.run_collection_action(&card, CollectionAction::AddToProviderPlaylist, cx);
+    }
+
+    pub(crate) fn add_collection_to_local_playlist(&mut self, card: Card, cx: &mut Context<Self>) {
+        self.run_collection_action(&card, CollectionAction::AddToLocalPlaylist, cx);
     }
 
     fn run_collection_action(
@@ -58,7 +63,11 @@ impl LibraryView {
         action: CollectionAction,
         cx: &mut Context<Self>,
     ) {
-        if matches!(action, CollectionAction::AddToPlaylist) && !add_to_playlist_eligible(card) {
+        if matches!(
+            action,
+            CollectionAction::AddToLocalPlaylist | CollectionAction::AddToProviderPlaylist
+        ) && !add_to_playlist_eligible(card)
+        {
             return;
         }
         let Some(route) = collection_route(card) else {
@@ -70,14 +79,15 @@ impl LibraryView {
         let provider = card.source;
         let task = match provider {
             Provider::Deezer => {
-                let Some(arl) = self.account.read(cx).deezer_arl() else {
+                let arl = self.account.read(cx).deezer_arl();
+                if arl.is_none() && !matches!(action, CollectionAction::AddToLocalPlaylist) {
                     collection_toast(
                         "Collection unavailable",
                         "A Deezer account is required.",
                         cx,
                     );
                     return;
-                };
+                }
                 let Ok(client) = self.client.clone() else {
                     collection_toast(
                         "Collection unavailable",
@@ -87,7 +97,7 @@ impl LibraryView {
                     return;
                 };
                 self.runtime
-                    .spawn(async move { client.load_route(route, Some(arl)).await })
+                    .spawn(async move { client.load_route(route, arl).await })
             }
             Provider::SoundCloud => {
                 let Some(token) = self.account.read(cx).soundcloud_token() else {
@@ -119,13 +129,25 @@ impl LibraryView {
                     return;
                 }
                 match (result, action) {
-                    (Ok(page), CollectionAction::AddToPlaylist) => {
+                    (Ok(page), CollectionAction::AddToProviderPlaylist) => {
                         let track_ids = playlist_track_ids(&page.tracks);
                         if track_ids.is_empty() {
                             collection_toast(empty_notice.0, empty_notice.1, cx);
                         } else {
                             let status_scope = this.add_status_scope();
                             this.open_add_picker(track_ids, status_scope, provider, window, cx);
+                        }
+                    }
+                    (Ok(page), CollectionAction::AddToLocalPlaylist) => {
+                        let tracks = page
+                            .tracks
+                            .iter()
+                            .map(|track| PlaybackTrack::from_library(track, provider))
+                            .collect::<Vec<_>>();
+                        if tracks.is_empty() {
+                            collection_toast(empty_notice.0, empty_notice.1, cx);
+                        } else {
+                            this.open_local_playlist_picker_tracks(tracks, window, cx);
                         }
                     }
                     (Ok(page), action) if !page.tracks.is_empty() => {
@@ -155,7 +177,8 @@ impl LibraryView {
                                     );
                                 });
                             }
-                            CollectionAction::AddToPlaylist => unreachable!(),
+                            CollectionAction::AddToLocalPlaylist
+                            | CollectionAction::AddToProviderPlaylist => unreachable!(),
                         }
                     }
                     (Ok(_), _) => collection_toast(empty_notice.0, empty_notice.1, cx),
@@ -181,7 +204,9 @@ fn empty_collection_action(action: &CollectionAction) -> EmptyCollectionAction {
     match action {
         CollectionAction::Queue { .. } => EmptyCollectionAction::Queue,
         CollectionAction::Download { .. } => EmptyCollectionAction::Download,
-        CollectionAction::AddToPlaylist => EmptyCollectionAction::AddToPlaylist,
+        CollectionAction::AddToLocalPlaylist | CollectionAction::AddToProviderPlaylist => {
+            EmptyCollectionAction::AddToPlaylist
+        }
     }
 }
 
