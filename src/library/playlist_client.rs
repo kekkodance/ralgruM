@@ -14,19 +14,21 @@ use super::client::DEEZER_SESSION_EXPIRED;
 use super::playlist_limits::{DEEZER_DESCRIPTION_MAX_CHARS, DEEZER_TITLE_MAX_CHARS};
 
 const USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
-const JWT_URL: &str = "https://auth.deezer.com/login/arl?jo=p&rto=c&i=p";
+const JWT_URL: &str = "https://auth.deezer.com/login/arl?jo=p&rto=c&i=c";
 const GRAPHQL_URL: &str = "https://pipe.deezer.com/api";
-const PLAYLIST_FRAGMENT: &str = r#"fragment PlaylistInfo on Playlist {
- id title description isPrivate isFromFavoriteTracks isCollaborative estimatedTracksCount owner { id name __typename }
-  picture { id small: urls(pictureRequest: {height: 100, width: 100}) medium: urls(pictureRequest: {width: 264, height: 264}) large: urls(pictureRequest: {width: 500, height: 500}) __typename }
-  __typename
+pub(super) const PLAYLIST_FRAGMENT: &str = r#"fragment PlaylistInfo on Playlist {
+  id title description isPrivate isFromFavoriteTracks isCollaborative
+  estimatedTracksCount owner { id name }
 }"#;
 const PLAYLIST_GATEWAY_URL: &str = "https://www.deezer.com/ajax/gw-light.php";
 const PLAYLIST_PICTURE_URL: &str = "https://upload.deezer.com/v2/playlist/picture";
 const MAX_PICTURE_BYTES: usize = 10 * 1024 * 1024;
 static CORRELATION_COUNTER: AtomicU64 = AtomicU64::new(0);
-const SIDEBAR_QUERY: &str = r#"query SidebarPlaylistsInfo($first: Int!) {
- me { id playlists(first: $first, sort: {by: LAST_MODIFICATION_DATE, order: DESC}) { edges { node { ...PlaylistInfo } } } userFavorites { playlists(first: $first) { edges { node { ...PlaylistInfo } } } } }
+pub(super) const SIDEBAR_QUERY: &str = r#"query SidebarPlaylistsInfo($first: Int!, $after: String) {
+  me { playlists(first: $first, after: $after) {
+    edges { node { ...PlaylistInfo } }
+    pageInfo { hasNextPage endCursor }
+  } }
 }"#;
 
 const UPDATE_MUTATION: &str = r#"mutation UpdatePlaylist($input: PlaylistUpdateMutationInput!) {
@@ -151,15 +153,48 @@ impl PlaylistClient {
         saved_user_id: Option<String>,
     ) -> Result<Vec<OwnedPlaylist>, String> {
         let session = self.session(arl, saved_user_id).await?;
-        let data = self
-            .graphql(
-                &session,
-                "SidebarPlaylistsInfo",
-                json!({ "first": 50 }),
-                format!("{SIDEBAR_QUERY}{PLAYLIST_FRAGMENT}"),
-            )
-            .await?;
-        parse_catalog(&data)
+        self.catalog_for_session(&session).await
+    }
+
+    pub(super) async fn catalog_for_session(
+        &self,
+        session: &Session,
+    ) -> Result<Vec<OwnedPlaylist>, String> {
+        let mut playlists = Vec::new();
+        let mut ids = HashSet::new();
+        let mut after: Option<String> = None;
+        for _ in 0..100 {
+            let data = self
+                .graphql(
+                    session,
+                    "SidebarPlaylistsInfo",
+                    json!({ "first": 50, "after": after }),
+                    format!("{SIDEBAR_QUERY}{PLAYLIST_FRAGMENT}"),
+                )
+                .await?;
+            for playlist in parse_catalog(&data)? {
+                if ids.insert(playlist.id.clone()) {
+                    playlists.push(playlist);
+                }
+            }
+            let page_info = data.pointer("/me/playlists/pageInfo").ok_or_else(|| {
+                "Deezer owned playlists response is missing page info".to_string()
+            })?;
+            match page_info.get("hasNextPage").and_then(Value::as_bool) {
+                Some(false) => return Ok(playlists),
+                Some(true) => {}
+                None => return Err("Deezer owned playlists response has no page status".into()),
+            }
+            let cursor = page_info
+                .get("endCursor")
+                .and_then(Value::as_str)
+                .filter(|cursor| !cursor.is_empty() && Some(*cursor) != after.as_deref())
+                .ok_or_else(|| {
+                    "Deezer owned playlists did not advance to the next page".to_string()
+                })?;
+            after = Some(cursor.to_owned());
+        }
+        Err("Deezer owned playlists exceeded the supported page limit".into())
     }
 
     pub(crate) async fn create(
@@ -245,15 +280,9 @@ impl PlaylistClient {
         let title = valid_text(title, false, DEEZER_TITLE_MAX_CHARS)?;
         let description = valid_text(description, true, DEEZER_DESCRIPTION_MAX_CHARS)?;
         let session = self.session(arl, saved_user_id).await?;
-        let catalog = self
-            .graphql(
-                &session,
-                "SidebarPlaylistsInfo",
-                json!({ "first": 50 }),
-                format!("{SIDEBAR_QUERY}{PLAYLIST_FRAGMENT}"),
-            )
-            .await?;
-        let owned = parse_catalog(&catalog)?
+        let owned = self
+            .catalog_for_session(&session)
+            .await?
             .into_iter()
             .find(|playlist| playlist.id == playlist_id)
             .ok_or_else(|| "Deezer did not identify this as one of your playlists".to_string())?;
@@ -327,21 +356,8 @@ impl PlaylistClient {
             return Err("Deezer ids must contain only decimal digits".into());
         }
         let session = self.session(arl, saved_user_id).await?;
-        let catalog = self
-            .graphql(
-                &session,
-                "SidebarPlaylistsInfo",
-                json!({ "first": 50 }),
-                format!("{SIDEBAR_QUERY}{PLAYLIST_FRAGMENT}"),
-            )
-            .await?;
-        let playlist = parse_catalog(&catalog)?
-            .into_iter()
-            .find(|playlist| playlist.id == playlist_id)
-            .ok_or_else(|| "Deezer did not identify this as one of your playlists".to_string())?;
-        if !playlist.editable() {
-            return Err("This Deezer playlist cannot be edited".into());
-        }
+        // The picker already selected an editable owned playlist. Repeating
+        // the catalog read here can fail independently of the write.
         let data = self
             .graphql(
                 &session,
@@ -379,15 +395,9 @@ impl PlaylistClient {
         let playlist_id = valid_id(playlist_id)?;
         validate_order(order)?;
         let session = self.session(arl, saved_user_id).await?;
-        let catalog = self
-            .graphql(
-                &session,
-                "SidebarPlaylistsInfo",
-                json!({ "first": 50 }),
-                format!("{SIDEBAR_QUERY}{PLAYLIST_FRAGMENT}"),
-            )
-            .await?;
-        let playlist = parse_catalog(&catalog)?
+        let playlist = self
+            .catalog_for_session(&session)
+            .await?
             .into_iter()
             .find(|playlist| playlist.id == playlist_id)
             .ok_or_else(|| "Deezer did not identify this as one of your playlists".to_string())?;
@@ -486,11 +496,15 @@ impl PlaylistClient {
             return Err("Deezer account changed while the library was loading".into());
         }
         let cookie = session_cookie(arl_cookie, &cookies)?;
-        let request = jwt_request(&self.client, &arl, &user_id);
+        let request = jwt_request(&self.client, cookie.clone());
         let response = request
             .send()
             .await
             .map_err(|_| "The Deezer JWT login request could not be completed".to_string())?;
+        let jwt_cookies = response_cookies(&response);
+        if let Some(jar) = arl.attached_jar() {
+            jar.refresh(&jwt_cookies);
+        }
         let value = decode(response, "JWT login").await?;
         let jwt = value
             .get("jwt")
@@ -502,7 +516,7 @@ impl PlaylistClient {
             .filter(|token| !token.is_empty())
             .ok_or_else(|| "Deezer session bootstrap is missing its API token".to_string())?;
         Ok(Session {
-            cookie,
+            cookie: session_cookie(cookie, &jwt_cookies)?,
             jwt,
             api_token,
             user_id,
@@ -565,8 +579,7 @@ impl PlaylistClient {
             .append_pair("method", operation)
             .append_pair("input", "3")
             .append_pair("api_version", "1.0")
-            .append_pair("api_token", &session.api_token)
-            .append_pair("cid", &next_correlation_id());
+            .append_pair("api_token", &session.api_token);
         let referer = format!(
             "https://www.deezer.com/en/playlist/{}",
             body.get("playlist_id")
@@ -577,11 +590,11 @@ impl PlaylistClient {
             .client
             .post(url)
             .header(header::COOKIE, cookie)
-            .header(header::CONTENT_TYPE, "text/plain;charset=UTF-8")
+            .header(header::CONTENT_TYPE, "application/json; charset=UTF-8")
             .header(header::ORIGIN, "https://www.deezer.com")
             .header(header::REFERER, referer)
             .header("x-deezer-user", &session.user_id)
-            .body(body.to_string())
+            .json(&body)
             .send()
             .await
             .map_err(|_| format!("Deezer {operation} request failed"))?;
@@ -639,14 +652,15 @@ fn graphql_request(
         .json(&json!({ "operationName": operation, "variables": variables, "query": query })))
 }
 
-fn jwt_request(client: &Client, arl: &DeezerArl, user_id: &str) -> reqwest::RequestBuilder {
+fn jwt_request(client: &Client, cookie: header::HeaderValue) -> reqwest::RequestBuilder {
     client
         .post(JWT_URL)
         .header(header::ACCEPT, "application/json")
-        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_LENGTH, "0")
         .header(header::ORIGIN, "https://www.deezer.com")
         .header(header::REFERER, "https://www.deezer.com/")
-        .json(&json!({ "arl": arl.expose(), "account_id": user_id }))
+        .body("")
 }
 
 fn session_bootstrap_request(
@@ -1018,9 +1032,13 @@ mod tests {
     #[test]
     fn jwt_request_matches_contract_without_exposing_secret_in_debug() {
         let arl = DeezerArl::from_saved("sentinel-secret").unwrap();
-        let request = jwt_request(&Client::new(), &arl, "42").build().unwrap();
+        let request = jwt_request(&Client::new(), arl.cookie_header().unwrap())
+            .build()
+            .unwrap();
         assert_eq!(request.method(), reqwest::Method::POST);
         assert_eq!(request.url().as_str(), JWT_URL);
+        assert!(request.headers()[header::COOKIE].is_sensitive());
+        assert_eq!(request.headers()[header::CONTENT_LENGTH], "0");
         assert_eq!(request.headers()[header::ORIGIN], "https://www.deezer.com");
         assert_eq!(
             request.headers()[header::REFERER],

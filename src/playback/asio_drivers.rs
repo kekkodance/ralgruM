@@ -33,12 +33,23 @@ fn registry_asio_driver_names() -> Vec<String> {
 /// is still open.
 #[cfg(windows)]
 pub(crate) fn find_asio_driver(name: &str) -> Result<rodio::cpal::Device, String> {
+    let registered = list_registry_asio_drivers()
+        .iter()
+        .any(|driver| driver == name);
+    if !registered {
+        return Err(format!("The ASIO driver \"{name}\" is no longer installed"));
+    }
+    // CPAL silently skips a registered driver when ASIO cannot load it.
+    // This lookup can run on the UI thread, so it must not sleep and retry.
     let host = rodio::cpal::host_from_id(rodio::cpal::HostId::Asio)
         .map_err(|error| format!("The ASIO host could not start: {error}"))?;
-    host.output_devices()
-        .map_err(|error| format!("ASIO drivers could not be enumerated: {error}"))?
+    let devices = host
+        .output_devices()
+        .map_err(|error| format!("ASIO drivers could not be enumerated: {error}"))?;
+    devices
+        .into_iter()
         .find(|device| device.name().ok().as_deref() == Some(name))
-        .ok_or_else(|| format!("The ASIO driver \"{name}\" was not found"))
+        .ok_or_else(|| format!("The installed ASIO driver \"{name}\" could not be loaded"))
 }
 
 #[cfg(not(windows))]

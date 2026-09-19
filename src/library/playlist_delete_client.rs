@@ -3,24 +3,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use reqwest::header;
 use serde_json::{Value, json};
 
-use super::playlist_client::{PlaylistClient, parse_catalog, valid_id};
+use super::playlist_client::{PlaylistClient, valid_id};
 use crate::search::DeezerArl;
 
 const GATEWAY_URL: &str = "https://www.deezer.com/ajax/gw-light.php";
-const PLAYLIST_FRAGMENT: &str = r#"fragment PlaylistInfo on Playlist {
-  id title description isPrivate isFromFavoriteTracks isCollaborative estimatedTracksCount
-  owner { id name __typename }
-  picture { id small: urls(pictureRequest: {height: 100, width: 100}) medium: urls(pictureRequest: {width: 264, height: 264}) large: urls(pictureRequest: {width: 500, height: 500}) __typename }
-  __typename
-}"#;
-const SIDEBAR_QUERY: &str = r#"query SidebarPlaylistsInfo($first: Int!) {
-  me {
-    id
-    playlists(first: $first, sort: {by: LAST_MODIFICATION_DATE, order: DESC}) { edges { node { ...PlaylistInfo } } }
-    userFavorites { playlists(first: $first) { edges { node { ...PlaylistInfo } } } }
-  }
-}
-"#;
 static CID: AtomicU64 = AtomicU64::new(100_000_000);
 
 impl PlaylistClient {
@@ -32,24 +18,17 @@ impl PlaylistClient {
     ) -> Result<bool, String> {
         let playlist_id = valid_id(playlist_id)?;
         let session = self.session(arl, saved_user_id).await?;
-        let catalog = self
-            .graphql(
-                &session,
-                "SidebarPlaylistsInfo",
-                json!({ "first": 2000 }),
-                format!("{SIDEBAR_QUERY}{PLAYLIST_FRAGMENT}"),
-            )
-            .await;
-        if let Ok(catalog) = &catalog
-            && let Ok(playlists) = parse_catalog(catalog)
-            && let Some(playlist) = playlists.into_iter().find(|p| p.id == playlist_id)
-        {
-            if playlist.is_from_favorite_tracks {
-                return Err("Deezer's Favorite Tracks playlist cannot be deleted here".into());
-            }
-            if playlist.is_collaborative {
-                return Err("Collaborative Deezer playlists cannot be deleted here".into());
-            }
+        let playlist = self
+            .catalog_for_session(&session)
+            .await?
+            .into_iter()
+            .find(|playlist| playlist.id == playlist_id)
+            .ok_or_else(|| "Deezer did not identify this as one of your playlists".to_string())?;
+        if playlist.is_from_favorite_tracks {
+            return Err("Deezer's Favorite Tracks playlist cannot be deleted here".into());
+        }
+        if playlist.is_collaborative {
+            return Err("Collaborative Deezer playlists cannot be deleted here".into());
         }
         let response = self
             .client

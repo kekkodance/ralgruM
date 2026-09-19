@@ -7,15 +7,6 @@ use super::playlist_client::{PlaylistClient, Session, valid_id};
 use crate::search::DeezerArl;
 
 const GATEWAY_URL: &str = "https://www.deezer.com/ajax/gw-light.php";
-const PLAYLIST_FRAGMENT: &str = r#"fragment PlaylistInfo on Playlist {
-  id title description isPrivate isFromFavoriteTracks isCollaborative estimatedTracksCount
-  owner { id name __typename }
-  picture { id small: urls(pictureRequest: {height: 100, width: 100}) medium: urls(pictureRequest: {width: 264, height: 264}) large: urls(pictureRequest: {width: 500, height: 500}) __typename }
-  __typename
-}"#;
-const SIDEBAR_QUERY: &str = r#"query SidebarPlaylistsInfo($first: Int!) {
-  me { id playlists(first: $first, sort: {by: LAST_MODIFICATION_DATE, order: DESC}) { edges { node { ...PlaylistInfo } } } userFavorites { playlists(first: $first) { edges { node { ...PlaylistInfo } } } } }
-}"#;
 static CID: AtomicU64 = AtomicU64::new(100_000_000);
 
 pub(crate) async fn remove_track(
@@ -34,15 +25,9 @@ pub(crate) async fn remove_track(
         .parse::<u64>()
         .map_err(|_| "Deezer track id is too large".to_string())?;
     let session = client.session(arl, saved_user_id).await?;
-    let catalog = client
-        .graphql(
-            &session,
-            "SidebarPlaylistsInfo",
-            json!({"first": 50}),
-            format!("{}{}", SIDEBAR_QUERY, PLAYLIST_FRAGMENT),
-        )
-        .await?;
-    let playlist = super::playlist_client::parse_catalog(&catalog)?
+    let playlist = client
+        .catalog_for_session(&session)
+        .await?
         .into_iter()
         .find(|playlist| playlist.id == playlist_id)
         .ok_or_else(|| "Deezer did not identify this as one of your playlists".to_string())?;

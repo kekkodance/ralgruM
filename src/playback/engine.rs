@@ -32,7 +32,7 @@ use super::ramped_gain::RampedGain;
 use super::resolver::{AudioFormat, ResolvedAudio, ResolvedProgressiveAudio};
 use super::standby::{PreparedSource, ProgressiveSeek, SinkProbe};
 
-type DecodedSource = Box<dyn Source + Send>;
+pub(crate) type DecodedSource = Box<dyn Source + Send>;
 
 struct PendingProgressiveReload {
     position: Duration,
@@ -136,6 +136,23 @@ pub(crate) struct PreparedOutputSwitch {
     source: Option<DecodedSource>,
     position: Duration,
     target: AudioOutputTarget,
+}
+
+pub(crate) struct OpenOutputSwitch {
+    stream: OutputStream,
+    position: Duration,
+    target: AudioOutputTarget,
+}
+
+impl OpenOutputSwitch {
+    pub(crate) fn finish(self, source: Option<DecodedSource>) -> PreparedOutputSwitch {
+        PreparedOutputSwitch {
+            stream: self.stream,
+            source,
+            position: self.position,
+            target: self.target,
+        }
+    }
 }
 
 impl PreparedOutputSwitch {
@@ -264,8 +281,30 @@ impl RodioEngine {
         Self::decoder_at(&spec.path, spec.format, spec.position).ok()
     }
 
-    /// Opening the driver and positioning a decoder can block for an
-    /// unbounded time, so callers prepare both on a background worker.
+    pub(crate) fn decode_output_reload(reload: Option<OutputReloadSpec>) -> Option<DecodedSource> {
+        reload.as_ref().and_then(Self::reload_front_source)
+    }
+
+    /// ASIO initialization and teardown stay on the UI thread for drivers
+    /// that require the same thread for both operations. The decoder is
+    /// prepared separately on a worker while this stream stays on the UI.
+    pub(crate) fn open_asio_output_switch(
+        target: AudioOutputTarget,
+        reload: Option<&OutputReloadSpec>,
+    ) -> Result<OpenOutputSwitch, String> {
+        let AudioOutputTarget::AsioDriver(name) = &target else {
+            return Err("The selected output is not an ASIO driver".into());
+        };
+        let stream = Self::open_asio_output_stream(name)?;
+        Ok(OpenOutputSwitch {
+            stream,
+            position: reload.map_or(Duration::ZERO, |spec| spec.position),
+            target,
+        })
+    }
+
+    /// WASAPI stream opening and decoder positioning can block, so callers
+    /// prepare both on a background worker.
     pub(crate) fn prepare_output_switch(
         target: AudioOutputTarget,
         reload: Option<OutputReloadSpec>,
@@ -287,7 +326,7 @@ impl RodioEngine {
             Err(error) => return Err(error),
         };
         let position = reload.as_ref().map_or(Duration::ZERO, |spec| spec.position);
-        let source = reload.as_ref().and_then(Self::reload_front_source);
+        let source = Self::decode_output_reload(reload);
         Ok(PreparedOutputSwitch {
             stream,
             source,

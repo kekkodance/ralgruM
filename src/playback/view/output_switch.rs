@@ -18,7 +18,7 @@ pub(super) fn restore_output_state(state: &mut PlaybackState, resume: OutputResu
 }
 
 fn needs_asio_bridge(current: &AudioOutputTarget, target: &AudioOutputTarget) -> bool {
-    let AudioOutputTarget::AsioDriver(driver) = target else {
+    let AudioOutputTarget::AsioDriver(_) = target else {
         return false;
     };
     if current == target {
@@ -26,10 +26,7 @@ fn needs_asio_bridge(current: &AudioOutputTarget, target: &AudioOutputTarget) ->
     }
     match current {
         AudioOutputTarget::AsioDriver(_) => true,
-        AudioOutputTarget::Device(name) => {
-            crate::playback::engine::asio_endpoint_matches_driver(name, driver)
-        }
-        AudioOutputTarget::SystemDefault => false,
+        AudioOutputTarget::Device(_) | AudioOutputTarget::SystemDefault => false,
     }
 }
 
@@ -137,24 +134,53 @@ impl PlaybackModel {
         let generation = self.state.generation;
         self.pending_output_target = Some(target.clone());
         self.cancel_user_fade_and_sync_transport();
-        // Freeze the old position while the driver and decoder are prepared
-        // on a worker. The engine remains available to other UI actions.
+        // Freeze the old position while the replacement stream and decoder
+        // are prepared. The engine remains available to other UI actions.
         if self.state.status == PlaybackStatus::Playing
             && let Ok(engine) = &self.engine
         {
             engine.pause();
         }
-        let task = self.runtime.spawn_blocking(move || {
-            if let Some(driver) = bridge_driver {
-                RodioEngine::prepare_asio_bridge(&driver, bridge_current_device.as_deref(), reload)
-            } else {
-                RodioEngine::prepare_output_switch(target, reload)
-            }
+        // MiniFuse's ASIO driver opens reliably on the UI thread, where the
+        // previous stream is also destroyed. Decode on a worker afterwards.
+        let open_asio = if matches!(target, AudioOutputTarget::AsioDriver(_)) && !bridge_asio {
+            Some(RodioEngine::open_asio_output_switch(
+                target.clone(),
+                reload.as_ref(),
+            ))
+        } else {
+            None
+        };
+        let decode_task = open_asio.as_ref().filter(|result| result.is_ok()).map(|_| {
+            let reload = reload.clone();
+            self.runtime
+                .spawn_blocking(move || RodioEngine::decode_output_reload(reload))
+        });
+        let task = open_asio.is_none().then(|| {
+            self.runtime.spawn_blocking(move || {
+                if let Some(driver) = bridge_driver {
+                    RodioEngine::prepare_asio_bridge(
+                        &driver,
+                        bridge_current_device.as_deref(),
+                        reload,
+                    )
+                } else {
+                    RodioEngine::prepare_output_switch(target, reload)
+                }
+            })
         });
         cx.spawn(async move |this, cx| {
-            let result = task
-                .await
-                .unwrap_or_else(|_| Err("The output switch worker stopped unexpectedly".into()));
+            let result = match open_asio {
+                Some(Ok(open)) => decode_task
+                    .unwrap()
+                    .await
+                    .map(|source| open.finish(source))
+                    .map_err(|_| "The output switch decoder stopped unexpectedly".into()),
+                Some(Err(error)) => Err(error),
+                None => task.unwrap().await.unwrap_or_else(|_| {
+                    Err("The output switch worker stopped unexpectedly".into())
+                }),
+            };
             this.update(cx, |this, cx| {
                 if this.output_switch_epoch != epoch {
                     return;
@@ -282,7 +308,7 @@ mod tests {
             &first,
             &AudioOutputTarget::SystemDefault
         ));
-        assert!(needs_asio_bridge(
+        assert!(!needs_asio_bridge(
             &AudioOutputTarget::Device("Headphones (MiniFuse 2)".into()),
             &AudioOutputTarget::AsioDriver("MiniFuse ASIO Driver".into()),
         ));
