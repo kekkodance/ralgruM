@@ -28,6 +28,18 @@ pub(crate) fn open_github_profile(value: &str) -> Result<(), String> {
     open(url.as_str(), "GitHub profile")
 }
 
+pub(crate) fn open_update_release(value: &url::Url) -> Result<(), String> {
+    if value.scheme() != "https"
+        || value.host_str() != Some("github.com")
+        || !value
+            .path()
+            .starts_with("/kekkodance/ralgruM/releases/tag/")
+    {
+        return Err("Invalid ralgruM release page".into());
+    }
+    open(value.as_str(), "ralgruM release")
+}
+
 pub(crate) fn open_font_awesome() -> Result<(), String> {
     open(FONT_AWESOME_URL, "Font Awesome site")
 }

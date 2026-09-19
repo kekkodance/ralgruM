@@ -765,6 +765,7 @@ pub(super) fn render_sidebar(
             account.sidebar_pass(),
         )
     };
+    let show_update = app.updater.read(cx).has_offer();
 
     div()
         .w_full()
@@ -839,12 +840,16 @@ pub(super) fn render_sidebar(
             )
         })
         .child(div().flex_1())
+        .when(show_update && metrics.compact_desktop, |this| {
+            this.child(app.update_badge(true, cx))
+        })
         .child(sidebar_bottom(
             app,
             sidebar_username,
             sidebar_premium,
             sidebar_pass,
             metrics.narrow_content,
+            show_update && !metrics.compact_desktop,
             bottom_visual,
             cx,
         ))
@@ -856,6 +861,7 @@ fn sidebar_bottom(
     sidebar_premium: &'static str,
     sidebar_pass: SidebarPass,
     narrow_content: bool,
+    show_update: bool,
     bottom_visual: SidebarBottomVisual,
     cx: &mut Context<RalgrumApp>,
 ) -> impl IntoElement + use<> {
@@ -874,69 +880,79 @@ fn sidebar_bottom(
         .child(
             div()
                 .w_full()
-                .p(px(12.))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(rgb(BORDER))
-                .bg(rgb(SURFACE))
                 .flex()
                 .flex_col()
                 .gap(px(8.))
-                .text_size(px(11.5))
-                .text_color(rgb(MUTED))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(7.))
-                        .child(local_icon(LocalIcon::User, MUTED).size_3())
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(17.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(rgb(FOREGROUND))
-                                .child(sidebar_username),
-                        ),
-                )
+                .when(show_update, |this| this.child(app.update_badge(false, cx)))
                 .child(
                     div()
                         .w_full()
+                        .p(px(12.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(SURFACE))
                         .flex()
-                        .items_center()
-                        .justify_between()
+                        .flex_col()
+                        .gap(px(8.))
+                        .text_size(px(11.5))
+                        .text_color(rgb(MUTED))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap(px(4.))
-                                .child("Premium:")
+                                .justify_center()
+                                .gap(px(7.))
+                                .child(local_icon(LocalIcon::User, MUTED).size_3())
                                 .child(
                                     div()
-                                        .relative()
-                                        .top(px(ACCOUNT_STATUS_ICON_OFFSET_PX))
-                                        .child(if sidebar_premium == "Yes" {
-                                            local_icon(LocalIcon::Check, 0x22c55e).size(px(10.))
-                                        } else {
-                                            local_icon(LocalIcon::X, FOREGROUND).size(px(10.))
-                                        }),
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(17.))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(FOREGROUND))
+                                        .child(sidebar_username),
                                 ),
                         )
                         .child(
                             div()
+                                .w_full()
                                 .flex()
                                 .items_center()
-                                .gap(px(4.))
-                                .child("Pass:")
-                                .child({
-                                    let (value, color) = sidebar_pass_value(sidebar_pass);
+                                .justify_between()
+                                .child(
                                     div()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(rgb(color))
-                                        .child(value)
-                                }),
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.))
+                                        .child("Premium:")
+                                        .child(
+                                            div()
+                                                .relative()
+                                                .top(px(ACCOUNT_STATUS_ICON_OFFSET_PX))
+                                                .child(if sidebar_premium == "Yes" {
+                                                    local_icon(LocalIcon::Check, 0x22c55e)
+                                                        .size(px(10.))
+                                                } else {
+                                                    local_icon(LocalIcon::X, FOREGROUND)
+                                                        .size(px(10.))
+                                                }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.))
+                                        .child("Pass:")
+                                        .child({
+                                            let (value, color) = sidebar_pass_value(sidebar_pass);
+                                            div()
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(rgb(color))
+                                                .child(value)
+                                        }),
+                                ),
                         ),
                 ),
         )

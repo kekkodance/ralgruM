@@ -32,6 +32,7 @@ use crate::{
     },
     theme::{BACKGROUND, BORDER, FOREGROUND, ui_font_family},
     toast::ToastStack,
+    updater::model::UpdaterModel,
     window_state::WindowStateManager,
 };
 
@@ -40,6 +41,8 @@ use chrome::render_titlebar;
 
 mod sidebar;
 use sidebar::render_sidebar;
+
+mod update_badge;
 
 mod sidebar_badge;
 use sidebar_badge::SidebarDownloadBadgeMotion;
@@ -87,6 +90,7 @@ pub(crate) struct RalgrumApp {
     settings: Entity<SettingsView>,
     account: Entity<AccountState>,
     pub(super) downloads: Entity<DownloadModel>,
+    pub(super) updater: Entity<UpdaterModel>,
     library: Entity<LibraryView>,
     playback_view: Entity<PlaybackView>,
     playback: Entity<PlaybackModel>,
@@ -692,6 +696,8 @@ impl RalgrumApp {
             )
         });
         let toasts = cx.new(|_| ToastStack::new());
+        let updater = cx.new(|cx| UpdaterModel::new(runtime.clone(), cx));
+        cx.observe(&updater, |_, _, cx| cx.notify()).detach();
         crate::toast::set_global(cx, &toasts);
         let app_tooltip = cx.new(|_| AppTooltipOverlay::new());
         crate::app_tooltip::set_global(cx, &app_tooltip);
@@ -1161,6 +1167,7 @@ impl RalgrumApp {
             settings,
             account,
             downloads,
+            updater,
             library,
             playback_view,
             playback,

@@ -6075,6 +6075,7 @@ dependencies = [
  "rodio",
  "roxmltree 0.20.0",
  "rust-embed",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",

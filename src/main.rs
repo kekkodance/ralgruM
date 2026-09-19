@@ -16,6 +16,7 @@ mod search;
 mod settings;
 mod shell;
 mod ui;
+mod updater;
 
 pub(crate) use app::{
     account_session, diagnostics, entity_navigation, navigation_state, paths, settings_transfer,
@@ -78,8 +79,13 @@ fn start_browser_link_pump(
 }
 
 fn main() {
+    if updater::helper::dispatch() {
+        return;
+    }
+    let update_confirmation = updater::helper::confirmation_id();
     diagnostics::init();
     diagnostics::event("INFO", "startup begin");
+    let update_handoff_error = updater::helper::take_last_error();
     #[cfg(windows)]
     windows_protocol::sync_registration();
     let raw_browser_link =
@@ -229,6 +235,14 @@ fn main() {
                             cx,
                         )
                     });
+                    if let Some(error) = update_handoff_error {
+                        toast::push_global(
+                            cx,
+                            toast::ToastKind::Error,
+                            "Update was not installed",
+                            Some(error.into()),
+                        );
+                    }
                     let tray_available = tray::install(cx, window, view.downgrade());
                     for entity in initial_browser_links.drain(..) {
                         view.update(cx, |app, cx| app.open_browser_link(entity, cx));
@@ -256,7 +270,11 @@ fn main() {
                         true
                     });
                     diagnostics::event("INFO", "main window construction complete");
-                    cx.new(|cx| Root::new(view, window, cx))
+                    let root = cx.new(|cx| Root::new(view, window, cx));
+                    if let Some(id) = update_confirmation {
+                        updater::helper::confirm(id);
+                    }
+                    root
                 },
             )
             .unwrap();
