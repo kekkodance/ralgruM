@@ -28,7 +28,7 @@ jobs:
     name: Build full Windows application
     needs: require-private-access
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
@@ -58,6 +58,9 @@ jobs:
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
+
+      - name: Test the full application with the private backend
+        run: cargo test --locked --all-targets
 
       - name: Build the full application
         run: cargo build --locked --release

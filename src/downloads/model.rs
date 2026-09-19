@@ -9,8 +9,13 @@ use gpui::{Context, Entity, EventEmitter, Task};
 use tokio::{fs, io::AsyncSeekExt, runtime::Runtime};
 use tokio_util::sync::CancellationToken;
 
+mod batch;
+use batch::destination_with_extension;
+#[cfg(test)]
+use batch::{batch_conflict_targets, batch_download_extension};
+
 use super::capability::{CapabilityCache, CapabilityKey, CapabilityProbeRegistry, CapabilityState};
-use super::naming::BatchTargetInspection;
+use super::naming::{BatchTargetInspection, destination_identity};
 use super::{
     BatchConflictPolicy, BatchExistingTarget, BatchNeedsConfirmation, DownloadJob, DownloadStatus,
     download_filename,
@@ -52,6 +57,7 @@ pub(crate) struct DownloadModel {
     toasts: Option<gpui::WeakEntity<ToastStack>>,
     batch_mode: bool,
     batch_ids: std::collections::HashSet<u64>,
+    batch_written_paths: std::collections::HashSet<PathBuf>,
     batch_saved: usize,
     batch_failed: usize,
     capabilities: CapabilityCache,
@@ -64,6 +70,7 @@ pub(crate) struct DownloadModel {
     /// destination or a superseded probe.
     file_stat_probes: HashMap<u64, (PathBuf, u64)>,
     next_file_stat_probe: u64,
+    completion_notices_pending: std::collections::HashSet<u64>,
 }
 
 /// Capability notification for an open download row. `None` invalidates an
@@ -154,6 +161,7 @@ impl DownloadModel {
             toasts: None,
             batch_mode: false,
             batch_ids: std::collections::HashSet::new(),
+            batch_written_paths: std::collections::HashSet::new(),
             batch_saved: 0,
             batch_failed: 0,
             capabilities: CapabilityCache::default(),
@@ -161,6 +169,7 @@ impl DownloadModel {
             capability_tasks: HashMap::new(),
             file_stat_probes: HashMap::new(),
             next_file_stat_probe: 0,
+            completion_notices_pending: std::collections::HashSet::new(),
         }
     }
 
@@ -311,230 +320,6 @@ impl DownloadModel {
         self.start_next(cx);
         cx.notify();
         id
-    }
-
-    pub(crate) fn start_batch<I>(
-        &mut self,
-        tracks: I,
-        deezer_arl: Option<DeezerArl>,
-        soundcloud_token: Option<SoundCloudToken>,
-        variant: DownloadVariant,
-        cx: &mut Context<Self>,
-    ) -> Vec<u64>
-    where
-        I: IntoIterator<Item = PlaybackTrack>,
-    {
-        // A new batch supersedes an unanswered batch prompt. Remove its
-        // claimed jobs before adding the replacement so none of its queued
-        // requests can become orphaned behind the new prompt.
-        self.cancel_pending_batch(cx);
-
-        let ids: Vec<u64> = tracks
-            .into_iter()
-            .map(|track| {
-                self.next_id = self.next_id.wrapping_add(1);
-                let id = self.next_id;
-                self.jobs.push(DownloadJob::new(id, track, variant));
-                self.requests
-                    .insert(id, (deezer_arl.clone(), soundcloud_token.clone(), variant));
-                id
-            })
-            .collect();
-        if ids.is_empty() {
-            return ids;
-        }
-
-        let downloads_dir = match self.downloads_dir(cx) {
-            Ok(directory) => directory,
-            Err(error) => {
-                for id in &ids {
-                    self.requests.remove(id);
-                    if let Some(job) = self.job_mut(*id) {
-                        job.status = DownloadStatus::Failed(error.clone());
-                        job.unread = true;
-                    }
-                }
-                self.notify_toast(ToastKind::Error, "Downloads failed", Some(error), cx);
-                cx.notify();
-                return ids;
-            }
-        };
-        let target_paths = ids
-            .iter()
-            .filter_map(|id| {
-                let job = self.job(*id)?;
-                let extension = batch_download_extension(job.track.provider, variant)?;
-                Some((
-                    *id,
-                    destination_with_extension(&job.track, extension, &downloads_dir),
-                ))
-            })
-            .collect::<Vec<_>>();
-        let batch_key = self.next_batch_key();
-        self.begin_batch_tracking(&ids);
-        self.pending_batch = Some(BatchNeedsConfirmation {
-            ids: ids.clone(),
-            existing: 0,
-            existing_targets: Vec::new(),
-            key: batch_key,
-        });
-        let task = self.runtime.spawn_blocking(move || {
-            let inspection =
-                inspect_batch_targets(target_paths.iter().map(|(_, path)| path.clone()));
-            batch_conflict_targets(target_paths, inspection)
-        });
-        let entity = cx.entity();
-        let batch_ids = ids.clone();
-        cx.spawn(async move |_, cx| {
-            let targets = task.await;
-            entity.update(cx, |model, cx| {
-                let Some(batch) = model
-                    .pending_batch
-                    .as_mut()
-                    .filter(|batch| batch.key == batch_key)
-                else {
-                    return;
-                };
-                match targets {
-                    Ok(targets) if !targets.is_empty() => {
-                        batch.existing = targets.len();
-                        batch.existing_targets = targets;
-                        cx.emit(DownloadNotice::BatchConflict {
-                            key: batch_key,
-                            existing: batch.existing,
-                        });
-                    }
-                    Ok(_) => {
-                        model.pending_batch = None;
-                        model.notify_toast(
-                            ToastKind::Info,
-                            "Downloads started",
-                            Some(format!("Queued {} tracks.", batch_ids.len())),
-                            cx,
-                        );
-                        model.start_next(cx);
-                    }
-                    Err(_) => {
-                        model.pending_batch = None;
-                        let error = "The batch destination check stopped unexpectedly".to_owned();
-                        for id in &batch_ids {
-                            model.requests.remove(id);
-                            if let Some(job) = model.job_mut(*id) {
-                                job.status = DownloadStatus::Failed(error.clone());
-                                job.unread = true;
-                            }
-                            model.batch_ids.remove(id);
-                        }
-                        if model.batch_ids.is_empty() {
-                            model.batch_mode = false;
-                            model.batch_saved = 0;
-                            model.batch_failed = 0;
-                        }
-                        model.notify_toast(ToastKind::Error, "Downloads failed", Some(error), cx);
-                        model.start_next(cx);
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-        ids
-    }
-
-    fn next_batch_key(&mut self) -> u64 {
-        self.next_batch_key = self.next_batch_key.wrapping_add(1);
-        self.next_batch_key
-    }
-
-    fn begin_batch_tracking(&mut self, ids: &[u64]) {
-        let continuing_batch = !self.batch_ids.is_empty();
-        self.batch_mode = true;
-        self.batch_ids.extend(ids.iter().copied());
-        if !continuing_batch {
-            self.batch_saved = 0;
-            self.batch_failed = 0;
-        }
-    }
-
-    pub(crate) fn ignore_batch_conflict(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some(batch) = self.take_pending_batch(key, cx) else {
-            return;
-        };
-        for target in &batch.existing_targets {
-            self.batch_policies
-                .insert(target.id, BatchConflictPolicy::SkipExisting);
-        }
-        if !self.batch_ids.is_empty() {
-            self.notify_toast(
-                ToastKind::Info,
-                "Downloads started",
-                Some(format!("Queued {} tracks.", self.batch_ids.len())),
-                cx,
-            );
-        }
-        self.start_next(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn overwrite_batch_conflict(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some(_batch) = self.take_pending_batch(key, cx) else {
-            return;
-        };
-        for target in &_batch.existing_targets {
-            self.batch_policies
-                .insert(target.id, BatchConflictPolicy::OverwriteExisting);
-        }
-        if !self.batch_ids.is_empty() {
-            self.notify_toast(
-                ToastKind::Info,
-                "Downloads started",
-                Some(format!("Queued {} tracks.", self.batch_ids.len())),
-                cx,
-            );
-        }
-        self.start_next(cx);
-        cx.notify();
-    }
-
-    fn take_pending_batch(
-        &mut self,
-        key: u64,
-        cx: &mut Context<Self>,
-    ) -> Option<BatchNeedsConfirmation> {
-        if self
-            .pending_batch
-            .as_ref()
-            .is_none_or(|batch| batch.key != key)
-        {
-            return None;
-        }
-        let batch = self.pending_batch.take()?;
-        cx.emit(DownloadNotice::BatchConflictCleared { key });
-        Some(batch)
-    }
-
-    fn cancel_pending_batch(&mut self, cx: &mut Context<Self>) {
-        let Some(batch) = self.pending_batch.take() else {
-            return;
-        };
-        let key = batch.key;
-        cx.emit(DownloadNotice::BatchConflictCleared { key });
-        let ids = batch
-            .ids
-            .into_iter()
-            .collect::<std::collections::HashSet<_>>();
-        super::remove_claimed_jobs(&mut self.jobs, &ids.iter().copied().collect::<Vec<_>>());
-        self.requests.retain(|id, _| !ids.contains(id));
-        self.batch_policies.retain(|id, _| !ids.contains(id));
-        self.batch_ids.retain(|id| !ids.contains(id));
-        if self.batch_ids.is_empty() {
-            self.batch_mode = false;
-            self.batch_saved = 0;
-            self.batch_failed = 0;
-        }
-        self.start_next(cx);
-        cx.notify();
     }
 
     fn start_next(&mut self, cx: &mut Context<Self>) {
@@ -702,6 +487,15 @@ impl DownloadModel {
         exists: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.batch_ids.contains(&id)
+            && self
+                .batch_written_paths
+                .contains(&destination_identity(&path))
+        {
+            self.sources.remove(&id);
+            self.finish(id, generation, DownloadStatus::Skipped(path), cx);
+            return;
+        }
         if exists {
             if self.batch_ids.contains(&id) {
                 match batch_target_action(self.batch_conflict_policy_for(id), true) {
@@ -739,6 +533,14 @@ impl DownloadModel {
     }
 
     pub(crate) fn clear_terminal(&mut self, cx: &mut Context<Self>) {
+        for job in &self.jobs {
+            if self.completion_notices_pending.remove(&job.id) {
+                cx.emit(DownloadNotice::Completed {
+                    title: job.track.title.clone(),
+                    quality: quality_label(job, job.file_size()),
+                });
+            }
+        }
         self.jobs.retain(|job| !job.is_terminal());
         cx.notify();
     }
@@ -811,6 +613,14 @@ impl DownloadModel {
         });
         if install {
             self.job_mut(id).unwrap().file = Some(stat);
+            if self.completion_notices_pending.remove(&id)
+                && let Some(job) = self.job(id)
+            {
+                cx.emit(DownloadNotice::Completed {
+                    title: job.track.title.clone(),
+                    quality: quality_label(job, job.file_size()),
+                });
+            }
             cx.notify();
         }
     }
@@ -988,7 +798,9 @@ impl DownloadModel {
             self.sources.remove(&id);
         }
         for (_, part) in self.pending_parts.drain() {
-            let _ = std::fs::remove_file(part);
+            self.runtime.spawn_blocking(move || {
+                let _ = std::fs::remove_file(part);
+            });
         }
         if let Some(id) = conflict_id {
             cx.emit(DownloadNotice::ConflictCleared { id });
@@ -1006,6 +818,8 @@ impl DownloadModel {
         self.pending_batch = None;
         self.batch_policies.clear();
         self.batch_ids.clear();
+        self.batch_written_paths.clear();
+        self.completion_notices_pending.clear();
         self.batch_mode = false;
         self.batch_saved = 0;
         self.batch_failed = 0;
@@ -1056,7 +870,9 @@ impl DownloadModel {
 
     fn remove_pending_part(&mut self, id: u64) {
         if let Some(part) = self.pending_parts.remove(&id) {
-            let _ = std::fs::remove_file(part);
+            self.runtime.spawn_blocking(move || {
+                let _ = std::fs::remove_file(part);
+            });
         }
     }
 
@@ -1090,7 +906,10 @@ impl DownloadModel {
                 }
                 model.pending_parts.remove(&id);
                 if result.is_err() {
-                    let _ = std::fs::remove_file(&part);
+                    let part = part.clone();
+                    model.runtime.spawn_blocking(move || {
+                        let _ = std::fs::remove_file(part);
+                    });
                 }
                 let status = match result {
                     Ok(()) => DownloadStatus::Completed(path),
@@ -1339,6 +1158,9 @@ impl DownloadModel {
 
     fn record_outcome(&mut self, id: u64, status: &DownloadStatus, cx: &mut Context<Self>) {
         if self.batch_ids.remove(&id) {
+            if let DownloadStatus::Completed(path) = status {
+                self.batch_written_paths.insert(destination_identity(path));
+            }
             self.batch_policies.remove(&id);
             let (saved, failed) = batch_outcome(status);
             self.batch_saved += saved;
@@ -1348,6 +1170,7 @@ impl DownloadModel {
                 let pending_conflict_key = self.pending_batch.take().map(|batch| batch.key);
                 self.batch_mode = false;
                 self.batch_policies.clear();
+                self.batch_written_paths.clear();
                 if let Some(key) = pending_conflict_key {
                     cx.emit(DownloadNotice::BatchConflictCleared { key });
                 }
@@ -1369,16 +1192,8 @@ impl DownloadModel {
             return;
         }
         match status {
-            DownloadStatus::Completed(path) => {
-                if let Some(job) = self.job(id) {
-                    cx.emit(DownloadNotice::Completed {
-                        title: job.track.title.clone(),
-                        quality: quality_label(
-                            job,
-                            std::fs::metadata(path).ok().map(|metadata| metadata.len()),
-                        ),
-                    });
-                }
+            DownloadStatus::Completed(_) => {
+                self.completion_notices_pending.insert(id);
             }
             DownloadStatus::Failed(error) => {
                 self.notify_toast(ToastKind::Error, "Download failed", Some(error.clone()), cx);
@@ -1433,42 +1248,6 @@ fn quality_label(job: &DownloadJob, downloaded_size: Option<u64>) -> String {
         .unwrap_or_else(|| "Quality unavailable".to_owned())
 }
 
-fn batch_conflict_targets(
-    targets: Vec<(u64, PathBuf)>,
-    inspection: BatchTargetInspection,
-) -> Vec<BatchExistingTarget> {
-    let existing = inspection
-        .existing
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>();
-    let mut seen = std::collections::HashSet::new();
-    targets
-        .into_iter()
-        .filter_map(|(id, path)| {
-            let duplicate = !seen.insert(path.clone());
-            (existing.contains(&path) || duplicate).then_some(BatchExistingTarget { id, path })
-        })
-        .collect()
-}
-
-fn batch_download_extension(
-    provider: PlaybackProvider,
-    variant: DownloadVariant,
-) -> Option<&'static str> {
-    match (provider, variant) {
-        (PlaybackProvider::SoundCloud, DownloadVariant::Standard)
-        | (PlaybackProvider::Deezer, DownloadVariant::DeezerMp3_320)
-        | (PlaybackProvider::Deezer, DownloadVariant::DeezerMp3_128) => Some("mp3"),
-        (PlaybackProvider::Deezer, DownloadVariant::Best)
-        | (PlaybackProvider::Deezer, DownloadVariant::DeezerFlac) => Some("flac"),
-        _ => None,
-    }
-}
-
-fn destination_with_extension(track: &PlaybackTrack, extension: &str, directory: &Path) -> PathBuf {
-    directory.join(download_filename(&track.artist, &track.title, extension))
-}
-
 fn part_path(path: &Path, id: u64, generation: u64) -> PathBuf {
     path.with_file_name(format!(
         ".{}.{}.{}.part",
@@ -1481,596 +1260,4 @@ fn part_path(path: &Path, id: u64, generation: u64) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        account_session::SessionError,
-        murglar_backend::{DeviceIdentityError, DeviceIdentityStatus},
-        playback::PlaybackProvider,
-        settings::AccountState,
-    };
-    use gpui::{AppContext, TestAppContext};
-    use std::time::Duration;
-    use tempfile::tempdir;
-
-    fn soundcloud_track() -> PlaybackTrack {
-        PlaybackTrack {
-            downloadable: true,
-            progressive: false,
-            provider: PlaybackProvider::SoundCloud,
-            id: "1".into(),
-            title: "Song".into(),
-            artist: "Artist".into(),
-            album: String::new(),
-            album_id: String::new(),
-            release_date: String::new(),
-            artists: Vec::new(),
-            artwork: String::new(),
-            duration: Duration::from_secs(10),
-            explicit: false,
-            service_url: String::new(),
-        }
-    }
-
-    fn quality_job() -> DownloadJob {
-        let mut job = DownloadJob::new(1, soundcloud_track(), DownloadVariant::Standard);
-        job.quality = Some(ResolvedQuality {
-            format: "MP3".into(),
-            source_size: Some(80_000),
-            declared_bitrate: None,
-        });
-        job
-    }
-
-    fn error_account(cx: &mut gpui::TestAppContext) -> Entity<AccountState> {
-        cx.update(|cx| {
-            cx.new(|_| {
-                AccountState::new(
-                    DeviceIdentityStatus::Error(DeviceIdentityError::HardwareCollectionUnavailable),
-                    Err(SessionError::ConfigDirectoryUnavailable),
-                )
-            })
-        })
-    }
-
-    #[test]
-    fn notice_quality_uses_the_final_file_size_over_the_source_hint() {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("song.mp3");
-        std::fs::write(&path, vec![0; 160_000]).unwrap();
-
-        assert_eq!(
-            quality_label(
-                &quality_job(),
-                std::fs::metadata(&path).ok().map(|metadata| metadata.len())
-            ),
-            "MP3 128kbps"
-        );
-        assert_eq!(quality_label(&quality_job(), None), "MP3 64kbps");
-    }
-
-    #[test]
-    fn exact_deezer_variants_use_their_collision_extensions() {
-        assert_eq!(
-            batch_download_extension(PlaybackProvider::Deezer, DownloadVariant::DeezerFlac),
-            Some("flac")
-        );
-        assert_eq!(
-            batch_download_extension(PlaybackProvider::Deezer, DownloadVariant::DeezerMp3_320),
-            Some("mp3")
-        );
-        assert_eq!(
-            batch_download_extension(PlaybackProvider::Deezer, DownloadVariant::DeezerMp3_128),
-            Some("mp3")
-        );
-        assert_eq!(
-            batch_download_extension(PlaybackProvider::Deezer, DownloadVariant::Best),
-            Some("flac")
-        );
-        assert_eq!(
-            batch_download_extension(PlaybackProvider::SoundCloud, DownloadVariant::Standard),
-            Some("mp3")
-        );
-    }
-
-    #[test]
-    fn batch_conflicts_include_later_jobs_with_the_same_destination() {
-        let path = PathBuf::from("same.mp3");
-        let other = PathBuf::from("other.flac");
-        let targets = batch_conflict_targets(
-            vec![(1, path.clone()), (2, path.clone()), (3, other.clone())],
-            BatchTargetInspection {
-                existing: vec![other.clone()],
-                duplicates: vec![path.clone()],
-            },
-        );
-        assert_eq!(
-            targets,
-            vec![
-                BatchExistingTarget { id: 2, path },
-                BatchExistingTarget { id: 3, path: other },
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn cancelled_job_cleanup_preserves_a_newer_download_to_the_same_destination() {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("track.mp3");
-        let old_part = part_path(&destination, 1, 4);
-        let new_part = part_path(&destination, 2, 5);
-        fs::write(&old_part, b"cancelled transfer").await.unwrap();
-        fs::write(&new_part, b"new completed transfer")
-            .await
-            .unwrap();
-
-        fs::remove_file(&old_part).await.unwrap();
-        super::super::finalize::finalize_download(&new_part, &destination, false)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            fs::read(&destination).await.unwrap(),
-            b"new completed transfer"
-        );
-        assert!(!new_part.exists());
-    }
-
-    #[test]
-    fn partial_paths_are_unique_to_the_job_generation() {
-        let destination = PathBuf::from("downloads/Artist - Song.mp3");
-        assert_ne!(part_path(&destination, 1, 4), part_path(&destination, 2, 4));
-        assert_ne!(part_path(&destination, 1, 4), part_path(&destination, 1, 5));
-        assert!(
-            part_path(&destination, 1, 4)
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with(".part")
-        );
-    }
-
-    #[gpui::test]
-    fn later_no_conflict_batch_does_not_replace_an_earlier_job_policy(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let account = cx.new(|_| {
-                AccountState::new(
-                    DeviceIdentityStatus::Error(DeviceIdentityError::HardwareCollectionUnavailable),
-                    Err(SessionError::ConfigDirectoryUnavailable),
-                )
-            });
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            model.batch_ids.insert(7);
-            model
-                .batch_policies
-                .insert(7, BatchConflictPolicy::OverwriteExisting);
-
-            model.begin_batch_tracking(&[8]);
-
-            assert_eq!(
-                model.batch_conflict_policy_for(7),
-                Some(BatchConflictPolicy::OverwriteExisting)
-            );
-            assert_eq!(model.batch_conflict_policy_for(8), None);
-        });
-    }
-
-    #[gpui::test]
-    fn retry_requeues_a_failed_job_without_creating_a_duplicate(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let account = cx.new(|_| {
-                AccountState::new(
-                    DeviceIdentityStatus::Error(DeviceIdentityError::HardwareCollectionUnavailable),
-                    Err(SessionError::ConfigDirectoryUnavailable),
-                )
-            });
-            let model = cx.new(|_| {
-                let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-                let mut job = quality_job();
-                job.status = DownloadStatus::Failed("network error".into());
-                job.unread = true;
-                model.jobs.push(job);
-                model.next_id = 1;
-                model.active = Some((0, 99, CancellationToken::new()));
-                model
-            });
-
-            model.update(cx, |model, cx| {
-                model.retry(1, cx);
-                assert_eq!(model.jobs.len(), 1);
-                assert_eq!(model.jobs[0].id, 1);
-                assert_eq!(model.jobs[0].status, DownloadStatus::Queued);
-                assert!(!model.jobs[0].unread);
-                assert!(model.jobs[0].quality.is_none());
-                assert_eq!(model.jobs[0].variant, DownloadVariant::Standard);
-                let request = model
-                    .requests
-                    .get(&1)
-                    .expect("retry should restore the download request");
-                assert!(request.0.is_none());
-                assert!(request.1.is_none());
-                assert_eq!(request.2, DownloadVariant::Standard);
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn retry_ignores_jobs_that_are_not_failed(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let account = cx.new(|_| {
-                AccountState::new(
-                    DeviceIdentityStatus::Error(DeviceIdentityError::HardwareCollectionUnavailable),
-                    Err(SessionError::ConfigDirectoryUnavailable),
-                )
-            });
-            let model = cx.new(|_| {
-                let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-                let mut job = quality_job();
-                job.status = DownloadStatus::Cancelled;
-                job.unread = true;
-                model.jobs.push(job);
-                model
-            });
-
-            model.update(cx, |model, cx| {
-                model.retry(1, cx);
-                assert_eq!(model.jobs.len(), 1);
-                assert_eq!(model.jobs[0].status, DownloadStatus::Cancelled);
-                assert!(model.jobs[0].unread);
-                assert!(model.jobs[0].quality.is_some());
-                assert!(model.requests.is_empty());
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn batch_without_live_settings_fails_instead_of_guessing_a_directory(cx: &mut TestAppContext) {
-        let account = error_account(cx);
-        let model = cx.new(|_| DownloadModel::new(account, Arc::new(Runtime::new().unwrap())));
-
-        let ids = model.update(cx, |model, cx| {
-            model.start_batch(
-                [soundcloud_track()],
-                None,
-                None,
-                DownloadVariant::Standard,
-                cx,
-            )
-        });
-
-        model.update(cx, |model, _| {
-            assert_eq!(ids.len(), 1);
-            let job = &model.jobs[0];
-            let DownloadStatus::Failed(error) = &job.status else {
-                panic!("expected a visible failure, got {:?}", job.status);
-            };
-            assert!(error.contains("downloads directory"));
-            assert!(job.unread);
-            assert!(model.requests.is_empty());
-            assert!(model.pending_batch.is_none());
-            assert!(!model.batch_mode);
-        });
-    }
-
-    #[gpui::test]
-    fn resolved_download_without_live_settings_fails_instead_of_saving(cx: &mut TestAppContext) {
-        let account = error_account(cx);
-        let model = cx.new(|_| {
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            let mut job = quality_job();
-            job.status = DownloadStatus::Resolving;
-            model.jobs.push(job);
-            model.next_id = 1;
-            model.active = Some((0, 1, CancellationToken::new()));
-            model
-        });
-
-        model.update(cx, |model, cx| {
-            // The missing settings guard fires before the transfer result
-            // is interpreted, so not even a resolved stream can fall back
-            // to a default directory.
-            model.resolved(
-                1,
-                0,
-                soundcloud_track(),
-                Err("the resolved stream expired".into()),
-                cx,
-            );
-            let job = &model.jobs[0];
-            let DownloadStatus::Failed(error) = &job.status else {
-                panic!("expected a visible failure, got {:?}", job.status);
-            };
-            assert!(error.contains("downloads directory"));
-            assert!(job.unread);
-            assert!(model.active.is_none());
-            assert!(model.requests.is_empty());
-        });
-    }
-
-    #[gpui::test]
-    fn file_stats_are_probed_once_and_cached_in_the_job(cx: &mut TestAppContext) {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("song.mp3");
-        std::fs::write(&path, vec![0; 160_000]).unwrap();
-
-        let account = error_account(cx);
-        let model = cx.new(|_| {
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            let mut job = quality_job();
-            job.status = DownloadStatus::Completed(path.clone());
-            model.jobs.push(job);
-            model.next_id = 1;
-            model
-        });
-
-        model.update(cx, |model, cx| {
-            model.refresh_file_stats(cx);
-            // A refresh while a probe is still in flight schedules no
-            // second probe.
-            model.refresh_file_stats(cx);
-            assert_eq!(model.file_stat_probes.len(), 1);
-        });
-        cx.run_until_parked();
-
-        model.update(cx, |model, cx| {
-            let job = &model.jobs[0];
-            let stat = job.file.as_ref().expect("the probe should have landed");
-            assert!(stat.exists);
-            assert_eq!(stat.size, Some(160_000));
-            assert!(stat.modified.is_some());
-            assert_eq!(job.file_size(), Some(160_000));
-            assert!(model.file_stat_probes.is_empty());
-
-            // A cached stat is reused; later refreshes do not re-probe.
-            model.refresh_file_stats(cx);
-            assert!(model.file_stat_probes.is_empty());
-        });
-    }
-
-    #[gpui::test]
-    fn finishing_a_download_invalidates_and_reprobes_the_cached_stat(cx: &mut TestAppContext) {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("song.mp3");
-        std::fs::write(&path, vec![0; 160_000]).unwrap();
-
-        let account = error_account(cx);
-        let model = cx.new(|_| {
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            let mut job = quality_job();
-            job.status = DownloadStatus::Downloading {
-                downloaded: 8,
-                total: Some(8),
-            };
-            // A stale stat from an earlier conflict about the same file.
-            job.file = Some(DownloadFileStat::default());
-            model.jobs.push(job);
-            model.next_id = 1;
-            model.active = Some((0, 1, CancellationToken::new()));
-            model
-        });
-
-        model.update(cx, |model, cx| {
-            model.finish(1, 0, DownloadStatus::Completed(path), cx);
-            assert!(model.jobs[0].file.is_none());
-        });
-        cx.run_until_parked();
-
-        model.update(cx, |model, _| {
-            let stat = model.jobs[0].file.as_ref().expect("a fresh probe landed");
-            assert_eq!(stat.size, Some(160_000));
-            assert_eq!(model.jobs[0].file_size(), Some(160_000));
-        });
-    }
-
-    #[gpui::test]
-    fn file_stat_probe_results_are_discarded_when_the_destination_changes(cx: &mut TestAppContext) {
-        let directory = tempdir().unwrap();
-        let first = directory.path().join("song.mp3");
-        std::fs::write(&first, vec![0; 160_000]).unwrap();
-
-        let account = error_account(cx);
-        let model = cx.new(|_| {
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            let mut job = quality_job();
-            job.status = DownloadStatus::Completed(first.clone());
-            model.jobs.push(job);
-            model.next_id = 1;
-            model
-        });
-
-        model.update(cx, |model, cx| {
-            model.refresh_file_stats(cx);
-            assert_eq!(model.file_stat_probes.len(), 1);
-            // The destination changes while the probe is still in flight.
-            model.jobs[0].status = DownloadStatus::Completed(directory.path().join("renamed.flac"));
-        });
-        cx.run_until_parked();
-
-        model.update(cx, |model, _| {
-            // The probe answered the old destination, so its result is
-            // dropped instead of being cached for the new one.
-            assert!(model.jobs[0].file.is_none());
-            assert!(model.file_stat_probes.is_empty());
-        });
-    }
-
-    #[gpui::test]
-    fn an_invalidated_stat_is_reprobed_for_the_new_destination(cx: &mut TestAppContext) {
-        let directory = tempdir().unwrap();
-        let first = directory.path().join("song.mp3");
-        let second = directory.path().join("song.flac");
-        std::fs::write(&first, vec![0; 160_000]).unwrap();
-        std::fs::write(&second, vec![0; 80_000]).unwrap();
-
-        let account = error_account(cx);
-        let model = cx.new(|_| {
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            let mut job = quality_job();
-            job.status = DownloadStatus::Completed(first.clone());
-            model.jobs.push(job);
-            model.next_id = 1;
-            model
-        });
-
-        // Start a probe for the first destination, then change the
-        // destination and invalidate before it can land.
-        model.update(cx, |model, cx| model.refresh_file_stats(cx));
-        model.update(cx, |model, cx| {
-            model.jobs[0].status = DownloadStatus::Completed(second.clone());
-            model.invalidate_file_stat(1, cx);
-        });
-        cx.run_until_parked();
-
-        model.update(cx, |model, _| {
-            // Both probes land, but only the one that still owns the
-            // job's expectation may install its result.
-            let stat = model.jobs[0]
-                .file
-                .as_ref()
-                .expect("the fresh probe should have landed");
-            assert_eq!(stat.size, Some(80_000));
-            assert!(model.file_stat_probes.is_empty());
-        });
-    }
-
-    #[gpui::test]
-    fn a_superseded_probe_cannot_install_its_result(cx: &mut TestAppContext) {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("song.mp3");
-        std::fs::write(&path, vec![0; 160_000]).unwrap();
-
-        let account = error_account(cx);
-        let model = cx.new(|_| {
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            let mut job = quality_job();
-            job.status = DownloadStatus::Completed(path.clone());
-            model.jobs.push(job);
-            model.next_id = 1;
-            model
-        });
-
-        model.update(cx, |model, cx| {
-            // A newer probe owns the job's expectation when an older
-            // probe for the same destination lands.
-            model.file_stat_probes.insert(1, (path.clone(), 2));
-            model.retire_file_stat_probe(1, path.clone(), 1, DownloadFileStat::probe(&path), cx);
-            assert!(model.jobs[0].file.is_none());
-            assert_eq!(model.file_stat_probes.get(&1), Some(&(path.clone(), 2)));
-
-            // The newer probe still installs normally.
-            model.retire_file_stat_probe(1, path.clone(), 2, DownloadFileStat::probe(&path), cx);
-            assert_eq!(
-                model.jobs[0].file.as_ref().map(|stat| stat.size),
-                Some(Some(160_000))
-            );
-            assert!(model.file_stat_probes.is_empty());
-        });
-    }
-
-    #[tokio::test]
-    async fn a_burst_producer_leaves_exactly_one_pending_progress_sample() {
-        let (sender, mut receiver) = tokio::sync::watch::channel((0_u64, None::<u64>));
-
-        // The receiver is blocked for the whole burst: it never polls
-        // while the publisher runs, which is the starvation window the
-        // latest-value channel has to survive without buffering.
-        let total = 10_000 * 64 * 1024;
-        for tick in 1..=10_000 {
-            sender.send((tick * 64 * 1024, Some(total))).unwrap();
-        }
-
-        // Every send succeeded without backpressure, and a single
-        // observation drains the entire burst: the receiver sees only the
-        // final sample and nothing remains pending afterwards, so the
-        // channel holds at most one entry no matter how many sends
-        // preceded it.
-        receiver.changed().await.unwrap();
-        assert_eq!(*receiver.borrow_and_update(), (total, Some(total)));
-        assert!(!receiver.has_changed().unwrap());
-
-        // Closing the producer wakes the receiver once more with an
-        // error, which is how the pump exits; the terminal state arrives
-        // on the transfer result path instead.
-        drop(sender);
-        assert!(receiver.changed().await.is_err());
-    }
-
-    #[gpui::test]
-    fn progress_pump_collapses_bursts_and_converges_to_the_final_tick(cx: &mut TestAppContext) {
-        let account = error_account(cx);
-        let model = cx.new(|_| {
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            let mut job = quality_job();
-            job.status = DownloadStatus::Downloading {
-                downloaded: 0,
-                total: None,
-            };
-            model.jobs.push(job);
-            model.next_id = 1;
-            model.active = Some((0, 1, CancellationToken::new()));
-            model
-        });
-
-        let (sender, receiver) = tokio::sync::watch::channel((0_u64, None::<u64>));
-        model.update(cx, |_, cx| spawn_progress_pump(cx, 1, 0, receiver));
-
-        let total = 2_000 * 64 * 1024;
-        for tick in 1..2_000 {
-            sender.send((tick * 64 * 1024, Some(total))).unwrap();
-        }
-        // The terminal progress tick must survive the burst.
-        sender.send((total, Some(total))).unwrap();
-        drop(sender);
-        cx.run_until_parked();
-
-        model.update(cx, |model, _| {
-            assert_eq!(
-                model.jobs[0].status,
-                DownloadStatus::Downloading {
-                    downloaded: total,
-                    total: Some(total),
-                },
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn progress_pump_applies_the_newest_tick_of_a_throttled_burst(cx: &mut TestAppContext) {
-        let account = error_account(cx);
-        let model = cx.new(|_| {
-            let mut model = DownloadModel::new(account, Arc::new(Runtime::new().unwrap()));
-            let mut job = quality_job();
-            job.status = DownloadStatus::Downloading {
-                downloaded: 0,
-                total: None,
-            };
-            model.jobs.push(job);
-            model.next_id = 1;
-            model.active = Some((0, 1, CancellationToken::new()));
-            model
-        });
-
-        let (sender, receiver) = tokio::sync::watch::channel((0_u64, None::<u64>));
-        model.update(cx, |_, cx| spawn_progress_pump(cx, 1, 0, receiver));
-
-        let total = 2_000 * 64 * 1024;
-        let newest = 1_999 * 64 * 1024;
-        for tick in 1..2_000 {
-            sender.send((tick * 64 * 1024, Some(total))).unwrap();
-        }
-        drop(sender);
-        cx.run_until_parked();
-
-        model.update(cx, |model, _| {
-            // The whole burst collapses into one update, so the newest
-            // byte count is applied instead of the first throttled one.
-            assert_eq!(
-                model.jobs[0].status,
-                DownloadStatus::Downloading {
-                    downloaded: newest,
-                    total: Some(total),
-                },
-            );
-        });
-    }
-}
+mod tests;

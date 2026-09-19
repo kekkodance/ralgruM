@@ -1,5 +1,5 @@
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const MAX_DOWNLOAD_STEM_UTF16: usize = 180;
 
@@ -65,6 +65,20 @@ pub(crate) struct BatchTargetInspection {
     pub(crate) duplicates: Vec<PathBuf>,
 }
 
+/// The key used for destinations within one batch. Windows paths compare
+/// without regard to case, so a later spelling must not overwrite a file
+/// just written by an earlier job.
+pub(crate) fn destination_identity(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
 pub(crate) fn inspect_batch_targets<I>(paths: I) -> BatchTargetInspection
 where
     I: IntoIterator<Item = PathBuf>,
@@ -75,7 +89,7 @@ where
         if path.exists() {
             inspection.existing.push(path.clone());
         }
-        if !seen.insert(path.clone()) {
+        if !seen.insert(destination_identity(&path)) {
             inspection.duplicates.push(path);
         }
     }
@@ -128,6 +142,16 @@ mod tests {
                 duplicates: vec![existing]
             }
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch_destinations_are_case_insensitive_on_windows() {
+        let inspection = inspect_batch_targets([
+            PathBuf::from("C:/Downloads/Artist - Song.mp3"),
+            PathBuf::from("C:/Downloads/artist - song.MP3"),
+        ]);
+        assert_eq!(inspection.duplicates.len(), 1);
     }
 
     #[test]

@@ -91,21 +91,47 @@ impl PlaybackModel {
         asio_driver: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let target = resolve_saved_output_target(
-            asio_mode,
-            output_device.as_deref(),
-            asio_driver.as_deref(),
-        );
-        if let Some(pending) = self.pending_output_target.as_ref() {
-            if pending == &target {
-                self.queued_output_request = None;
-            } else {
-                self.queued_output_request = Some((asio_mode, output_device, asio_driver));
-            }
+        if self.pending_output_target.is_some() {
+            self.queued_output_request = Some((asio_mode, output_device, asio_driver));
             return;
         }
         self.output_switch_epoch = self.output_switch_epoch.wrapping_add(1);
         let epoch = self.output_switch_epoch;
+        let saved_device = output_device.clone();
+        let saved_driver = asio_driver.clone();
+        let task = self.runtime.spawn_blocking(move || {
+            resolve_saved_output_target(asio_mode, saved_device.as_deref(), saved_driver.as_deref())
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(target) = task.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if this.output_switch_epoch == epoch {
+                    this.begin_audio_output_switch(
+                        target,
+                        asio_mode,
+                        output_device,
+                        asio_driver,
+                        epoch,
+                        cx,
+                    );
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn begin_audio_output_switch(
+        &mut self,
+        target: AudioOutputTarget,
+        asio_mode: bool,
+        output_device: Option<String>,
+        asio_driver: Option<String>,
+        epoch: u64,
+        cx: &mut Context<Self>,
+    ) {
         self.pending_output_target = None;
         let Ok(engine) = self.engine.as_ref() else {
             return;
