@@ -1780,3 +1780,42 @@ fn failed_login_then_logout_with_both_writes_failing_ends_at_the_durable_state(
         assert_eq!(state.session_error, Some(SessionError::Filesystem));
     });
 }
+
+#[test]
+fn rollback_does_not_restore_a_profile_without_its_durable_token() {
+    let temp = TempDir::new().unwrap();
+    let mut state = account_state(&temp);
+    state.token = Some("optimistic-token".into());
+    state.profile = Some(profile());
+    let revert = state.revert_state();
+
+    state.restore_signin_mirrors(&revert);
+
+    assert!(state.token.is_none());
+    assert!(state.profile.is_none());
+}
+
+#[test]
+fn rollback_restores_only_durable_deezer_cookies() {
+    let temp = TempDir::new().unwrap();
+    fs::write(
+        temp.path().join("auth_session.json"),
+        serde_json::to_vec(&json!({
+            "deezer": "saved-arl",
+            "deezerUserId": "42",
+            "deezerCookies": "sid=old"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut state = account_state(&temp);
+    state.deezer_cookie_jar = DeezerCookieJar::new(Some("sid=optimistic".into()));
+    let revert = state.revert_state();
+
+    state.restore_service_mirrors(&revert);
+
+    assert_eq!(
+        state.deezer_cookie_jar.snapshot().as_deref(),
+        Some("sid=old")
+    );
+}

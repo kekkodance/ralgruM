@@ -21,6 +21,30 @@ fn tracks() -> Vec<PlaybackTrack> {
         .collect()
 }
 
+#[test]
+fn output_source_reload_keeps_queue_navigation_and_lyrics_context() {
+    let mut state = PlaybackState::default();
+    state.replace(tracks(), 0);
+    state.history.push(2);
+    state.play_next.push(1);
+    state.open_lyrics_context(&state.queue[0].clone());
+    state.status = PlaybackStatus::Paused;
+    state.position = Duration::from_secs(4);
+    let history = state.history.clone();
+    let play_next = state.play_next.clone();
+    let lyrics = state.lyrics_context.clone();
+    let queue_epoch = state.queue_epoch();
+    let generation = state.generation;
+
+    assert_eq!(state.reload_current_source(), Some(generation + 1));
+    assert_eq!(state.status, PlaybackStatus::Loading);
+    assert_eq!(state.position, Duration::ZERO);
+    assert_eq!(state.history, history);
+    assert_eq!(state.play_next, play_next);
+    assert_eq!(state.lyrics_context, lyrics);
+    assert_eq!(state.queue_epoch(), queue_epoch);
+}
+
 fn fixed_shuffle_queue() -> Vec<PlaybackTrack> {
     let templates = tracks();
     (0..8)

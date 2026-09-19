@@ -224,7 +224,6 @@ pub(super) struct SessionRevertState {
     device_limit_exceeded: bool,
     deezer_profile: Option<ServiceIdentity>,
     soundcloud_profile: Option<ServiceIdentity>,
-    deezer_cookies: Option<String>,
 }
 
 impl SessionPersistence for Context<'_, AccountState> {
@@ -1354,13 +1353,12 @@ impl AccountState {
             device_limit_exceeded: self.device_limit_exceeded,
             deezer_profile: self.deezer_profile.clone(),
             soundcloud_profile: self.soundcloud_profile.clone(),
-            deezer_cookies: self.deezer_cookie_jar.snapshot(),
         }
     }
 
     fn restore_signin_mirrors(&mut self, revert: &SessionRevertState) {
         self.token = self.backed_token(revert.token.clone());
-        self.profile = revert.profile.clone();
+        self.profile = self.token.as_ref().and(revert.profile.clone());
         self.status = revert.status.clone();
         self.device_limit_exceeded = revert.device_limit_exceeded;
     }
@@ -1378,7 +1376,8 @@ impl AccountState {
             .soundcloud_profile
             .as_ref()
             .map(|profile| profile.username.clone());
-        self.deezer_cookie_jar = DeezerCookieJar::new(revert.deezer_cookies.clone());
+        self.deezer_cookie_jar =
+            DeezerCookieJar::new(self.durable_session.deezer_cookies().map(str::to_owned));
     }
 
     /// The captured Murglar token, kept only when the durable session still

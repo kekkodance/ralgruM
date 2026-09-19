@@ -422,6 +422,16 @@ impl PlaybackState {
         self.select_with_history(index, true)
     }
 
+    /// Re-resolve the current source after an output change without treating
+    /// it as a new queue selection. Navigation history, play-next order, and
+    /// the lyrics context belong to the track and must survive the reload.
+    pub(crate) fn reload_current_source(&mut self) -> Option<u64> {
+        self.current()?;
+        self.generation = self.generation.wrapping_add(1);
+        self.begin_loading();
+        Some(self.generation)
+    }
+
     fn select_with_history(&mut self, index: usize, record_current: bool) -> Option<u64> {
         if index >= self.queue.len() || self.explicit_blocked(&self.queue[index]) {
             return None;

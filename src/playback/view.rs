@@ -18,7 +18,9 @@ use crate::{
 
 mod configuration;
 mod helpers;
+mod output_switch;
 use helpers::*;
+use output_switch::{OutputResume, restore_output_state};
 
 use super::state::{ExactQueueAppend, ExactQueueAppendTicket};
 use super::{
@@ -26,9 +28,7 @@ use super::{
     PlaybackStatus, PlaybackTrack, PreviousAction, QueueExtensionTicket, ResolvedTrackInfo,
     RightSidebar, asio_drivers,
     deezer_extension::{self, ExtensionObserverKey},
-    engine::{
-        AudioEngine, AudioOutputTarget, OutputSwitch, RodioEngine, SeekCompletion, SeekOutcome,
-    },
+    engine::{AudioEngine, AudioOutputTarget, RodioEngine, SeekCompletion, SeekOutcome},
     fade::{
         USER_FADE_FRAME, USER_FADE_SETTLE_TIMEOUT, UserFadeSupervisor, UserToggleFadeDecision,
         user_toggle_fade_decision,
@@ -75,6 +75,10 @@ pub(crate) struct PlaybackModel {
     current_audio_info: Option<(PlaybackProvider, String, ResolvedTrackInfo)>,
     loading_from_cache: bool,
     download_progress: Arc<Mutex<DownloadProgress>>,
+    output_switch_epoch: u64,
+    pending_output_target: Option<AudioOutputTarget>,
+    queued_output_request: Option<(bool, Option<String>, Option<String>)>,
+    pending_output_resume: Option<OutputResume>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -452,6 +456,10 @@ impl PlaybackModel {
             current_audio_info: None,
             loading_from_cache: false,
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
+            output_switch_epoch: 0,
+            pending_output_target: None,
+            queued_output_request: None,
+            pending_output_resume: None,
         };
         cx.subscribe(&seek_slider, |this, _, event: &SliderEvent, cx| {
             if let SliderEvent::Change(value) = event {
@@ -690,6 +698,12 @@ impl PlaybackModel {
         error: &str,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .pending_output_resume
+            .is_some_and(|resume| resume.generation == generation)
+        {
+            self.pending_output_resume = None;
+        }
         self.state.fail(generation, error.to_owned());
         self.sync_discord();
         crate::toast::push_global(
@@ -709,7 +723,13 @@ impl PlaybackModel {
     }
 
     fn start(&mut self, generation: u64, cx: &mut Context<Self>) {
-        self.finish_deezer_listen(cx);
+        let restoring_output = self
+            .pending_output_resume
+            .is_some_and(|resume| resume.generation == generation);
+        if !restoring_output {
+            self.pending_output_resume = None;
+            self.finish_deezer_listen(cx);
+        }
         self.cancel_user_fade();
         self.cancel_seek_slider_interaction();
         self.cancellation.cancel();
@@ -834,7 +854,11 @@ impl PlaybackModel {
                         this.cancel_user_fade();
                         match this.engine.as_mut() {
                             Ok(engine) => {
-                                let duration = engine.load(prepared, this.state.volume);
+                                let restoring_output = this
+                                    .pending_output_resume
+                                    .is_some_and(|resume| resume.generation == generation);
+                                let duration =
+                                    engine.load(prepared, this.state.volume, !restoring_output);
                                 worker.detach();
                                 this.consecutive_failures = 0;
                                 if let Ok(mut progress) = this.download_progress.lock() {
@@ -845,6 +869,7 @@ impl PlaybackModel {
                                     duration,
                                     initial_progress,
                                 );
+                                this.restore_output_position(generation, cx);
                                 this.current_audio_info =
                                     Some((track_provider, track_id.clone(), info));
                                 this.resolved_quality = quality_label(
@@ -860,12 +885,14 @@ impl PlaybackModel {
                                     prefetch_soundcloud.clone(),
                                     prefetch_murglar.clone(),
                                 );
-                                this.begin_listen_reporting(
-                                    &history_resolver,
-                                    &history_track,
-                                    history_arl,
-                                    cx,
-                                );
+                                if !restoring_output {
+                                    this.begin_listen_reporting(
+                                        &history_resolver,
+                                        &history_track,
+                                        history_arl,
+                                        cx,
+                                    );
+                                }
                                 None
                             }
                             Err(error) => {
@@ -1402,6 +1429,7 @@ impl PlaybackModel {
     }
 
     fn cancel_pending_load(&mut self, cx: &mut Context<Self>) {
+        self.pending_output_resume = None;
         self.cancellation.cancel();
         self.cache.cancel();
         self.cancel_user_fade();
@@ -1426,6 +1454,7 @@ impl PlaybackModel {
     /// being fetched, e.g. a smart mix page load. Current audio stops so
     /// the blank bar is honest about the state.
     pub(crate) fn begin_pending_load(&mut self, cx: &mut Context<Self>) {
+        self.pending_output_resume = None;
         self.cancellation.cancel();
         self.cache.cancel();
         self.cancel_user_fade();
@@ -1598,6 +1627,7 @@ impl PlaybackModel {
     }
 
     fn request_seek(&mut self, position: Duration, cx: &mut Context<Self>) {
+        self.pending_output_resume = None;
         let position = position.min(self.state.duration);
         let (outcome, completion) = match self.engine.as_mut() {
             Ok(engine) => {
@@ -1630,59 +1660,6 @@ impl PlaybackModel {
             ),
         }
         self.arm_seek_completion(completion, cx);
-    }
-
-    /// Moves the audio stream onto the saved output selection. The engine
-    /// no ops when it already plays through that target, so imports and
-    /// repeat changes never rebuild the stream.
-    pub(crate) fn set_audio_output(
-        &mut self,
-        asio_mode: bool,
-        output_device: Option<String>,
-        asio_driver: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let target = resolve_saved_output_target(
-            asio_mode,
-            output_device.as_deref(),
-            asio_driver.as_deref(),
-        );
-        if !self
-            .engine
-            .as_ref()
-            .is_ok_and(|engine| *engine.output_target() != target)
-        {
-            return;
-        }
-        self.cancel_user_fade_and_sync_transport();
-        let switch = match self.engine.as_mut() {
-            Ok(engine) => engine.set_output(target),
-            Err(_) => return,
-        };
-        match switch {
-            // The armed standby died with the old sink, so the poll loop
-            // arms a fresh one on the new stream.
-            Ok(OutputSwitch::SourceRestored) => self.standby = StandbyPhase::Idle,
-            Ok(OutputSwitch::SourceLost) => {
-                self.standby = StandbyPhase::Idle;
-                // The in-flight buffer could not survive the stream swap,
-                // so the current track reloads on the new device through
-                // the normal load path.
-                if let Some(index) = self.state.current_index
-                    && let Some(generation) = self.state.select(index)
-                {
-                    self.start(generation, cx);
-                    return;
-                }
-            }
-            Err(error) => crate::toast::push_global(
-                cx,
-                crate::toast::ToastKind::Error,
-                "Could not switch output",
-                Some(error.into()),
-            ),
-        }
-        cx.notify();
     }
 
     pub(crate) fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
@@ -1882,6 +1859,7 @@ impl PlaybackModel {
     }
 
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
+        self.pending_output_resume = None;
         self.finish_deezer_listen(cx);
         self.cancel_user_fade();
         self.cancel_seek_slider_interaction();
@@ -1900,6 +1878,7 @@ impl PlaybackModel {
     }
 
     pub(crate) fn account_scope_changed(&mut self, cx: &mut Context<Self>) {
+        self.pending_output_resume = None;
         self.deezer_listen = None;
         self.cancel_user_fade();
         self.cancel_seek_slider_interaction();
@@ -1959,6 +1938,11 @@ impl PlaybackModel {
                     )
                 };
                 self.arm_seek_completion(completion, cx);
+                let restore_landed = matches!(
+                    deferred_seek,
+                    Ok(SeekOutcome::Applied | SeekOutcome::AppliedStandbyDropped)
+                );
+                let restore_failed = deferred_seek.is_err();
                 let standby_dropped = match deferred_seek {
                     Ok(SeekOutcome::AppliedStandbyDropped) => true,
                     Ok(_) => false,
@@ -1973,6 +1957,26 @@ impl PlaybackModel {
                     }
                 };
                 self.state.position = position;
+                if (restore_landed || restore_failed)
+                    && let Some(resume) = self
+                        .pending_output_resume
+                        .filter(|resume| resume.generation == self.state.generation)
+                {
+                    self.pending_output_resume = None;
+                    restore_output_state(
+                        &mut self.state,
+                        OutputResume {
+                            position: if restore_failed {
+                                position
+                            } else {
+                                resume.position
+                            },
+                            ..resume
+                        },
+                    );
+                    self.sync_transport_after_fade_cancel();
+                    self.sync_discord();
+                }
                 if standby_dropped {
                     self.standby = StandbyPhase::Idle;
                 }

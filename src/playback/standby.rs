@@ -25,6 +25,7 @@ pub(crate) struct PreparedSource {
     file: tempfile::NamedTempFile,
     duration: Option<Duration>,
     progressive_seek: Option<ProgressiveSeek>,
+    output_reopen: Option<(PathBuf, AudioFormat)>,
 }
 
 #[derive(Clone)]
@@ -49,12 +50,22 @@ impl PreparedSource {
             file,
             duration,
             progressive_seek: None,
+            output_reopen: None,
         }
     }
 
     pub(crate) fn with_progressive_seek(mut self, progressive_seek: ProgressiveSeek) -> Self {
         self.progressive_seek = Some(progressive_seek);
         self
+    }
+
+    pub(crate) fn with_output_reopen(mut self, path: PathBuf, format: AudioFormat) -> Self {
+        self.output_reopen = Some((path, format));
+        self
+    }
+
+    pub(crate) fn output_reopen(&self) -> Option<(PathBuf, AudioFormat)> {
+        self.output_reopen.clone()
     }
 
     pub(crate) fn duration(&self) -> Option<Duration> {

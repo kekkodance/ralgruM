@@ -11,6 +11,7 @@ use super::{
 use crate::playback::fade::{USER_FADE_DURATION, USER_FADE_SETTLE_TIMEOUT};
 use crate::playback::progressive::TimelineSuffixState;
 use crate::playback::{PlaybackProvider, PlaybackState, PlaybackStatus, PlaybackTrack};
+
 use gpui_component::slider::{SliderEvent, SliderValue};
 
 #[test]

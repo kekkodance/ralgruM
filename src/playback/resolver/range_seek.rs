@@ -1308,7 +1308,7 @@ mod tests {
         };
         let prepared = PreparedSource::new(source, Some(duration), file)
             .with_progressive_seek(progressive_seek.unwrap());
-        engine.load(prepared, 1.0);
+        engine.load(prepared, 1.0, true);
 
         // The buffer only holds the startup prefix, so the seek must go
         // through the session and apply while the download is still short.
@@ -1404,7 +1404,7 @@ mod tests {
         };
         let prepared = PreparedSource::new(source, Some(duration), file)
             .with_progressive_seek(progressive_seek.unwrap());
-        engine.load(prepared, 1.0);
+        engine.load(prepared, 1.0, true);
 
         let started = std::time::Instant::now();
         let outcome = engine.seek(Duration::from_millis(3_500)).unwrap();
@@ -1498,7 +1498,7 @@ mod tests {
             eprintln!("no audio device; skipping seek spam test");
             return;
         };
-        engine.load(prepared, 1.0);
+        engine.load(prepared, 1.0, true);
 
         // Phase 1: fire seeks back to back with no polling between them,
         // the way a dragged seekbar spams random positions. Each new seek
@@ -1686,7 +1686,7 @@ mod tests {
             eprintln!("no audio device; skipping near end seek test");
             return;
         };
-        engine.load(prepared, 1.0);
+        engine.load(prepared, 1.0, true);
 
         // The front download keeps streaming behind the seek, but its next
         // chunk must park once the seek holds the gate.

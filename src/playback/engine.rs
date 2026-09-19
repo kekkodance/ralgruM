@@ -1,14 +1,14 @@
 use std::{
     fs::File,
     io::{BufReader, Seek, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use futures::channel::oneshot;
@@ -24,7 +24,6 @@ use tokio_util::sync::CancellationToken;
 use crate::diagnostics;
 
 use super::asio_drivers::find_asio_driver;
-use super::fade::{USER_FADE_FRAME, USER_FADE_SETTLE_TIMEOUT};
 use super::output_devices::find_output_device;
 use super::progressive::{
     ProgressiveCompletion, ProgressiveReader, TimelineSeekSession, TimelineSuffixState,
@@ -60,11 +59,14 @@ impl SeekCompletion {
 }
 
 pub(crate) trait AudioEngine {
-    fn load(&mut self, prepared: PreparedSource, volume: f32) -> Option<Duration>;
+    fn load(&mut self, prepared: PreparedSource, volume: f32, playing: bool) -> Option<Duration>;
     fn play(&self);
     fn pause(&self);
     fn stop(&mut self);
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, String>;
+    fn seek_for_output_restore(&mut self, position: Duration) -> Result<SeekOutcome, String> {
+        self.seek(position)
+    }
     fn take_seek_completion(&mut self) -> Option<SeekCompletion> {
         None
     }
@@ -85,7 +87,7 @@ pub(crate) trait AudioEngine {
     fn set_volume(&self, volume: f32);
     fn position(&self) -> Duration;
     fn ended(&self) -> bool;
-    fn set_output(&mut self, target: AudioOutputTarget) -> Result<OutputSwitch, String>;
+    fn set_output(&mut self, prepared: PreparedOutputSwitch) -> OutputSwitch;
     fn output_target(&self) -> &AudioOutputTarget;
     fn append_standby(&mut self, prepared: PreparedSource);
     fn skip_to_standby(&mut self);
@@ -122,12 +124,34 @@ pub(crate) enum OutputSwitch {
     SourceLost,
 }
 
+#[derive(Clone)]
+pub(crate) struct OutputReloadSpec {
+    path: PathBuf,
+    format: AudioFormat,
+    position: Duration,
+}
+
+pub(crate) struct PreparedOutputSwitch {
+    stream: OutputStream,
+    source: Option<DecodedSource>,
+    position: Duration,
+    target: AudioOutputTarget,
+}
+
+impl PreparedOutputSwitch {
+    pub(crate) fn position(&self) -> Duration {
+        self.position
+    }
+}
+
 pub(crate) struct RodioEngine {
     stream: OutputStream,
     sink: Arc<Sink>,
     retained_files: Vec<tempfile::NamedTempFile>,
     progressive_seek: Option<ProgressiveSeek>,
     standby_progressive_seek: Option<ProgressiveSeek>,
+    front_reopen: Option<(PathBuf, AudioFormat)>,
+    standby_reopen: Option<(PathBuf, AudioFormat)>,
     position_base: Duration,
     pending_progressive_reload: Option<PendingProgressiveReload>,
     pending_seek_completion: Option<SeekCompletion>,
@@ -151,6 +175,8 @@ impl RodioEngine {
             retained_files: Vec::new(),
             progressive_seek: None,
             standby_progressive_seek: None,
+            front_reopen: None,
+            standby_reopen: None,
             position_base: Duration::ZERO,
             pending_progressive_reload: None,
             pending_seek_completion: None,
@@ -213,36 +239,47 @@ impl RodioEngine {
         Ok(stream)
     }
 
-    /// Waits until the shared transport ramp settles on `target`. Bounded
-    /// by the user fade settle timeout so a stalled output device cannot
-    /// wedge the caller; on timeout the ramp is forced to the target.
-    fn wait_for_transport_gain(&self, target: f32) {
-        let started = Instant::now();
-        while !self.transport_gain.is_at_target(target) {
-            if started.elapsed() >= USER_FADE_SETTLE_TIMEOUT {
-                self.transport_gain.reset(target);
-                return;
-            }
-            thread::sleep(USER_FADE_FRAME);
-        }
+    /// A complete file can be decoded for a device switch without changing
+    /// the ordinary seek path used by a standby track.
+    pub(crate) fn output_reload_spec(&self) -> Option<OutputReloadSpec> {
+        let (path, format) = match self.progressive_seek.as_ref() {
+            Some(seek) if seek.completion.is_complete() => (seek.path.clone(), seek.format),
+            Some(_) => return None,
+            None => self.front_reopen.clone()?,
+        };
+        Some(OutputReloadSpec {
+            path,
+            format,
+            position: self.reported_position(),
+        })
     }
 
-    /// Decodes a fresh front source at `position` from the current buffer.
-    /// Only completed buffers can be reloaded; an in-flight download has no
-    /// complete file yet to position a decoder in.
-    fn reload_front_source(&self, position: Duration) -> Option<DecodedSource> {
-        let progressive_seek = self.progressive_seek.as_ref()?;
-        if !progressive_seek.completion.is_complete() {
-            return None;
-        }
-        if progressive_seek.format == AudioFormat::OggOpus {
+    fn reload_front_source(spec: &OutputReloadSpec) -> Option<DecodedSource> {
+        if spec.format == AudioFormat::OggOpus {
             // rodio cannot decode Ogg Opus, so the hand decoder rebuilds
             // the buffer and discards samples up to the position.
-            let mut samples = Self::opus(&progressive_seek.path).ok()?;
-            discard_decoder_samples(&mut samples, position, None).ok()?;
+            let mut samples = Self::opus(&spec.path).ok()?;
+            discard_decoder_samples(&mut samples, spec.position, None).ok()?;
             return Some(Box::new(samples));
         }
-        Self::decoder_at(&progressive_seek.path, progressive_seek.format, position).ok()
+        Self::decoder_at(&spec.path, spec.format, spec.position).ok()
+    }
+
+    /// Opening the driver and positioning a decoder can block for an
+    /// unbounded time, so callers prepare both on a background worker.
+    pub(crate) fn prepare_output_switch(
+        target: AudioOutputTarget,
+        reload: Option<OutputReloadSpec>,
+    ) -> Result<PreparedOutputSwitch, String> {
+        let stream = Self::open_output_stream(&target)?;
+        let position = reload.as_ref().map_or(Duration::ZERO, |spec| spec.position);
+        let source = reload.as_ref().and_then(Self::reload_front_source);
+        Ok(PreparedOutputSwitch {
+            stream,
+            source,
+            position,
+            target,
+        })
     }
 
     fn wrap_source(&self, source: DecodedSource) -> DecodedSource {
@@ -343,10 +380,14 @@ impl RodioEngine {
     /// sink later without further work. The standby path runs this on a
     /// blocking worker while the current track keeps playing.
     pub(crate) fn decode(audio: ResolvedAudio) -> Result<PreparedSource, String> {
+        let path = audio.path.clone();
+        let format = audio.format;
         if audio.format == AudioFormat::OggOpus {
             let decoded = Self::opus(&audio.path)?;
             let duration = decoded.total_duration().or(audio.duration);
-            return Ok(PreparedSource::new(decoded, duration, audio.file));
+            return Ok(
+                PreparedSource::new(decoded, duration, audio.file).with_output_reopen(path, format)
+            );
         }
         let decoded = Self::decoder(&audio.path, audio.format)?;
         let duration = decoded.total_duration().or(audio.duration);
@@ -357,19 +398,16 @@ impl RodioEngine {
         // completed-buffer reload keeps seeks on an auto-advanced track on
         // the same discard path a finished progressive download uses.
         if audio.format == AudioFormat::M4a {
-            let path = audio.path.clone();
-            return Ok(
-                PreparedSource::new(decoded, duration, audio.file).with_progressive_seek(
-                    ProgressiveSeek {
-                        path,
-                        format: audio.format,
-                        completion: ProgressiveCompletion::for_completed_buffer(audio.format),
-                        timeline_seek_session: None,
-                    },
-                ),
-            );
+            return Ok(PreparedSource::new(decoded, duration, audio.file)
+                .with_output_reopen(path.clone(), format)
+                .with_progressive_seek(ProgressiveSeek {
+                    path,
+                    format: audio.format,
+                    completion: ProgressiveCompletion::for_completed_buffer(audio.format),
+                    timeline_seek_session: None,
+                }));
         }
-        Ok(PreparedSource::new(decoded, duration, audio.file))
+        Ok(PreparedSource::new(decoded, duration, audio.file).with_output_reopen(path, format))
     }
 
     pub(crate) fn decode_progressive(
@@ -435,6 +473,7 @@ impl RodioEngine {
         let standby_dropped = self.sink.len() > 1;
         if standby_dropped {
             discard_progressive_seek(&mut self.standby_progressive_seek);
+            self.standby_reopen = None;
         }
         let should_pause = should_pause_after_seek(resume_after, self.sink.is_paused());
         let volume = self.sink.volume();
@@ -460,7 +499,7 @@ impl RodioEngine {
     /// buffer seeks and M4A reloads reopen these paths to build a fresh
     /// decoder, so dropping the owning temp file would make every later
     /// seek fail with an unopenable playback buffer.
-    fn live_seek_paths(&self) -> [Option<&Path>; 2] {
+    fn live_seek_paths(&self) -> [Option<&Path>; 4] {
         [
             self.progressive_seek
                 .as_ref()
@@ -468,6 +507,8 @@ impl RodioEngine {
             self.standby_progressive_seek
                 .as_ref()
                 .map(|seek| seek.path.as_path()),
+            self.front_reopen.as_ref().map(|(path, _)| path.as_path()),
+            self.standby_reopen.as_ref().map(|(path, _)| path.as_path()),
         ]
     }
 
@@ -510,7 +551,7 @@ impl RodioEngine {
     }
 
     fn schedule_progressive_reload(&mut self, position: Duration) -> Result<(), String> {
-        let (path, format, timeline_seek_session) = {
+        let (path, format, timeline_seek_session, complete) = {
             let progressive_seek = self
                 .progressive_seek
                 .as_ref()
@@ -519,10 +560,13 @@ impl RodioEngine {
                 progressive_seek.path.clone(),
                 progressive_seek.format,
                 progressive_seek.timeline_seek_session.clone(),
+                progressive_seek.completion.is_complete(),
             )
         };
         self.cancel_pending_progressive_reload();
-        if let Some(timeline_seek_session) = timeline_seek_session {
+        if let Some(timeline_seek_session) = timeline_seek_session
+            && !complete
+        {
             return self.schedule_timeline_reload(timeline_seek_session, position);
         }
         let cancellation = Arc::new(AtomicBool::new(false));
@@ -897,7 +941,7 @@ impl Source for ProgressiveOpus {
 }
 
 impl AudioEngine for RodioEngine {
-    fn load(&mut self, prepared: PreparedSource, volume: f32) -> Option<Duration> {
+    fn load(&mut self, prepared: PreparedSource, volume: f32, playing: bool) -> Option<Duration> {
         self.set_playback_intent(false);
         self.cancel_pending_progressive_reload();
         self.active_suffix = None;
@@ -909,10 +953,16 @@ impl AudioEngine for RodioEngine {
         self.transport_gain.reset(1.0);
         self.position_base = Duration::ZERO;
         let duration = prepared.duration();
+        self.front_reopen = prepared.output_reopen();
+        self.standby_reopen = None;
         let (source, file, progressive_seek) = prepared.into_parts();
         self.sink.append(self.wrap_source(source));
-        self.set_playback_intent(true);
-        self.sink.play();
+        self.set_playback_intent(playing);
+        if playing {
+            self.sink.play();
+        } else {
+            self.sink.pause();
+        }
         self.progressive_seek = progressive_seek;
         self.retain_playback_file(file);
         duration
@@ -932,6 +982,8 @@ impl AudioEngine for RodioEngine {
         self.active_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
         discard_progressive_seek(&mut self.standby_progressive_seek);
+        self.front_reopen = None;
+        self.standby_reopen = None;
         self.sink.stop();
     }
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, String> {
@@ -974,6 +1026,18 @@ impl AudioEngine for RodioEngine {
                 self.position_base = Duration::ZERO;
                 SeekOutcome::Applied
             })
+    }
+    fn seek_for_output_restore(&mut self, position: Duration) -> Result<SeekOutcome, String> {
+        if self
+            .progressive_seek
+            .as_ref()
+            .is_some_and(|seek| seek.completion.is_complete())
+        {
+            self.schedule_progressive_reload(position)?;
+            Ok(SeekOutcome::Deferred)
+        } else {
+            self.seek(position)
+        }
     }
     fn take_seek_completion(&mut self) -> Option<SeekCompletion> {
         self.pending_seek_completion.take()
@@ -1047,55 +1111,33 @@ impl AudioEngine for RodioEngine {
     fn transport_gain_settled(&self, target: f32) -> bool {
         self.transport_gain.is_at_target(target)
     }
-    /// Moves playback onto another output device. The replacement stream is
-    /// opened first, so a failed open leaves the current device and every
-    /// queued source exactly as they were. The live source is faded out
-    /// through the transport ramp, the old stream and sink are torn down,
-    /// and the front buffer is re-decoded at the captured position on the
-    /// new stream. A buffer that cannot be re-created yet, such as one
-    /// whose download is still in flight, is reported as lost so the model
-    /// can reload the track.
-    fn set_output(&mut self, target: AudioOutputTarget) -> Result<OutputSwitch, String> {
-        if target == self.output_target {
-            return Ok(OutputSwitch::SourceRestored);
-        }
-        let stream = Self::open_output_stream(&target)?;
-
-        let was_paused = self.sink.is_paused();
-        let was_playing = self.playback_intent.load(Ordering::Acquire);
+    /// Commits a stream and decoder prepared off the UI thread. The caller
+    /// holds the old sink paused while preparing, so its captured position
+    /// remains exact and this handoff performs no blocking driver or decode
+    /// work on the UI thread.
+    fn set_output(&mut self, prepared: PreparedOutputSwitch) -> OutputSwitch {
+        let PreparedOutputSwitch {
+            stream,
+            source,
+            position,
+            target,
+        } = prepared;
         let had_source = !self.sink.empty();
-        let position = self.reported_position();
-
-        // A paused sink never pulls samples, so its ramp cannot settle and
-        // nothing is audible anyway; only a playing source needs the fade.
-        if had_source && !was_paused {
-            self.transport_gain.set_target(0.0);
-            self.wait_for_transport_gain(0.0);
-        }
-        // Decode the replacement front source before tearing anything down,
-        // while the backing buffer is still known to be intact.
-        let replacement = if had_source {
-            self.reload_front_source(position)
-        } else {
-            None
-        };
-        let restored = replacement.is_some();
+        let restored = had_source && source.is_some();
 
         // The pending reload workers and the armed standby die with the old
         // sink; their buffers can no longer reach a mixer.
         self.cancel_pending_progressive_reload();
         discard_progressive_seek(&mut self.standby_progressive_seek);
+        self.standby_reopen = None;
         self.sink.stop();
         self.stream = stream;
 
-        if let Some(source) = replacement {
+        if let Some(source) = source.filter(|_| had_source) {
             // The positioned install recreates the sink on the new stream
             // through the same path a completed-buffer seek uses, rebasing
             // the position probe onto the reloaded source.
-            self.install_progressive_source(source, position, None, Some(was_playing), None);
-            if was_playing {
-                self.transport_gain.set_target(1.0);
-            }
+            self.install_progressive_source(source, position, None, Some(false), None);
         } else {
             let sink = Arc::new(Sink::connect_new(self.stream.mixer()));
             sink.set_volume(self.sink.volume());
@@ -1104,33 +1146,16 @@ impl AudioEngine for RodioEngine {
                 // at the captured timeline spot and hold the sink paused so
                 // an empty sink is not mistaken for a finished track while
                 // the model reloads it on the new device.
-                // The outcome here is SourceLost, so record why the front
-                // source could not be rebuilt. A restart from 0 after a
-                // switch is then diagnosable from the log.
-                {
-                    let (has_seek, download_in_flight, format_label) =
-                        match self.progressive_seek.as_ref() {
-                            None => (false, false, None),
-                            Some(seek) => (
-                                true,
-                                !seek.completion.is_complete(),
-                                Some(seek.format.label()),
-                            ),
-                        };
-                    let detail = format!(
-                        "audio output switch lost front source at {}ms, playing={}, paused={}, has_seek={}, download_in_flight={}, format={}",
-                        position.as_millis(),
-                        was_playing,
-                        was_paused,
-                        has_seek,
-                        download_in_flight,
-                        format_label.unwrap_or("none"),
-                    );
-                    diagnostics::event("INFO", detail);
-                }
+                diagnostics::event(
+                    "INFO",
+                    format!(
+                        "audio output switch is reloading an in-flight source at {}ms",
+                        position.as_millis()
+                    ),
+                );
                 self.position_base = position;
                 sink.pause();
-            } else if was_paused {
+            } else {
                 sink.pause();
             }
             self.sink = sink;
@@ -1143,11 +1168,11 @@ impl AudioEngine for RodioEngine {
         };
         diagnostics::event("INFO", format!("audio output switched to {label}"));
         self.output_target = target;
-        Ok(if had_source && !restored {
+        if had_source && !restored {
             OutputSwitch::SourceLost
         } else {
             OutputSwitch::SourceRestored
-        })
+        }
     }
     fn output_target(&self) -> &AudioOutputTarget {
         &self.output_target
@@ -1163,6 +1188,7 @@ impl AudioEngine for RodioEngine {
     }
     fn append_standby(&mut self, prepared: PreparedSource) {
         discard_progressive_seek(&mut self.standby_progressive_seek);
+        self.standby_reopen = prepared.output_reopen();
         let (source, file, progressive_seek) = prepared.into_parts();
         self.sink.append(self.wrap_source(source));
         self.standby_progressive_seek = progressive_seek;
@@ -1179,6 +1205,7 @@ impl AudioEngine for RodioEngine {
         self.active_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
         self.progressive_seek = self.standby_progressive_seek.take();
+        self.front_reopen = self.standby_reopen.take();
         self.position_base = Duration::ZERO;
     }
     fn sink_probe(&self) -> SinkProbe {
@@ -1195,6 +1222,13 @@ mod tests {
     use std::{path::PathBuf, process::Command};
 
     use super::*;
+
+    #[test]
+    fn prepared_output_can_cross_the_worker_boundary() {
+        fn assert_send<T: Send>() {}
+        assert_send::<OutputReloadSpec>();
+        assert_send::<PreparedOutputSwitch>();
+    }
 
     const MP3: &str = "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYyLjEyLjEwMQAAAAAAAAAAAAAA/+M4wAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAAbAAqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV////////////////////////////////////////////AAAAAExhdmM2Mi4yOAAAAAAAAAAAAAAAACQC8AAAAAAAAAGwJxQu6wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/+MYxAAMSJKUeU8AAAQJKAL3ve973vSlKUpSlL3u/f337xKp8t4t4m4uZc1WGxACAYrB9//+U9/R/gQ5z/QqyypquH9pKtLZ/+MYxAkOONqsAZgwAPpZTWjVJzuG5TKo07UpBdEwrDLwHpekaeFCSmCJCSNVVtBO9BgrWo4ShIGso6CsS5IkTWxjn/qSKSYp/+MYxAsMKMY0AckIAQy0qKSWMkQqFTOSlLVQqGXoSVlZE0qhlFCyaFDAp5sLgV+Jv/+KTEFNRTMuMTAwqqqqqqqqqqqqqqqq";
     const FLAC: &str = "ZkxhQwAAACICQAJAAADsAADsAfQA8AAAAZDc4wSniVrUdsvJq5fhZrQqhAAALg0AAABMYXZmNjIuMTIuMTAxAQAAABUAAABlbmNvZGVyPUxhdmY2Mi4xMi4xMDH/+HQIAAGPJE4BIgU/CkgNtg/BD8QODAqP5jFGjwprR9+4EI+MQUE+rwigEg/MnK73aeqOqCKCCKMEqUAoBkDhZBKmRJISwRonpphaIWIoDYlEKQwkgSUIOI5cJhKCi8jTWkoQBhCUkRCiFCYGEMx7TrCYiQTERk07QsJhYULLIYhk0siRQhWXzRqwRhQlC5GJGuKgsEYJlya+ExEigomE7kZSRChFCRieQ1aKEkJK4hiE4rBYoLJl6dkwTCBAMMCKVlITAMIZg0jQoGBMAp0SKWgQokKNAiRoMSBBhQ5E+xl9K5IOo9ApgGAqOw==";
@@ -1744,7 +1778,7 @@ mod tests {
             eprintln!("no audio device; skipping standby M4A engine seek test");
             return;
         };
-        engine.load(prepared, 1.0);
+        engine.load(prepared, 1.0, true);
 
         let outcome = engine.seek(Duration::from_millis(800)).unwrap();
         assert_eq!(
@@ -1784,6 +1818,16 @@ mod tests {
             declared_bitrate: None,
         };
         let prepared = RodioEngine::decode(audio).unwrap();
+        let (path, format) = prepared
+            .output_reopen()
+            .expect("complete WAV can be reopened");
+        assert_eq!(format, AudioFormat::Wav);
+        let reload = super::OutputReloadSpec {
+            path,
+            format,
+            position: Duration::ZERO,
+        };
+        assert!(RodioEngine::reload_front_source(&reload).is_some());
         let (_source, _file, progressive_seek) = prepared.into_parts();
         assert!(
             progressive_seek.is_none(),
