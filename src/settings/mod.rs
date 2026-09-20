@@ -52,6 +52,7 @@ pub(crate) use toggle::{
 };
 
 const SETTINGS_CATEGORY_BREADCRUMB_OFFSET_PX: f32 = 1.;
+const SETTINGS_CATEGORY_BREADCRUMB_TEXT_COLOR: u32 = FOREGROUND;
 const SETTINGS_CONTENT_BOTTOM_PADDING_PX: f32 = 16.;
 const CACHE_OVERVIEW_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MURGLAR_USERNAME_PLACEHOLDER: &str = "Who are you?";
@@ -1022,7 +1023,7 @@ impl Render for SettingsView {
                                 div()
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(SETTINGS_CATEGORY_BREADCRUMB_TEXT_COLOR))
                                     .child(self.category.label()),
                             ),
                     ),
@@ -1035,9 +1036,9 @@ impl Render for SettingsView {
 mod tests {
     use super::{
         CACHE_OVERVIEW_POLL_INTERVAL, CacheMeterMotion, Category, MURGLAR_PASSWORD_PLACEHOLDER,
-        MURGLAR_USERNAME_PLACEHOLDER, SETTINGS_CATEGORY_BREADCRUMB_OFFSET_PX, cache_error,
-        cache_overview_refresh_needed, cache_revision_changed, prepare_settings_for_persistence,
-        spawn_cache_overview,
+        MURGLAR_USERNAME_PLACEHOLDER, SETTINGS_CATEGORY_BREADCRUMB_OFFSET_PX,
+        SETTINGS_CATEGORY_BREADCRUMB_TEXT_COLOR, cache_error, cache_overview_refresh_needed,
+        cache_revision_changed, prepare_settings_for_persistence, spawn_cache_overview,
     };
     use crate::navigation_state::{AppSettings, MainDestination, StartPage};
     use crate::playback::AudioCache;
@@ -1072,6 +1073,10 @@ mod tests {
     #[test]
     fn category_breadcrumb_offset_preserves_the_header_and_moves_only_the_category() {
         assert_eq!(SETTINGS_CATEGORY_BREADCRUMB_OFFSET_PX, 1.);
+        assert_eq!(
+            SETTINGS_CATEGORY_BREADCRUMB_TEXT_COLOR,
+            crate::theme::FOREGROUND
+        );
     }
 
     #[test]

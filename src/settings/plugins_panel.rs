@@ -22,7 +22,7 @@ impl SettingsView {
             .gap(px(14.))
             .child(panel_heading(
                 "Plugins",
-                "Integrations built into ralgruM. They are reviewed and updated with the app.",
+                "Integrations and Extensions built into ralgruM.",
             ))
             .when_some(
                 self.plugin_error.clone().filter(|_| !plugins.is_empty()),
