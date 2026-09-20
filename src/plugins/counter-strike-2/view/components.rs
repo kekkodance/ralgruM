@@ -279,6 +279,7 @@ fn action_row(
                 .pl(px(3.0))
                 .pr(px(8.0))
                 .flex()
+                .flex_col()
                 .gap(px(6.0))
                 .child(cs2_action_slider(slider, action_fraction(action)))
                 .child(action_marker_row()),
