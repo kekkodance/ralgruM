@@ -7,14 +7,14 @@ use gpui_component::slider::SliderState;
 use super::Cs2SettingsDialog;
 use super::controller::action_fraction;
 use super::slider::{
-    ACTION_MUTE_POSITION, ACTION_SLIDER_MAX, SLIDER_DETENT_COLOR, cs2_action_slider, cs2_slider,
-    slider_fraction,
+    ACTION_MUTE_POSITION, ACTION_SLIDER_MAX, cs2_action_slider, cs2_slider, slider_fraction,
 };
 use crate::{
     app_button::secondary_dialog_button_with_disabled,
     assets::{LocalIcon, local_icon},
     browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
     dialog_layout::request_dialog_close,
+    music_ui::ghost_close_button_with_icon_size,
     plugins::counter_strike_2::{service, settings::PlaybackAction, state::MatchState},
     theme::{BACKGROUND, BORDER, DANGER, FOREGROUND, MUTED, PRIMARY},
 };
@@ -22,7 +22,7 @@ use crate::{
 const SUCCESS: u32 = 0x22c55e;
 
 /// Height of the row of snap markers below the action sliders.
-const ACTION_LABEL_ROW_HEIGHT_PX: f32 = 18.0;
+const ACTION_LABEL_ROW_HEIGHT_PX: f32 = 20.0;
 
 /// Icon height for the snap markers below the action sliders, matching the
 /// text size of the old labels. Widths follow each icon's viewbox aspect.
@@ -41,6 +41,7 @@ impl Render for Cs2SettingsDialog {
         let runtime = service::snapshot();
         let closing = self.close_motion.closing();
         let close_epoch = self.close_motion.epoch();
+        let dialog_entity = cx.entity();
         let body_max_height = body_max_height(f32::from(window.viewport_size().height));
         let body = div()
             .id("counter-strike-2-settings-body")
@@ -108,7 +109,7 @@ impl Render for Cs2SettingsDialog {
             .border_color(rgb(BORDER))
             .bg(rgb(BACKGROUND))
             .text_color(rgb(FOREGROUND))
-            .child(dialog_header())
+            .child(dialog_header(dialog_entity))
             .child(scrolled)
             .child(
                 div()
@@ -160,31 +161,45 @@ impl Render for Cs2SettingsDialog {
 fn body_max_height(viewport_height: f32) -> f32 {
     ((viewport_height - 32.).max(0.) - DIALOG_CHROME_HEIGHT).max(0.)
 }
-
-fn dialog_header() -> impl IntoElement {
+fn dialog_header(dialog_entity: gpui::Entity<Cs2SettingsDialog>) -> impl IntoElement {
     div()
         .flex()
+        .flex_none()
         .items_center()
-        .gap(px(8.0))
-        .px(px(18.0))
-        .py(px(16.0))
+        .justify_between()
+        .pl(px(18.0))
+        .pr(px(14.0))
+        .py(px(13.0))
         .border_b_1()
         .border_color(rgb(BORDER))
         .child(
             div()
                 .flex()
                 .items_center()
-                .justify_center()
-                .relative()
-                .size(px(16.0))
-                .top(px(1.0))
-                .child(local_icon(LocalIcon::Crosshairs, FOREGROUND).size(px(14.0))),
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .relative()
+                        .size(px(16.0))
+                        .top(px(1.0))
+                        .child(local_icon(LocalIcon::Crosshairs, FOREGROUND).size(px(14.0))),
+                )
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Counter-Strike 2 Integration"),
+                ),
         )
-        .child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child("Counter-Strike 2 Integration"),
-        )
+        .child(ghost_close_button_with_icon_size(
+            "counter-strike-2-settings-close",
+            10.,
+            move |_, window, cx| {
+                dialog_entity.update(cx, |this, cx| request_dialog_close(this, window, cx));
+            },
+        ))
 }
 
 fn status_card(connection: service::ConnectionStatus, match_state: MatchState) -> impl IntoElement {
@@ -264,8 +279,7 @@ fn action_row(
                 .pl(px(3.0))
                 .pr(px(8.0))
                 .flex()
-                .flex_col()
-                .gap(px(10.0))
+                .gap(px(6.0))
                 .child(cs2_action_slider(slider, action_fraction(action)))
                 .child(action_marker_row()),
         )
@@ -307,7 +321,8 @@ fn action_marker_row() -> impl IntoElement {
 
 /// One snap marker: a 1px tick at the top of the row plus the icon centered
 /// below it. Both hang off a zero-width anchor placed at the marker fraction,
-/// so the tick and the icon center share the exact same x.
+/// so the tick and the icon center share the exact same x. The tick matches
+/// the icon color, dimmer than the bright detent dots on the track.
 fn snap_marker(fraction: f32, icon: LocalIcon, icon_width: f32) -> impl IntoElement {
     div()
         .absolute()
@@ -320,13 +335,13 @@ fn snap_marker(fraction: f32, icon: LocalIcon, icon_width: f32) -> impl IntoElem
                 .top_0()
                 .w(px(1.0))
                 .h(px(4.0))
-                .bg(rgb(SLIDER_DETENT_COLOR)),
+                .bg(rgb(MUTED)),
         )
         .child(
             div()
                 .absolute()
                 .left(px(-icon_width * 0.5))
-                .top(px(6.0))
+                .top(px(4.0))
                 .child(snap_icon(icon, icon_width)),
         )
 }

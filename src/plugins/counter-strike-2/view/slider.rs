@@ -120,8 +120,9 @@ fn detent_dot(fraction: f32) -> impl IntoElement {
         .absolute()
         .left(relative(fraction))
         .top(px(
-            // Deliberately 1px below the track centerline (user request).
-            (SLIDER_TRACK_HEIGHT_PX - SLIDER_DETENT_DIAMETER_PX) * 0.5 + 1.0,
+            // Deliberately half a pixel below the track centerline, between
+            // centered and the previous full pixel below (user request).
+            (SLIDER_TRACK_HEIGHT_PX - SLIDER_DETENT_DIAMETER_PX) * 0.5 + 0.5,
         ))
         .ml(px(-SLIDER_DETENT_DIAMETER_PX * 0.5))
         .size(px(SLIDER_DETENT_DIAMETER_PX))
