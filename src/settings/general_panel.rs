@@ -13,7 +13,10 @@ use gpui_component::select::{Select, SelectState};
 
 use super::{
     CacheMeterVisual, SettingsView,
-    action_button::{secondary_action_button, secondary_action_button_small_icon},
+    action_button::{
+        secondary_action_button, secondary_action_button_disabled,
+        secondary_action_button_small_icon,
+    },
     service_panel::{panel_heading, settings_card},
     settings_switch,
 };
@@ -105,14 +108,20 @@ impl SettingsView {
                             .flex()
                             .flex_wrap()
                             .gap(px(8.))
-                            .child(secondary_action_button(
+                            .child(secondary_action_button_disabled(
                                 "change-downloads-folder",
                                 Some(LocalIcon::FolderOpen),
                                 "Change folder",
                                 "Choose a different downloads folder",
+                                self.downloads_folder_picker_pending,
                                 cx.listener({
                                     let downloads_dir = downloads_dir.clone();
-                                    move |_, _, window, cx| {
+                                    move |this, _, window, cx| {
+                                        if this.downloads_folder_picker_pending {
+                                            return;
+                                        }
+                                        this.downloads_folder_picker_pending = true;
+                                        cx.notify();
                                         // The native folder picker must not
                                         // run on the UI thread: its modal
                                         // message pump re-enters gpui while
@@ -123,16 +132,19 @@ impl SettingsView {
                                         cx.spawn_in(window, async move |this, cx| {
                                             let folder = rfd::AsyncFileDialog::new()
                                                 .set_directory(downloads_dir.as_path())
-                                                .pick_folder();
-                                            let Some(folder) = folder.await else {
-                                                return;
-                                            };
-                                            let path = folder.path().to_path_buf();
+                                                .pick_folder()
+                                                .await;
                                             this.update_in(cx, |this, _, cx| {
-                                                this.update_draft_and_persist(
-                                                    |draft| draft.downloads_dir = Some(path),
-                                                    cx,
-                                                );
+                                                this.downloads_folder_picker_pending = false;
+                                                if let Some(folder) = folder {
+                                                    let path = folder.path().to_path_buf();
+                                                    this.update_draft_and_persist(
+                                                        |draft| draft.downloads_dir = Some(path),
+                                                        cx,
+                                                    );
+                                                } else {
+                                                    cx.notify();
+                                                }
                                             })
                                             .ok();
                                         })
@@ -140,11 +152,12 @@ impl SettingsView {
                                     }
                                 }),
                             ))
-                            .child(secondary_action_button(
+                            .child(secondary_action_button_disabled(
                                 "reset-downloads-folder",
                                 Some(LocalIcon::RotateRight),
                                 "Reset",
                                 "Use the system downloads folder",
+                                self.downloads_folder_picker_pending,
                                 cx.listener(|this, _, _, cx| {
                                     this.update_draft_and_persist(
                                         |draft| draft.downloads_dir = None,

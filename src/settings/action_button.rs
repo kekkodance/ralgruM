@@ -206,6 +206,26 @@ pub(super) fn secondary_action_button(
         label,
         tooltip,
         SETTINGS_SECONDARY_ICON_SIZE,
+        false,
+        on_click,
+    )
+}
+
+pub(super) fn secondary_action_button_disabled(
+    id: impl Into<ElementId>,
+    icon: Option<LocalIcon>,
+    label: &'static str,
+    tooltip: &'static str,
+    disabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    secondary_action_button_with_icon_size(
+        id,
+        icon,
+        label,
+        tooltip,
+        SETTINGS_SECONDARY_ICON_SIZE,
+        disabled,
         on_click,
     )
 }
@@ -223,6 +243,7 @@ pub(super) fn secondary_action_button_small_icon(
         label,
         tooltip,
         SETTINGS_SECONDARY_SMALL_ICON_SIZE,
+        false,
         on_click,
     )
 }
@@ -233,12 +254,11 @@ fn secondary_action_button_with_icon_size(
     label: &'static str,
     tooltip: &'static str,
     icon_size: f32,
+    disabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    div()
+    let button = div()
         .id(id)
-        .focusable()
-        .tab_stop(true)
         .role(Role::Button)
         .aria_label(label)
         .min_h(px(SETTINGS_SECONDARY_MIN_HEIGHT))
@@ -257,14 +277,23 @@ fn secondary_action_button_with_icon_size(
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(crate::theme::FOREGROUND))
         .whitespace_nowrap()
-        .cursor_pointer()
-        .hover(|style| style.bg(rgb(crate::theme::BORDER)))
         .app_tooltip(tooltip)
         .when_some(icon, |this, icon| {
             this.child(local_icon(icon, crate::theme::FOREGROUND).size(px(icon_size)))
         })
-        .child(label)
-        .on_click(on_click)
+        .child(label);
+    if disabled {
+        button
+            .opacity(0.62)
+            .cursor(CursorStyle::OperationNotAllowed)
+    } else {
+        button
+            .focusable()
+            .tab_stop(true)
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(crate::theme::BORDER)))
+            .on_click(on_click)
+    }
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ mod layout;
 mod logout_all_dialog;
 mod murglar_panel;
 mod murglar_referral;
+mod plugin_write_queue;
 mod plugins_panel;
 mod runtime_persistence;
 mod service_panel;
@@ -164,7 +165,7 @@ pub(crate) struct SettingsView {
     store: Option<SettingsStore>,
     plugin_store: Option<PluginStore>,
     plugin_error: Option<SharedString>,
-    plugin_write_pending: Option<&'static str>,
+    plugin_writes: plugin_write_queue::PluginWriteQueue,
     saved: AppSettings,
     pub(super) draft: AppSettings,
     pub(super) save_error: Option<SharedString>,
@@ -190,6 +191,7 @@ pub(crate) struct SettingsView {
     cache_meter_motion: CacheMeterMotion,
     cache_generation: u64,
     cache_overview_loading: bool,
+    downloads_folder_picker_pending: bool,
     cache_watcher_generation: u64,
     cache_watcher: Option<Task<()>>,
     pub(super) expanded_murglar_plan: Option<String>,
@@ -323,7 +325,7 @@ impl SettingsView {
             store,
             plugin_store,
             plugin_error,
-            plugin_write_pending: None,
+            plugin_writes: plugin_write_queue::PluginWriteQueue::default(),
             save_error,
             import_sync_pending: false,
             save_in_flight: false,
@@ -393,6 +395,7 @@ impl SettingsView {
             cache_meter_motion: CacheMeterMotion::default(),
             cache_generation: initial_cache_generation,
             cache_overview_loading: true,
+            downloads_folder_picker_pending: false,
             cache_watcher_generation: 0,
             cache_watcher: None,
             expanded_murglar_plan: None,

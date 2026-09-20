@@ -55,6 +55,7 @@ impl SettingsView {
             .plugin_store
             .as_ref()
             .is_some_and(|store| store.is_enabled(plugin.id));
+        let write_pending = self.plugin_writes.is_pending(plugin.id);
         settings_card()
             .child(
                 div()
@@ -86,7 +87,7 @@ impl SettingsView {
                             .when_some(plugin.open_ui, |this, open_ui| {
                                 this.child(plugin_ui_button(
                                     format!("plugin-ui-{}", plugin.id),
-                                    !enabled || self.plugin_write_pending == Some(plugin.id),
+                                    !enabled || write_pending,
                                     move |_, window, cx| open_ui(window, cx),
                                 ))
                             })
@@ -97,7 +98,7 @@ impl SettingsView {
                                     "Open plugin settings",
                                     "Enable the plugin to change its settings",
                                     "Open plugin settings",
-                                    !enabled || self.plugin_write_pending == Some(plugin.id),
+                                    !enabled || write_pending,
                                     move |_, window, cx| open_settings(window, cx),
                                 ))
                             })
@@ -109,10 +110,7 @@ impl SettingsView {
                                         this.set_plugin_enabled(plugin, *checked, cx);
                                     }),
                                 )
-                                .disabled(
-                                    self.plugin_store.is_none()
-                                        || self.plugin_write_pending == Some(plugin.id),
-                                ),
+                                .disabled(self.plugin_store.is_none() || write_pending),
                             ),
                     ),
             )
@@ -132,10 +130,7 @@ impl SettingsView {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.plugin_write_pending.is_some() {
-            return;
-        }
-        let Some(store) = self.plugin_store.clone() else {
+        let Some(store) = self.plugin_store.as_ref() else {
             self.plugin_error = Some("Plugin storage is unavailable.".into());
             cx.notify();
             return;
@@ -143,7 +138,26 @@ impl SettingsView {
         if store.is_enabled(plugin.id) == enabled {
             return;
         }
-        self.plugin_write_pending = Some(plugin.id);
+        if !self.plugin_writes.enqueue(plugin, enabled) {
+            return;
+        }
+        self.start_next_plugin_write(cx);
+        cx.notify();
+    }
+
+    fn start_next_plugin_write(&mut self, cx: &mut Context<Self>) {
+        let Some(request) = self.plugin_writes.begin_next() else {
+            return;
+        };
+        let Some(store) = self.plugin_store.clone() else {
+            self.plugin_writes.finish(request.plugin.id);
+            self.plugin_error = Some("Plugin storage is unavailable.".into());
+            self.start_next_plugin_write(cx);
+            cx.notify();
+            return;
+        };
+        let plugin = request.plugin;
+        let enabled = request.enabled;
         let task = self.runtime.spawn_blocking(move || {
             if enabled {
                 (plugin.validate_enable)()?;
@@ -155,7 +169,7 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                this.plugin_write_pending = None;
+                this.plugin_writes.finish(plugin.id);
                 match result {
                     Ok(Ok(store)) => {
                         this.plugin_store = Some(store);
@@ -184,6 +198,7 @@ impl SettingsView {
                             Some(format!("Plugin settings task failed: {error}").into())
                     }
                 }
+                this.start_next_plugin_write(cx);
                 cx.notify();
             })
             .ok();
