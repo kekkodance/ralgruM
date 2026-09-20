@@ -210,10 +210,6 @@ pub(super) fn volume_controls(
     offset_visual: RectMotionVisual,
 ) -> AnyElement {
     let pointer_state_for_canvas = pointer_state.clone();
-    let pointer_active = matches!(
-        pointer_state.get().phase,
-        VolumePointerPhase::PendingClick { .. } | VolumePointerPhase::Dragging
-    );
     let container = div()
         .id("volume-container")
         .w_full()
@@ -243,7 +239,6 @@ pub(super) fn volume_controls(
                 )
                 .child(slider_pointer_surface(
                     VOLUME_THUMB_DIAMETER_PX,
-                    pointer_active,
                     move |paint, window, _| {
                         register_volume_pointer_handlers(
                             paint,

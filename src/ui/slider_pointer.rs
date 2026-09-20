@@ -23,17 +23,8 @@ pub(crate) fn slider_logical_bounds(
     }
 }
 
-pub(crate) fn slider_pointer_cursor(active: bool) -> CursorStyle {
-    if active {
-        CursorStyle::ClosedHand
-    } else {
-        CursorStyle::OpenHand
-    }
-}
-
 pub(crate) fn slider_pointer_surface(
     thumb_diameter: f32,
-    active: bool,
     on_paint: impl Fn(SliderPointerPaint, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let thumb_inset = thumb_diameter * 0.5;
@@ -43,7 +34,7 @@ pub(crate) fn slider_pointer_surface(
             logical_bounds: slider_logical_bounds(bounds, thumb_diameter),
         },
         move |_, paint, window, cx| {
-            window.set_cursor_style(slider_pointer_cursor(active), &paint.hitbox);
+            window.set_cursor_style(CursorStyle::PointingHand, &paint.hitbox);
             on_paint(paint, window, cx);
         },
     )
@@ -56,9 +47,9 @@ pub(crate) fn slider_pointer_surface(
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Bounds, CursorStyle, point, px, size};
+    use gpui::{Bounds, point, px, size};
 
-    use super::{slider_logical_bounds, slider_pointer_cursor};
+    use super::slider_logical_bounds;
 
     #[test]
     fn expanded_surface_keeps_endpoints_on_the_visible_track() {
@@ -70,11 +61,5 @@ mod tests {
 
         assert_eq!(logical.origin.x, px(26.5));
         assert_eq!(logical.size.width, px(100.0));
-    }
-
-    #[test]
-    fn pointer_cursor_reflects_the_drag_state() {
-        assert_eq!(slider_pointer_cursor(false), CursorStyle::OpenHand);
-        assert_eq!(slider_pointer_cursor(true), CursorStyle::ClosedHand);
     }
 }

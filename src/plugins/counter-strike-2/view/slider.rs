@@ -102,12 +102,11 @@ fn slider_pointer_layer(
     slider: &Entity<SliderState>,
     pointer: &SliderPointerState,
 ) -> impl IntoElement {
-    let active = pointer.owner.get() == Some(slider.entity_id());
     let slider = slider.clone();
     let slider_for_paint = slider.clone();
     let pointer = pointer.clone();
     let pointer_for_paint = pointer.clone();
-    slider_pointer_surface(SLIDER_THUMB_DIAMETER_PX, active, move |paint, window, _| {
+    slider_pointer_surface(SLIDER_THUMB_DIAMETER_PX, move |paint, window, _| {
         register_slider_pointer_handlers(
             paint,
             slider_for_paint.clone(),
