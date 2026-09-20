@@ -1,12 +1,14 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Bounds, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Window, div, prelude::*, px, relative, rgb,
+    AnimationExt as _, AnyElement, Bounds, Entity, EntityId, IntoElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Window, div, prelude::*, px, relative,
+    rgb,
 };
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 
 use crate::{
+    motion::{SliderMotionMode, SliderVisual},
     theme::{PRIMARY, SCROLLBAR_THUMB},
     ui::slider_pointer::{SliderPointerPaint, slider_pointer_surface},
 };
@@ -35,10 +37,98 @@ pub(super) const ACTION_MUTE_POSITION: f32 = 10.;
 /// Slider positions that get a visible detent dot: the Pause and Mute snap
 /// points only. The volume zone is continuous, so it gets no landmarks.
 const ACTION_SLIDER_DETENTS: [f32; 2] = [0., ACTION_MUTE_POSITION];
+const SLIDER_DRAG_THRESHOLD_PX: f32 = 3.;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum SliderPointerPhase {
+    #[default]
+    Idle,
+    Pending {
+        press_x: f32,
+        press_y: f32,
+        held_fraction: f32,
+    },
+    Dragging,
+    DirectRelease,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SliderPointerInteraction {
+    owner: Option<EntityId>,
+    phase: SliderPointerPhase,
+}
+
+impl SliderPointerInteraction {
+    fn pending(owner: EntityId, press_x: f32, press_y: f32, held_fraction: f32) -> Self {
+        Self {
+            owner: Some(owner),
+            phase: SliderPointerPhase::Pending {
+                press_x,
+                press_y,
+                held_fraction: held_fraction.clamp(0., 1.),
+            },
+        }
+    }
+
+    fn update_move(&mut self, pointer_x: f32, pointer_y: f32) -> bool {
+        let SliderPointerPhase::Pending {
+            press_x, press_y, ..
+        } = self.phase
+        else {
+            return matches!(self.phase, SliderPointerPhase::Dragging);
+        };
+        let dx = pointer_x - press_x;
+        let dy = pointer_y - press_y;
+        if dx * dx + dy * dy < SLIDER_DRAG_THRESHOLD_PX * SLIDER_DRAG_THRESHOLD_PX {
+            return false;
+        }
+        self.phase = SliderPointerPhase::Dragging;
+        true
+    }
+
+    fn finish(&mut self) -> bool {
+        let was_dragging = matches!(self.phase, SliderPointerPhase::Dragging);
+        self.phase = if was_dragging {
+            SliderPointerPhase::DirectRelease
+        } else {
+            SliderPointerPhase::Idle
+        };
+        if !was_dragging {
+            self.owner = None;
+        }
+        was_dragging
+    }
+}
 
 #[derive(Clone, Default)]
 pub(super) struct SliderPointerState {
-    owner: Rc<Cell<Option<EntityId>>>,
+    interaction: Rc<Cell<SliderPointerInteraction>>,
+}
+
+impl SliderPointerState {
+    pub(super) fn motion_mode_for(&self, slider: EntityId) -> SliderMotionMode {
+        let interaction = self.interaction.get();
+        if interaction.owner != Some(slider) {
+            return SliderMotionMode::Animated;
+        }
+        match interaction.phase {
+            SliderPointerPhase::Pending { held_fraction, .. } => {
+                SliderMotionMode::Hold(held_fraction)
+            }
+            SliderPointerPhase::Dragging => SliderMotionMode::Direct,
+            SliderPointerPhase::DirectRelease => {
+                self.interaction.set(SliderPointerInteraction::default());
+                SliderMotionMode::Direct
+            }
+            SliderPointerPhase::Idle => SliderMotionMode::Animated,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct SliderPresentation {
+    pub(super) visual: SliderVisual,
+    pub(super) displayed_fraction: f32,
 }
 
 /// Read the current fill fraction (0..1) of a single-value slider.
@@ -60,25 +150,25 @@ pub(super) fn slider_fraction(slider: &Entity<SliderState>, cx: &gpui::App) -> f
 /// input. The pattern comes from the player bar volume slider.
 pub(super) fn cs2_slider(
     slider: &Entity<SliderState>,
-    fraction: f32,
+    presentation: SliderPresentation,
     pointer: &SliderPointerState,
 ) -> impl IntoElement {
-    cs2_slider_with_detents(slider, fraction, None, pointer)
+    cs2_slider_with_detents(slider, presentation, None, pointer)
 }
 
 /// Same as [`cs2_slider`], with detent dots marking the snap points of the
 /// action sliders.
 pub(super) fn cs2_action_slider(
     slider: &Entity<SliderState>,
-    fraction: f32,
+    presentation: SliderPresentation,
     pointer: &SliderPointerState,
 ) -> impl IntoElement {
-    cs2_slider_with_detents(slider, fraction, Some(&ACTION_SLIDER_DETENTS), pointer)
+    cs2_slider_with_detents(slider, presentation, Some(&ACTION_SLIDER_DETENTS), pointer)
 }
 
 fn cs2_slider_with_detents(
     slider: &Entity<SliderState>,
-    fraction: f32,
+    presentation: SliderPresentation,
     detents: Option<&[f32]>,
     pointer: &SliderPointerState,
 ) -> impl IntoElement {
@@ -87,7 +177,11 @@ fn cs2_slider_with_detents(
         .w_full()
         .h(px(SLIDER_CONTROL_HEIGHT_PX))
         .cursor_pointer()
-        .child(cs2_slider_track(fraction, detents))
+        .child(cs2_slider_track(
+            slider.entity_id(),
+            presentation.visual,
+            detents,
+        ))
         .child(
             div()
                 .absolute()
@@ -95,11 +189,16 @@ fn cs2_slider_with_detents(
                 .overflow_hidden()
                 .child(Slider::new(slider).horizontal().opacity(0.)),
         )
-        .child(slider_pointer_layer(slider, pointer))
+        .child(slider_pointer_layer(
+            slider,
+            presentation.displayed_fraction,
+            pointer,
+        ))
 }
 
 fn slider_pointer_layer(
     slider: &Entity<SliderState>,
+    displayed_fraction: f32,
     pointer: &SliderPointerState,
 ) -> impl IntoElement {
     let slider = slider.clone();
@@ -110,6 +209,7 @@ fn slider_pointer_layer(
         register_slider_pointer_handlers(
             paint,
             slider_for_paint.clone(),
+            displayed_fraction,
             pointer_for_paint.clone(),
             window,
         );
@@ -119,50 +219,60 @@ fn slider_pointer_layer(
 fn register_slider_pointer_handlers(
     paint: SliderPointerPaint,
     slider: Entity<SliderState>,
+    displayed_fraction: f32,
     pointer: SliderPointerState,
     window: &mut Window,
 ) {
     let slider_id = slider.entity_id();
     let down_hitbox = paint.hitbox.clone();
-    let down_bounds = paint.logical_bounds;
-    let down_slider = slider.clone();
     let down_pointer = pointer.clone();
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
         if !phase.capture() || event.button != MouseButton::Left || !down_hitbox.is_hovered(window)
         {
             return;
         }
-        down_pointer.owner.set(Some(slider_id));
+        down_pointer
+            .interaction
+            .set(SliderPointerInteraction::pending(
+                slider_id,
+                f32::from(event.position.x),
+                f32::from(event.position.y),
+                displayed_fraction,
+            ));
         window.capture_pointer(down_hitbox.id);
-        update_slider_from_pointer(
-            &down_slider,
-            event.position.x,
-            down_bounds,
-            false,
-            window,
-            cx,
-        );
         window.prevent_default();
         cx.stop_propagation();
+        window.refresh();
     });
 
     let move_bounds = paint.logical_bounds;
     let move_slider = slider.clone();
     let move_pointer = pointer.clone();
     window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-        if !phase.capture() || move_pointer.owner.get() != Some(slider_id) {
+        if !phase.capture() {
+            return;
+        }
+        let mut interaction = move_pointer.interaction.get();
+        if interaction.owner != Some(slider_id) {
             return;
         }
         if event.pressed_button == Some(MouseButton::Left) {
-            update_slider_from_pointer(
-                &move_slider,
-                event.position.x,
-                move_bounds,
-                false,
-                window,
-                cx,
-            );
+            let dragging =
+                interaction.update_move(f32::from(event.position.x), f32::from(event.position.y));
+            move_pointer.interaction.set(interaction);
+            if dragging {
+                update_slider_from_pointer(
+                    &move_slider,
+                    event.position.x,
+                    move_bounds,
+                    false,
+                    window,
+                    cx,
+                );
+            }
         } else {
+            interaction.finish();
+            move_pointer.interaction.set(interaction);
             update_slider_from_pointer(
                 &move_slider,
                 event.position.x,
@@ -171,27 +281,36 @@ fn register_slider_pointer_handlers(
                 window,
                 cx,
             );
-            move_pointer.owner.set(None);
             window.release_pointer();
         }
         window.prevent_default();
         cx.stop_propagation();
+        window.refresh();
     });
 
     let up_bounds = paint.logical_bounds;
     let up_pointer = pointer;
     window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
-        if !phase.capture()
-            || event.button != MouseButton::Left
-            || up_pointer.owner.get() != Some(slider_id)
-        {
+        if !phase.capture() || event.button != MouseButton::Left {
             return;
         }
-        update_slider_from_pointer(&slider, event.position.x, up_bounds, true, window, cx);
-        up_pointer.owner.set(None);
+        let mut interaction = up_pointer.interaction.get();
+        if interaction.owner != Some(slider_id) {
+            return;
+        }
+        if matches!(interaction.phase, SliderPointerPhase::DirectRelease) {
+            up_pointer
+                .interaction
+                .set(SliderPointerInteraction::default());
+        } else {
+            interaction.finish();
+            up_pointer.interaction.set(interaction);
+            update_slider_from_pointer(&slider, event.position.x, up_bounds, true, window, cx);
+        }
         window.release_pointer();
         window.prevent_default();
         cx.stop_propagation();
+        window.refresh();
     });
 }
 
@@ -231,7 +350,60 @@ fn slider_value_at_fraction(fraction: f32, min: f32, max: f32, step: f32) -> f32
     }
 }
 
-fn cs2_slider_track(fraction: f32, detents: Option<&[f32]>) -> impl IntoElement {
+fn cs2_slider_track(
+    slider_id: EntityId,
+    visual: SliderVisual,
+    detents: Option<&[f32]>,
+) -> impl IntoElement {
+    let fill = div()
+        .absolute()
+        .left_0()
+        .top_0()
+        .bottom_0()
+        .w(relative(visual.from))
+        .rounded_full()
+        .bg(rgb(PRIMARY));
+    let thumb = div()
+        .absolute()
+        .left(relative(visual.from))
+        .top(px((SLIDER_TRACK_HEIGHT_PX - SLIDER_THUMB_DIAMETER_PX) * 0.5))
+        .ml(px(-SLIDER_THUMB_DIAMETER_PX * 0.5))
+        .size(px(SLIDER_THUMB_DIAMETER_PX))
+        .rounded_full()
+        .bg(rgb(PRIMARY));
+    let fill: AnyElement = if visual.active {
+        fill.with_animation(
+            format!("cs2-slider-fill-{slider_id}-{}", visual.epoch),
+            crate::motion::interaction(),
+            move |this, delta| {
+                this.w(relative(crate::motion::lerp(
+                    visual.from,
+                    visual.target,
+                    delta,
+                )))
+            },
+        )
+        .into_any_element()
+    } else {
+        fill.into_any_element()
+    };
+    let thumb: AnyElement = if visual.active {
+        thumb
+            .with_animation(
+                format!("cs2-slider-thumb-{slider_id}-{}", visual.epoch),
+                crate::motion::interaction(),
+                move |this, delta| {
+                    this.left(relative(crate::motion::lerp(
+                        visual.from,
+                        visual.target,
+                        delta,
+                    )))
+                },
+            )
+            .into_any_element()
+    } else {
+        thumb.into_any_element()
+    };
     let track = div()
         .absolute()
         .left_0()
@@ -240,16 +412,7 @@ fn cs2_slider_track(fraction: f32, detents: Option<&[f32]>) -> impl IntoElement 
         .h(px(SLIDER_TRACK_HEIGHT_PX))
         .rounded_full()
         .bg(rgb(SCROLLBAR_THUMB))
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(relative(fraction))
-                .rounded_full()
-                .bg(rgb(PRIMARY)),
-        );
+        .child(fill);
     // Detents sit above base and fill so they stay visible on both.
     let track = match detents {
         Some(positions) => track.children(
@@ -259,16 +422,7 @@ fn cs2_slider_track(fraction: f32, detents: Option<&[f32]>) -> impl IntoElement 
         ),
         None => track,
     };
-    track.child(
-        div()
-            .absolute()
-            .left(relative(fraction))
-            .top(px((SLIDER_TRACK_HEIGHT_PX - SLIDER_THUMB_DIAMETER_PX) * 0.5))
-            .ml(px(-SLIDER_THUMB_DIAMETER_PX * 0.5))
-            .size(px(SLIDER_THUMB_DIAMETER_PX))
-            .rounded_full()
-            .bg(rgb(PRIMARY)),
-    )
+    track.child(thumb)
 }
 
 fn detent_dot(fraction: f32) -> impl IntoElement {
@@ -286,7 +440,12 @@ fn detent_dot(fraction: f32) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use super::slider_value_at_fraction;
+    use gpui::EntityId;
+
+    use super::{
+        SliderPointerInteraction, SliderPointerPhase, SliderPointerState, slider_value_at_fraction,
+    };
+    use crate::motion::SliderMotionMode;
 
     #[test]
     fn pointer_values_clamp_and_follow_the_slider_step() {
@@ -294,5 +453,48 @@ mod tests {
         assert_eq!(slider_value_at_fraction(0.505, 0.0, 120.0, 1.0), 61.0);
         assert_eq!(slider_value_at_fraction(2.0, 0.0, 120.0, 1.0), 120.0);
         assert!((slider_value_at_fraction(0.52, 0.0, 5.0, 0.1) - 2.6).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn pending_click_holds_the_visible_fraction_then_animates() {
+        let slider_id = EntityId::from(1);
+        let pointer = SliderPointerState::default();
+        pointer
+            .interaction
+            .set(SliderPointerInteraction::pending(slider_id, 10., 20., 0.65));
+
+        assert_eq!(
+            pointer.motion_mode_for(slider_id),
+            SliderMotionMode::Hold(0.65)
+        );
+        let mut interaction = pointer.interaction.get();
+        assert!(!interaction.finish());
+        pointer.interaction.set(interaction);
+        assert_eq!(
+            pointer.motion_mode_for(slider_id),
+            SliderMotionMode::Animated
+        );
+    }
+
+    #[test]
+    fn drag_updates_directly_and_release_settles_once() {
+        let slider_id = EntityId::from(2);
+        let pointer = SliderPointerState::default();
+        let mut interaction = SliderPointerInteraction::pending(slider_id, 10., 20., 0.4);
+
+        assert!(!interaction.update_move(11., 21.));
+        assert!(interaction.update_move(13., 20.));
+        assert_eq!(interaction.phase, SliderPointerPhase::Dragging);
+        pointer.interaction.set(interaction);
+        assert_eq!(pointer.motion_mode_for(slider_id), SliderMotionMode::Direct);
+
+        let mut interaction = pointer.interaction.get();
+        assert!(interaction.finish());
+        pointer.interaction.set(interaction);
+        assert_eq!(pointer.motion_mode_for(slider_id), SliderMotionMode::Direct);
+        assert_eq!(
+            pointer.motion_mode_for(slider_id),
+            SliderMotionMode::Animated
+        );
     }
 }

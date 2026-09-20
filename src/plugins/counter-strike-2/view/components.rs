@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use gpui::{
     AnimationExt, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Render, SharedString,
     Window, div, prelude::*, px, relative, rgb, rgba,
@@ -7,13 +9,15 @@ use gpui_component::slider::SliderState;
 use super::Cs2SettingsDialog;
 use super::controller::action_fraction;
 use super::slider::{
-    ACTION_MUTE_POSITION, ACTION_SLIDER_MAX, cs2_action_slider, cs2_slider, slider_fraction,
+    ACTION_MUTE_POSITION, ACTION_SLIDER_MAX, SliderPresentation, cs2_action_slider, cs2_slider,
+    slider_fraction,
 };
 use crate::{
     app_button::secondary_dialog_button_with_disabled,
     assets::{LocalIcon, local_icon},
     browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
     dialog_layout::request_dialog_close,
+    motion::SliderMotion,
     music_ui::ghost_close_button_with_icon_size,
     plugins::counter_strike_2::{service, settings::PlaybackAction, state::MatchState},
     theme::{BACKGROUND, BORDER, DANGER, FOREGROUND, MUTED, PRIMARY},
@@ -40,6 +44,48 @@ const DIALOG_CHROME_HEIGHT: f32 = 160.;
 impl Render for Cs2SettingsDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let runtime = service::snapshot();
+        let now = Instant::now();
+        let reduced_motion = cx.reduce_motion();
+        let active_round_presentation = slider_presentation(
+            &mut self.active_round_motion,
+            action_fraction(self.settings.active_round),
+            self.active_round.entity_id(),
+            &self.slider_pointer,
+            now,
+            reduced_motion,
+        );
+        let player_dead_presentation = slider_presentation(
+            &mut self.player_dead_motion,
+            action_fraction(self.settings.player_dead),
+            self.player_dead.entity_id(),
+            &self.slider_pointer,
+            now,
+            reduced_motion,
+        );
+        let between_rounds_presentation = slider_presentation(
+            &mut self.between_rounds_motion,
+            action_fraction(self.settings.between_rounds),
+            self.between_rounds.entity_id(),
+            &self.slider_pointer,
+            now,
+            reduced_motion,
+        );
+        let fade_out_presentation = slider_presentation(
+            &mut self.fade_out_motion,
+            slider_fraction(&self.fade_out, cx),
+            self.fade_out.entity_id(),
+            &self.slider_pointer,
+            now,
+            reduced_motion,
+        );
+        let fade_in_presentation = slider_presentation(
+            &mut self.fade_in_motion,
+            slider_fraction(&self.fade_in, cx),
+            self.fade_in.entity_id(),
+            &self.slider_pointer,
+            now,
+            reduced_motion,
+        );
         let closing = self.close_motion.closing();
         let close_epoch = self.close_motion.epoch();
         let dialog_entity = cx.entity();
@@ -59,16 +105,19 @@ impl Render for Cs2SettingsDialog {
                     "When the round starts",
                     self.settings.active_round,
                     &self.active_round,
+                    active_round_presentation,
                 ),
                 (
                     "When you're dead",
                     self.settings.player_dead,
                     &self.player_dead,
+                    player_dead_presentation,
                 ),
                 (
                     "When the round ends",
                     self.settings.between_rounds,
                     &self.between_rounds,
+                    between_rounds_presentation,
                 ),
                 &self.slider_pointer,
             ))
@@ -77,8 +126,9 @@ impl Render for Cs2SettingsDialog {
                 self.settings.fade_in_ms,
                 &self.fade_out,
                 &self.fade_in,
+                fade_out_presentation,
+                fade_in_presentation,
                 &self.slider_pointer,
-                cx,
             ))
             .when_some(self.error.clone(), |this, error| {
                 this.child(
@@ -155,6 +205,22 @@ impl Render for Cs2SettingsDialog {
         } else {
             dialog.into_any_element()
         }
+    }
+}
+
+fn slider_presentation(
+    motion: &mut SliderMotion,
+    target: f32,
+    slider_id: gpui::EntityId,
+    pointer: &super::slider::SliderPointerState,
+    now: Instant,
+    reduced_motion: bool,
+) -> SliderPresentation {
+    let mode = pointer.motion_mode_for(slider_id);
+    let visual = motion.prepare(target, now, reduced_motion, mode);
+    SliderPresentation {
+        visual,
+        displayed_fraction: motion.displayed_at(now),
     }
 }
 
@@ -239,7 +305,12 @@ fn status_card(connection: service::ConnectionStatus, match_state: MatchState) -
         )
 }
 
-type ActionControl<'a> = (&'static str, PlaybackAction, &'a Entity<SliderState>);
+type ActionControl<'a> = (
+    &'static str,
+    PlaybackAction,
+    &'a Entity<SliderState>,
+    SliderPresentation,
+);
 
 fn action_controls_card(
     active_round: ActionControl<'_>,
@@ -257,7 +328,7 @@ fn action_controls_card(
 }
 
 fn action_control(
-    (title, action, slider): ActionControl<'_>,
+    (title, action, slider, presentation): ActionControl<'_>,
     pointer: &super::slider::SliderPointerState,
 ) -> impl IntoElement {
     div()
@@ -287,7 +358,7 @@ fn action_control(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(cs2_action_slider(slider, action_fraction(action), pointer))
+                .child(cs2_action_slider(slider, presentation, pointer))
                 .child(action_marker_row()),
         )
 }
@@ -395,8 +466,9 @@ fn fade_card(
     fade_in_ms: u32,
     fade_out: &Entity<SliderState>,
     fade_in: &Entity<SliderState>,
+    fade_out_presentation: SliderPresentation,
+    fade_in_presentation: SliderPresentation,
     pointer: &super::slider::SliderPointerState,
-    cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     card()
         .child(
@@ -417,8 +489,20 @@ fn fade_card(
                 .flex()
                 .items_start()
                 .gap(px(16.0))
-                .child(fade_row("Fade in", fade_in_ms, fade_in, pointer, cx))
-                .child(fade_row("Fade out", fade_out_ms, fade_out, pointer, cx)),
+                .child(fade_row(
+                    "Fade in",
+                    fade_in_ms,
+                    fade_in,
+                    fade_in_presentation,
+                    pointer,
+                ))
+                .child(fade_row(
+                    "Fade out",
+                    fade_out_ms,
+                    fade_out,
+                    fade_out_presentation,
+                    pointer,
+                )),
         )
 }
 
@@ -426,8 +510,8 @@ fn fade_row(
     label: &'static str,
     milliseconds: u32,
     slider: &Entity<SliderState>,
+    presentation: SliderPresentation,
     pointer: &super::slider::SliderPointerState,
-    cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     div()
         .flex_1()
@@ -448,11 +532,12 @@ fn fade_row(
                         .child(format_duration(milliseconds)),
                 ),
         )
-        .child(div().w_full().px(px(3.0)).child(cs2_slider(
-            slider,
-            slider_fraction(slider, cx),
-            pointer,
-        )))
+        .child(
+            div()
+                .w_full()
+                .px(px(3.0))
+                .child(cs2_slider(slider, presentation, pointer)),
+        )
 }
 
 fn card() -> gpui::Div {

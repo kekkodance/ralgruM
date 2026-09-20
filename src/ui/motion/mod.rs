@@ -6,8 +6,10 @@ use gpui::{
 };
 
 mod segmented_selector;
+mod slider;
 
 pub(crate) use segmented_selector::{SegmentedSelectorMotion, SegmentedSelectorVisual};
+pub(crate) use slider::{SliderMotion, SliderMotionMode, SliderVisual};
 
 pub(crate) const INTERACTION_DURATION: Duration = Duration::from_millis(100);
 pub(crate) const QUICK_CONTENT_DURATION: Duration = Duration::from_millis(140);
