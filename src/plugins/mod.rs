@@ -17,6 +17,7 @@ pub(crate) struct PluginDefinition {
     pub validate_enable: fn() -> Result<(), String>,
     pub on_enable: fn(&mut App),
     pub on_disable: fn(&mut App),
+    pub open_ui: Option<fn(&mut Window, &mut App)>,
     pub open_settings: Option<fn(&mut Window, &mut App)>,
 }
 

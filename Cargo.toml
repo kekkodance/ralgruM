@@ -39,7 +39,7 @@ tokio-util = { version = "0.7.18", features = ["rt"] }
 futures = "0.3"
 rodio = { version = "0.21.1", default-features = false, features = ["playback", "flac", "mp3", "mp4", "symphonia-aac", "symphonia-aiff", "vorbis", "wav"] }
 clack-host = "0.2.0"
-clack-extensions = { version = "0.2.0", features = ["audio-ports", "clack-host"] }
+clack-extensions = { version = "0.2.0", features = ["audio-ports", "gui", "clack-host"] }
 crossbeam-queue = "0.3.12"
 roxmltree = "0.20.0"
 ogg = "0.8.0"

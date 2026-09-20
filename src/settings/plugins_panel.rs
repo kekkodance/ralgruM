@@ -1,4 +1,7 @@
-use gpui::{AnyElement, Context, FontWeight, IntoElement, div, prelude::*, px, rgb};
+use gpui::{
+    AnyElement, App, ClickEvent, Context, CursorStyle, Div, ElementId, FontWeight, IntoElement,
+    Role, Stateful, Window, div, prelude::*, px, rgb, rgba,
+};
 use gpui_component::Disableable as _;
 
 use super::{
@@ -8,6 +11,7 @@ use super::{
     settings_switch,
 };
 use crate::{
+    app_tooltip::AppTooltipExt,
     assets::{LocalIcon, local_icon},
     plugins::{self, PluginDefinition},
     theme::{FOREGROUND, MUTED},
@@ -79,6 +83,13 @@ impl SettingsView {
                             .flex_wrap()
                             .items_center()
                             .gap(px(8.))
+                            .when_some(plugin.open_ui, |this, open_ui| {
+                                this.child(plugin_ui_button(
+                                    format!("plugin-ui-{}", plugin.id),
+                                    !enabled || self.plugin_write_pending,
+                                    move |_, window, cx| open_ui(window, cx),
+                                ))
+                            })
                             .when_some(plugin.open_settings, |this, open_settings| {
                                 this.child(secondary_action_button(
                                     format!("plugin-settings-{}", plugin.id),
@@ -173,5 +184,42 @@ impl SettingsView {
             .ok();
         })
         .detach();
+    }
+}
+
+fn plugin_ui_button(
+    id: impl Into<ElementId>,
+    disabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let button = div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label("Open plugin UI")
+        .size(px(32.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .border_1()
+        .border_color(rgb(crate::theme::BORDER))
+        .bg(rgba(0x00000000))
+        .child(local_icon(LocalIcon::ArrowUpRightFromSquare, FOREGROUND).size(px(13.)))
+        .app_tooltip(if disabled {
+            "Enable the plugin to open its UI"
+        } else {
+            "Open plugin UI"
+        });
+    if disabled {
+        button.opacity(0.5).cursor(CursorStyle::OperationNotAllowed)
+    } else {
+        button
+            .focusable()
+            .tab_stop(true)
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(crate::theme::BORDER)))
+            .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
+            .on_click(on_click)
     }
 }
