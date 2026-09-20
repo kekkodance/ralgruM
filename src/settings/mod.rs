@@ -25,6 +25,7 @@ use crate::{
         AppSettings, LyricsSource, RightSidebarView, SettingsError, SettingsStore, StartPage,
     },
     playback::{AudioCache, LIMITS_MB, Overview, asio_drivers, output_devices},
+    plugins::{PluginStore, PluginStoreError},
     theme::{BACKGROUND, BORDER, FOREGROUND, MUTED},
 };
 mod about_panel;
@@ -36,6 +37,7 @@ mod layout;
 mod logout_all_dialog;
 mod murglar_panel;
 mod murglar_referral;
+mod plugins_panel;
 mod runtime_persistence;
 mod service_panel;
 mod settings_transfer_dialog;
@@ -145,6 +147,7 @@ pub(crate) enum Category {
     General,
     Murglar,
     Providers,
+    Plugins,
     About,
 }
 
@@ -158,6 +161,9 @@ pub(crate) struct SettingsView {
     category: Category,
     session_active: bool,
     store: Option<SettingsStore>,
+    plugin_store: Option<PluginStore>,
+    plugin_error: Option<SharedString>,
+    plugin_write_pending: bool,
     saved: AppSettings,
     pub(super) draft: AppSettings,
     pub(super) save_error: Option<SharedString>,
@@ -252,6 +258,7 @@ impl SettingsView {
         account: Entity<AccountState>,
         runtime: Arc<Runtime>,
         store: Result<SettingsStore, SettingsError>,
+        plugin_store: Result<PluginStore, PluginStoreError>,
         cache: AudioCache,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -263,6 +270,10 @@ impl SettingsView {
                 (Some(store), saved, None)
             }
             Err(error) => (None, AppSettings::default(), Some(error.to_string().into())),
+        };
+        let (plugin_store, plugin_error) = match plugin_store {
+            Ok(store) => (Some(store), None),
+            Err(error) => (None, Some(error.to_string().into())),
         };
         let cache_for_refresh = cache.clone();
         let initial_cache_generation = 0;
@@ -309,6 +320,9 @@ impl SettingsView {
             draft: saved_for_selects.clone(),
             saved,
             store,
+            plugin_store,
+            plugin_error,
+            plugin_write_pending: false,
             save_error,
             import_sync_pending: false,
             save_in_flight: false,
@@ -891,6 +905,7 @@ impl Render for SettingsView {
                 Category::General => self.render_general(cx).into_any_element(),
                 Category::Murglar => self.render_murglar(cx).into_any_element(),
                 Category::Providers => self.render_providers(cx).into_any_element(),
+                Category::Plugins => self.render_plugins(cx).into_any_element(),
                 Category::About => self.render_about(cx).into_any_element(),
             })
             .with_animation(
@@ -1066,17 +1081,18 @@ mod tests {
     }
 
     #[test]
-    fn provider_settings_use_one_shared_category() {
+    fn settings_categories_include_built_in_plugins() {
         assert_eq!(
             Category::ALL,
             [
                 Category::General,
                 Category::Murglar,
                 Category::Providers,
+                Category::Plugins,
                 Category::About
             ]
         );
-        assert_eq!(Category::ALL.len(), 4);
+        assert_eq!(Category::ALL.len(), 5);
         assert_eq!(Category::ALL.last(), Some(&Category::About));
         assert_eq!(Category::Providers.label(), "Providers");
         assert_eq!(
@@ -1084,12 +1100,18 @@ mod tests {
             "ralgrum/icons/fontawesome-free-7.3.1/solid/server.svg"
         );
         assert_eq!(Category::Providers.index(), 2);
+        assert_eq!(Category::Plugins.label(), "Plugins");
+        assert_eq!(
+            Category::Plugins.icon().path(),
+            "ralgrum/icons/fontawesome-free-7.3.1/solid/layer-group.svg"
+        );
+        assert_eq!(Category::Plugins.index(), 3);
         assert_eq!(Category::About.label(), "About");
         assert_eq!(
             Category::About.icon().path(),
             "ralgrum/icons/fontawesome-free-7.3.1/solid/circle-info.svg"
         );
-        assert_eq!(Category::About.index(), 3);
+        assert_eq!(Category::About.index(), 4);
     }
 
     #[test]

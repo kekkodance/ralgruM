@@ -11,6 +11,7 @@ mod lyrics;
 mod murglar_backend;
 mod platform;
 mod playback;
+mod plugins;
 mod provider_response;
 mod search;
 mod settings;
@@ -140,6 +141,7 @@ fn main() {
             let device_identity = murglar_backend::load_current_user();
             let account_session = account_session::SessionStore::load_current_user();
             let app_settings = navigation_state::SettingsStore::load_current_user();
+            let plugin_settings = plugins::PluginStore::load_current_user();
             let restore_window = app_settings
                 .as_ref()
                 .map(|store| store.settings().restore_window)
@@ -196,6 +198,7 @@ fn main() {
                         |store| store.settings().clone(),
                     );
                     let cache = AudioCache::new(cache_dir, saved.audio_cache_limit_mb);
+                    let plugin_startup = plugin_settings.as_ref().ok().cloned();
                     let cleanup_cache = cache.clone();
                     let cleanup_task = runtime.spawn(async move {
                         if let Err(error) = cleanup_cache.purge_partial_prefetch().await {
@@ -211,6 +214,7 @@ fn main() {
                             account.clone(),
                             runtime.clone(),
                             app_settings,
+                            plugin_settings,
                             cache.clone(),
                             window,
                             cx,
@@ -271,6 +275,9 @@ fn main() {
                     });
                     diagnostics::event("INFO", "main window construction complete");
                     let root = cx.new(|cx| Root::new(view, window, cx));
+                    if let Some(store) = plugin_startup.as_ref() {
+                        plugins::activate_enabled(store, cx);
+                    }
                     if let Some(id) = update_confirmation {
                         updater::helper::confirm(id);
                     }

@@ -1,13 +1,20 @@
 use super::Category;
 
 impl Category {
-    pub(crate) const ALL: [Self; 4] = [Self::General, Self::Murglar, Self::Providers, Self::About];
+    pub(crate) const ALL: [Self; 5] = [
+        Self::General,
+        Self::Murglar,
+        Self::Providers,
+        Self::Plugins,
+        Self::About,
+    ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Murglar => "Murglar",
             Self::Providers => "Providers",
+            Self::Plugins => "Plugins",
             Self::About => "About",
         }
     }
@@ -17,13 +24,14 @@ impl Category {
             Self::General => crate::assets::LocalIcon::Sliders,
             Self::Murglar => crate::assets::LocalIcon::ShieldUser,
             Self::Providers => crate::assets::LocalIcon::Server,
+            Self::Plugins => crate::assets::LocalIcon::Layers,
             Self::About => crate::assets::LocalIcon::CircleInfo,
         }
     }
 
     pub(crate) fn active_icon_color(self) -> u32 {
         match self {
-            Self::General | Self::Murglar | Self::Providers | Self::About => {
+            Self::General | Self::Murglar | Self::Providers | Self::Plugins | Self::About => {
                 crate::theme::FOREGROUND
             }
         }
@@ -34,7 +42,8 @@ impl Category {
             Self::General => 0,
             Self::Murglar => 1,
             Self::Providers => 2,
-            Self::About => 3,
+            Self::Plugins => 3,
+            Self::About => 4,
         }
     }
 }

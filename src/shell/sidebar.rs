@@ -409,6 +409,7 @@ impl RalgrumApp {
             SettingsCategory::General => "settings-category-general",
             SettingsCategory::Murglar => "settings-category-murglar",
             SettingsCategory::Providers => "settings-category-providers",
+            SettingsCategory::Plugins => "settings-category-plugins",
             SettingsCategory::About => "settings-category-about",
         };
         let text = if selected { FOREGROUND } else { MUTED };
