@@ -54,20 +54,17 @@ impl Render for Cs2SettingsDialog {
             .track_scroll(&self.scroll)
             .child(status_card(runtime.connection, runtime.match_state))
             .child(action_row(
-                "Active round",
-                "Applied after freeze time while you are alive.",
+                "When the round starts",
                 self.settings.active_round,
                 &self.active_round,
             ))
             .child(action_row(
-                "Player dead",
-                "Overrides the active-round behavior after you die.",
+                "When you're dead",
                 self.settings.player_dead,
                 &self.player_dead,
             ))
             .child(action_row(
-                "Between rounds",
-                "Applied from round conclusion through the next freeze time.",
+                "When the round ends",
                 self.settings.between_rounds,
                 &self.between_rounds,
             ))
@@ -239,7 +236,6 @@ fn status_card(connection: service::ConnectionStatus, match_state: MatchState) -
 
 fn action_row(
     title: &'static str,
-    description: &'static str,
     action: PlaybackAction,
     slider: &Entity<SliderState>,
 ) -> impl IntoElement {
@@ -247,29 +243,14 @@ fn action_row(
         .child(
             div()
                 .flex()
-                .items_start()
+                .items_center()
                 .justify_between()
                 .gap(px(12.0))
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .line_height(relative(1.45))
-                                .text_color(rgb(MUTED))
-                                .child(description),
-                        ),
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title),
                 )
                 .child(value_badge(action.label())),
         )
@@ -301,8 +282,6 @@ fn action_marker_row() -> impl IntoElement {
     div()
         .relative()
         .h(px(ACTION_LABEL_ROW_HEIGHT_PX))
-        // The negative half-width margins center each icon on its detent.
-        // Each icon sits below a 1px tick that marks the detent x.
         .child(snap_marker(
             pause_fraction,
             LocalIcon::Pause,
@@ -320,10 +299,10 @@ fn action_marker_row() -> impl IntoElement {
         ))
 }
 
-/// One snap marker: a 1px tick at the top of the row plus the icon centered
-/// below it. Both hang off a zero-width anchor placed at the marker fraction,
-/// so the tick and the icon center share the exact same x. The tick matches
-/// the icon color, dimmer than the bright detent dots on the track.
+/// One snap marker: a 1px tick plus the icon centered below it. Both hang off
+/// a zero-width anchor placed at the marker fraction, so the tick and the icon
+/// center share the exact same x. The tick matches the icon color, dimmer than
+/// the bright detent dots on the track.
 fn snap_marker(fraction: f32, icon: LocalIcon, icon_width: f32) -> impl IntoElement {
     div()
         .absolute()
@@ -336,7 +315,7 @@ fn snap_marker(fraction: f32, icon: LocalIcon, icon_width: f32) -> impl IntoElem
                 // The tick lives entirely above the row's top edge, rising
                 // into the gap under the slider and leaving clear air above
                 // the icon below it.
-                .top(px(-5.0))
+                .top(px(-7.0))
                 .w(px(1.0))
                 .h(px(5.0))
                 .bg(rgb(MUTED)),
@@ -446,8 +425,6 @@ fn card() -> gpui::Div {
 fn format_duration(milliseconds: u32) -> String {
     if milliseconds == 0 {
         "Off".into()
-    } else if milliseconds.is_multiple_of(1_000) {
-        format!("{} s", milliseconds / 1_000)
     } else {
         format!("{:.1} s", milliseconds as f32 / 1_000.0)
     }
@@ -461,6 +438,6 @@ mod tests {
     fn duration_copy_is_compact() {
         assert_eq!(format_duration(0), "Off");
         assert_eq!(format_duration(500), "0.5 s");
-        assert_eq!(format_duration(2_000), "2 s");
+        assert_eq!(format_duration(2_000), "2.0 s");
     }
 }
