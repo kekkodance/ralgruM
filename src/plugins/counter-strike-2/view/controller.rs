@@ -47,6 +47,8 @@ impl Cs2SettingsDialog {
             pending_snap: None,
             error: None,
             repairing: false,
+            scroll: gpui::ScrollHandle::new(),
+            browser_scroll: crate::browser_scroll::BrowserScrollState::new(),
             close_motion: DialogCloseMotion::default(),
             _status_poll: status_poll,
         }
@@ -70,8 +72,11 @@ impl Cs2SettingsDialog {
             ActionSetting::PlayerDead => self.settings.player_dead = action,
             ActionSetting::BetweenRounds => self.settings.between_rounds = action,
         }
+        // Snap the thumb while it is being dragged, not only on release, so
+        // the detents hold visually during the hold. set_value does not emit
+        // Change, so this cannot loop.
+        self.pending_snap = Some((setting, action_position(action)));
         if matches!(event, SliderEvent::Release(_)) {
-            self.pending_snap = Some((setting, action_position(action)));
             self.persist(cx);
         }
         cx.notify();

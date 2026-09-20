@@ -1,10 +1,14 @@
 mod components;
 mod controller;
+mod slider;
 
-use gpui::{App, AppContext as _, Entity, SharedString, Task, Window, prelude::*, px, rgba};
+use gpui::{
+    App, AppContext as _, Entity, ScrollHandle, SharedString, Task, Window, prelude::*, px, rgba,
+};
 use gpui_component::{WindowExt, slider::SliderState};
 
 use super::settings::Settings;
+use crate::browser_scroll::BrowserScrollState;
 use crate::dialog_layout::DialogCloseMotion;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +34,8 @@ pub(super) struct Cs2SettingsDialog {
     pending_snap: Option<(ActionSetting, f32)>,
     error: Option<SharedString>,
     repairing: bool,
+    scroll: ScrollHandle,
+    browser_scroll: BrowserScrollState,
     close_motion: DialogCloseMotion,
     _status_poll: Task<()>,
 }
@@ -57,13 +63,20 @@ pub(super) fn open(window: &mut Window, cx: &mut App) {
         .detach();
 }
 
+/// Keep the whole dialog inside the viewport with a small margin, matching the
+/// other centered dialogs.
+fn dialog_max_height(viewport_height: f32) -> f32 {
+    (viewport_height - 32.).max(0.)
+}
+
 fn open_loaded(settings: Settings, window: &mut Window, cx: &mut App) {
     if window.has_active_dialog(cx) {
         return;
     }
     let dialog = cx.new(|cx| Cs2SettingsDialog::new(settings, cx));
-    let centered_top =
-        crate::dialog_layout::centered_margin_top(f32::from(window.viewport_size().height), 650.0);
+    let viewport_height = f32::from(window.viewport_size().height);
+    let max_h = dialog_max_height(viewport_height);
+    let centered_top = crate::dialog_layout::centered_margin_top(viewport_height, max_h.min(650.0));
     let content = dialog.clone();
     window.open_dialog(cx, move |dialog_view, _, cx| {
         let closing = content.read(cx).close_motion.closing();
@@ -72,6 +85,7 @@ fn open_loaded(settings: Settings, window: &mut Window, cx: &mut App) {
         dialog_view
             .w(px(570.0))
             .max_w(px(620.0))
+            .max_h(px(max_h))
             .margin_top(centered_top)
             .p_0()
             .gap_0()

@@ -1,22 +1,30 @@
 use gpui::{
-    AnimationExt, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Render, SharedString,
-    Window, div, prelude::*, px, relative, rgb, rgba,
+    AnimationExt, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Render, Window, div,
+    prelude::*, px, relative, rgb, rgba,
 };
-use gpui_component::{
-    scroll::ScrollableElement as _,
-    slider::{Slider, SliderState},
-};
+use gpui_component::slider::SliderState;
 
 use super::Cs2SettingsDialog;
+use super::slider::{cs2_action_slider, cs2_slider, slider_fraction};
 use crate::{
     app_button::secondary_dialog_button_with_disabled,
     assets::{LocalIcon, local_icon},
+    browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
     dialog_layout::request_dialog_close,
     plugins::counter_strike_2::{service, settings::PlaybackAction, state::MatchState},
-    theme::{BACKGROUND, BORDER, DANGER, FOREGROUND, MUTED, PRIMARY},
+    theme::{BACKGROUND, BORDER, DANGER, FOREGROUND, MUTED},
 };
 
 const SUCCESS: u32 = 0x22c55e;
+
+// Em-height matching the player bar volume icons so the action indicator has
+// the same visual weight; widths follow each icon's viewbox aspect.
+const ACTION_ICON_EM_HEIGHT_PX: f32 = 14.5;
+const ACTION_ICON_VIEWBOX_HEIGHT: f32 = 512.;
+
+/// Vertical space the dialog keeps for its header and footer when clamping
+/// the scrollable body against the viewport.
+const DIALOG_CHROME_HEIGHT: f32 = 160.;
 
 impl Render for Cs2SettingsDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -30,6 +38,61 @@ impl Render for Cs2SettingsDialog {
         let runtime = service::snapshot();
         let closing = self.close_motion.closing();
         let close_epoch = self.close_motion.epoch();
+        let body_max_height = body_max_height(f32::from(window.viewport_size().height));
+        let body = div()
+            .id("counter-strike-2-settings-body")
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .p(px(18.0))
+            .max_h(px(body_max_height))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .child(status_card(runtime.connection, runtime.match_state))
+            .child(action_row(
+                "Active round",
+                "Applied after freeze time while you are alive.",
+                self.settings.active_round,
+                &self.active_round,
+                cx,
+            ))
+            .child(action_row(
+                "Player dead",
+                "Overrides the active-round behavior after you die.",
+                self.settings.player_dead,
+                &self.player_dead,
+                cx,
+            ))
+            .child(action_row(
+                "Between rounds",
+                "Applied from round conclusion through the next freeze time.",
+                self.settings.between_rounds,
+                &self.between_rounds,
+                cx,
+            ))
+            .child(fade_card(
+                self.settings.fade_out_ms,
+                self.settings.fade_in_ms,
+                &self.fade_out,
+                &self.fade_in,
+                cx,
+            ))
+            .when_some(self.error.clone(), |this, error| {
+                this.child(
+                    div()
+                        .text_size(px(11.5))
+                        .line_height(relative(1.45))
+                        .text_color(rgb(DANGER))
+                        .child(error),
+                )
+            })
+            .into_any_element();
+        let scrolled = browser_scroll_surface(
+            "counter-strike-2-settings-scroll",
+            body,
+            BrowserScrollTarget::Handle(self.scroll.clone()),
+            self.browser_scroll.clone(),
+        );
         let dialog = div()
             .id("counter-strike-2-settings-dialog")
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -46,49 +109,7 @@ impl Render for Cs2SettingsDialog {
             .bg(rgb(BACKGROUND))
             .text_color(rgb(FOREGROUND))
             .child(dialog_header())
-            .child(
-                div()
-                    .max_h(px(560.0))
-                    .overflow_y_scrollbar()
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.0))
-                    .p(px(18.0))
-                    .child(status_card(runtime.connection, runtime.match_state))
-                    .child(action_row(
-                        "Active round",
-                        "Applied after freeze time while you are alive.",
-                        self.settings.active_round,
-                        &self.active_round,
-                    ))
-                    .child(action_row(
-                        "Player dead",
-                        "Overrides the active-round behavior after you die.",
-                        self.settings.player_dead,
-                        &self.player_dead,
-                    ))
-                    .child(action_row(
-                        "Between rounds",
-                        "Applied from round conclusion through the next freeze time.",
-                        self.settings.between_rounds,
-                        &self.between_rounds,
-                    ))
-                    .child(fade_card(
-                        self.settings.fade_out_ms,
-                        self.settings.fade_in_ms,
-                        &self.fade_out,
-                        &self.fade_in,
-                    ))
-                    .when_some(self.error.clone(), |this, error| {
-                        this.child(
-                            div()
-                                .text_size(px(11.5))
-                                .line_height(relative(1.45))
-                                .text_color(rgb(DANGER))
-                                .child(error),
-                        )
-                    }),
-            )
+            .child(scrolled)
             .child(
                 div()
                     .flex()
@@ -132,6 +153,12 @@ impl Render for Cs2SettingsDialog {
             dialog.into_any_element()
         }
     }
+}
+
+/// Height budget for the scrollable body so the dialog chrome stays on screen
+/// in short viewports.
+fn body_max_height(viewport_height: f32) -> f32 {
+    ((viewport_height - 32.).max(0.) - DIALOG_CHROME_HEIGHT).max(0.)
 }
 
 fn dialog_header() -> impl IntoElement {
@@ -200,6 +227,7 @@ fn action_row(
     description: &'static str,
     action: PlaybackAction,
     slider: &Entity<SliderState>,
+    cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     card()
         .child(
@@ -229,13 +257,13 @@ fn action_row(
                                 .child(description),
                         ),
                 )
-                .child(value_badge(action.label())),
+                .child(action_icon(action)),
         )
         .child(
             div()
                 .w_full()
                 .px(px(3.0))
-                .child(Slider::new(slider).horizontal()),
+                .child(cs2_action_slider(slider, slider_fraction(slider, cx))),
         )
         .child(
             div()
@@ -254,6 +282,7 @@ fn fade_card(
     fade_in_ms: u32,
     fade_out: &Entity<SliderState>,
     fade_in: &Entity<SliderState>,
+    cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     card()
         .child(
@@ -269,14 +298,15 @@ fn fade_card(
                 .text_color(rgb(MUTED))
                 .child("Smooth volume changes when gameplay state changes."),
         )
-        .child(fade_row("Fade out", fade_out_ms, fade_out))
-        .child(fade_row("Fade in", fade_in_ms, fade_in))
+        .child(fade_row("Fade out", fade_out_ms, fade_out, cx))
+        .child(fade_row("Fade in", fade_in_ms, fade_in, cx))
 }
 
 fn fade_row(
     label: &'static str,
     milliseconds: u32,
     slider: &Entity<SliderState>,
+    cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     div()
         .flex()
@@ -299,7 +329,7 @@ fn fade_row(
             div()
                 .w_full()
                 .px(px(3.0))
-                .child(Slider::new(slider).horizontal()),
+                .child(cs2_slider(slider, slider_fraction(slider, cx))),
         )
 }
 
@@ -316,17 +346,31 @@ fn card() -> gpui::Div {
         .bg(rgba(0x18181bb8))
 }
 
-fn value_badge(value: impl Into<SharedString>) -> impl IntoElement {
-    div()
-        .flex_none()
-        .px(px(8.0))
-        .py(px(4.0))
-        .rounded(px(5.0))
-        .bg(rgba(0x6366f126))
-        .text_size(px(11.5))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(PRIMARY))
-        .child(value.into())
+/// Indicator icon for the current action, sized with the same em-height
+/// scaling as the player bar volume icons.
+fn action_icon(action: PlaybackAction) -> impl IntoElement {
+    let icon = match action {
+        PlaybackAction::Pause => LocalIcon::Pause,
+        PlaybackAction::Mute => LocalIcon::VolumeMuted,
+        PlaybackAction::Volume(percent) if percent <= 33 => LocalIcon::VolumeOff,
+        PlaybackAction::Volume(percent) if percent <= 66 => LocalIcon::VolumeLow,
+        PlaybackAction::Volume(_) => LocalIcon::VolumeHigh,
+    };
+    let viewbox_width = match icon {
+        LocalIcon::Pause => 384.,
+        LocalIcon::VolumeMuted => 576.,
+        LocalIcon::VolumeOff => 320.,
+        LocalIcon::VolumeLow => 448.,
+        _ => 640.,
+    };
+    let width = ACTION_ICON_EM_HEIGHT_PX * viewbox_width / ACTION_ICON_VIEWBOX_HEIGHT;
+    div().flex_none().flex().items_center().child(
+        gpui::svg()
+            .path(icon.path())
+            .text_color(rgb(FOREGROUND))
+            .w(px(width))
+            .h(px(ACTION_ICON_EM_HEIGHT_PX)),
+    )
 }
 
 fn format_duration(milliseconds: u32) -> String {

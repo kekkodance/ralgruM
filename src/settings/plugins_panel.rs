@@ -6,10 +6,10 @@ use gpui_component::Disableable as _;
 
 use super::{
     SettingsView,
-    action_button::secondary_action_button,
     service_panel::{panel_heading, settings_card},
     settings_switch,
 };
+
 use crate::{
     app_tooltip::AppTooltipExt,
     assets::{LocalIcon, local_icon},
@@ -91,11 +91,13 @@ impl SettingsView {
                                 ))
                             })
                             .when_some(plugin.open_settings, |this, open_settings| {
-                                this.child(secondary_action_button(
+                                this.child(plugin_icon_action_button(
                                     format!("plugin-settings-{}", plugin.id),
-                                    Some(LocalIcon::Settings),
-                                    "Settings",
+                                    LocalIcon::Settings,
                                     "Open plugin settings",
+                                    "Enable the plugin to change its settings",
+                                    "Open plugin settings",
+                                    !enabled || self.plugin_write_pending,
                                     move |_, window, cx| open_settings(window, cx),
                                 ))
                             })
@@ -187,8 +189,12 @@ impl SettingsView {
     }
 }
 
-fn plugin_ui_button(
+fn plugin_icon_action_button(
     id: impl Into<SharedString>,
+    icon: LocalIcon,
+    aria_label: &'static str,
+    disabled_tooltip: &'static str,
+    enabled_tooltip: &'static str,
     disabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
@@ -198,7 +204,7 @@ fn plugin_ui_button(
         .id(id)
         .when(!disabled, |this| this.group(hover_group.clone()))
         .role(Role::Button)
-        .aria_label("Open plugin UI")
+        .aria_label(aria_label)
         .size(px(34.))
         .flex_none()
         .flex()
@@ -209,14 +215,14 @@ fn plugin_ui_button(
         .border_color(rgba(0x00000000))
         .bg(rgba(0x00000000))
         .child(
-            local_icon(LocalIcon::ArrowUpRightFromSquare, MUTED)
+            local_icon(icon, MUTED)
                 .size(px(13.))
                 .group_hover(hover_group, |style| style.text_color(rgb(FOREGROUND))),
         )
         .app_tooltip(if disabled {
-            "Enable the plugin to open its UI"
+            disabled_tooltip
         } else {
-            "Open plugin UI"
+            enabled_tooltip
         });
     if disabled {
         button.opacity(0.5).cursor(CursorStyle::OperationNotAllowed)
@@ -229,4 +235,20 @@ fn plugin_ui_button(
             .focus_visible(|style| style.border_color(rgb(crate::theme::PRIMARY)))
             .on_click(on_click)
     }
+}
+
+fn plugin_ui_button(
+    id: impl Into<SharedString>,
+    disabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    plugin_icon_action_button(
+        id,
+        LocalIcon::ArrowUpRightFromSquare,
+        "Open plugin UI",
+        "Enable the plugin to open its UI",
+        "Open plugin UI",
+        disabled,
+        on_click,
+    )
 }

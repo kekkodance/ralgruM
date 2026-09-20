@@ -24,14 +24,6 @@ pub(super) enum PlaybackAction {
 }
 
 impl PlaybackAction {
-    pub(super) fn label(self) -> String {
-        match self {
-            Self::Pause => "Pause".into(),
-            Self::Mute => "Mute".into(),
-            Self::Volume(percent) => format!("{percent}%"),
-        }
-    }
-
     pub(super) fn gain(self) -> Option<f32> {
         match self {
             Self::Pause => None,
