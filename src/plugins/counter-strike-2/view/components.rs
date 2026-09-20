@@ -333,11 +333,12 @@ fn snap_marker(fraction: f32, icon: LocalIcon, icon_width: f32) -> impl IntoElem
             div()
                 .absolute()
                 .left(px(-0.5))
-                // The tick rises into the slider gap and grows taller, so it
-                // reads as part of the track while clearing the icon below.
-                .top(px(-3.0))
+                // The tick lives entirely above the row's top edge, rising
+                // into the gap under the slider and leaving clear air above
+                // the icon below it.
+                .top(px(-5.0))
                 .w(px(1.0))
-                .h(px(6.0))
+                .h(px(5.0))
                 .bg(rgb(MUTED)),
         )
         .child(
