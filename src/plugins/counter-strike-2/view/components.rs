@@ -374,8 +374,14 @@ fn fade_card(
                 .text_color(rgb(MUTED))
                 .child("Smooth volume changes when gameplay state changes."),
         )
-        .child(fade_row("Fade out", fade_out_ms, fade_out, cx))
-        .child(fade_row("Fade in", fade_in_ms, fade_in, cx))
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(16.0))
+                .child(fade_row("Fade in", fade_in_ms, fade_in, cx))
+                .child(fade_row("Fade out", fade_out_ms, fade_out, cx)),
+        )
 }
 
 fn fade_row(
@@ -385,6 +391,8 @@ fn fade_row(
     cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     div()
+        .flex_1()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap(px(7.0))
