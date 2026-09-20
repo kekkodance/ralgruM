@@ -10,8 +10,7 @@ use crate::plugins::counter_strike_2::{
 };
 
 const ACTION_PAUSE_END: f32 = 5.0;
-const ACTION_MUTE_END: f32 = 15.0;
-const ACTION_VOLUME_START: f32 = 16.0;
+const ACTION_VOLUME_START: f32 = ACTION_MUTE_POSITION + 1.0;
 
 impl Cs2SettingsDialog {
     pub(super) fn new(settings: Settings, cx: &mut Context<Self>) -> Self {
@@ -202,7 +201,7 @@ fn fade_slider(milliseconds: u32, cx: &mut Context<Cs2SettingsDialog>) -> Entity
 fn action_from_position(value: f32) -> PlaybackAction {
     if value <= ACTION_PAUSE_END {
         PlaybackAction::Pause
-    } else if value <= ACTION_MUTE_END {
+    } else if value < ACTION_VOLUME_START {
         PlaybackAction::Mute
     } else {
         let fraction = ((value - ACTION_VOLUME_START) / (ACTION_SLIDER_MAX - ACTION_VOLUME_START))
@@ -245,6 +244,27 @@ mod tests {
             assert_eq!(action_from_position(action_position(action)), action);
         }
         assert_eq!(action_from_position(3.0), PlaybackAction::Pause);
-        assert_eq!(action_from_position(12.0), PlaybackAction::Mute);
+        assert_eq!(action_from_position(8.0), PlaybackAction::Mute);
+    }
+
+    #[test]
+    fn mute_meets_the_volume_range_without_a_position_jump() {
+        let mute = action_position(PlaybackAction::Mute);
+        let minimum_volume = action_position(PlaybackAction::Volume(1));
+
+        assert_eq!(minimum_volume, mute + 1.0);
+        assert_eq!(action_from_position(mute), PlaybackAction::Mute);
+        assert_eq!(
+            action_from_position(minimum_volume),
+            PlaybackAction::Volume(1)
+        );
+        assert_eq!(
+            action_from_position(ACTION_PAUSE_END),
+            PlaybackAction::Pause
+        );
+        assert_eq!(
+            action_from_position(ACTION_PAUSE_END + 1.0),
+            PlaybackAction::Mute
+        );
     }
 }

@@ -9,7 +9,7 @@ use crate::theme::{PRIMARY, SCROLLBAR_THUMB};
 const SLIDER_CONTROL_HEIGHT_PX: f32 = 24.;
 const SLIDER_TRACK_HEIGHT_PX: f32 = 4.;
 const SLIDER_THUMB_DIAMETER_PX: f32 = 13.;
-const SLIDER_DETENT_DIAMETER_PX: f32 = 4.;
+const SLIDER_DETENT_DIAMETER_PX: f32 = 5.;
 
 /// Marker color: light enough to read on the unfilled track, bright enough to
 /// stay visible where the primary fill passes through it.

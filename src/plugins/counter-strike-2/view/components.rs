@@ -31,6 +31,7 @@ const SNAP_ICON_VIEWBOX_HEIGHT: f32 = 512.;
 const SNAP_ICON_PAUSE_WIDTH_PX: f32 = SNAP_ICON_HEIGHT_PX * 384. / SNAP_ICON_VIEWBOX_HEIGHT;
 const SNAP_ICON_MUTE_WIDTH_PX: f32 = SNAP_ICON_HEIGHT_PX * 576. / SNAP_ICON_VIEWBOX_HEIGHT;
 const SNAP_ICON_MAX_WIDTH_PX: f32 = SNAP_ICON_HEIGHT_PX * 640. / SNAP_ICON_VIEWBOX_HEIGHT;
+const SNAP_ICON_MAX_OFFSET_X_PX: f32 = -2.0;
 
 /// Vertical space the dialog keeps for its header and footer when clamping
 /// the scrollable body against the viewport.
@@ -53,20 +54,22 @@ impl Render for Cs2SettingsDialog {
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .child(status_card(runtime.connection, runtime.match_state))
-            .child(action_row(
-                "When the round starts",
-                self.settings.active_round,
-                &self.active_round,
-            ))
-            .child(action_row(
-                "When you're dead",
-                self.settings.player_dead,
-                &self.player_dead,
-            ))
-            .child(action_row(
-                "When the round ends",
-                self.settings.between_rounds,
-                &self.between_rounds,
+            .child(action_controls_card(
+                (
+                    "When the round starts",
+                    self.settings.active_round,
+                    &self.active_round,
+                ),
+                (
+                    "When you're dead",
+                    self.settings.player_dead,
+                    &self.player_dead,
+                ),
+                (
+                    "When the round ends",
+                    self.settings.between_rounds,
+                    &self.between_rounds,
+                ),
             ))
             .child(fade_card(
                 self.settings.fade_out_ms,
@@ -234,12 +237,28 @@ fn status_card(connection: service::ConnectionStatus, match_state: MatchState) -
         )
 }
 
-fn action_row(
-    title: &'static str,
-    action: PlaybackAction,
-    slider: &Entity<SliderState>,
+type ActionControl<'a> = (&'static str, PlaybackAction, &'a Entity<SliderState>);
+
+fn action_controls_card(
+    active_round: ActionControl<'_>,
+    player_dead: ActionControl<'_>,
+    between_rounds: ActionControl<'_>,
 ) -> impl IntoElement {
     card()
+        .gap(px(14.0))
+        .child(action_control(active_round))
+        .child(action_control_divider())
+        .child(action_control(player_dead))
+        .child(action_control_divider())
+        .child(action_control(between_rounds))
+}
+
+fn action_control((title, action, slider): ActionControl<'_>) -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
         .child(
             div()
                 .flex()
@@ -267,6 +286,10 @@ fn action_row(
         )
 }
 
+fn action_control_divider() -> impl IntoElement {
+    div().w_full().h(px(1.0)).bg(rgb(BORDER))
+}
+
 /// Row of snap markers below an action slider. It lives inside the same
 /// wrapper as the slider, so its edges line up with the track and the
 /// marker centers land on the exact x positions of the detent dots and the
@@ -286,24 +309,32 @@ fn action_marker_row() -> impl IntoElement {
             pause_fraction,
             LocalIcon::Pause,
             SNAP_ICON_PAUSE_WIDTH_PX,
+            0.0,
         ))
         .child(snap_marker(
             mute_fraction,
             LocalIcon::VolumeMuted,
             SNAP_ICON_MUTE_WIDTH_PX,
+            0.0,
         ))
         .child(snap_marker(
             max_fraction,
             LocalIcon::VolumeHigh,
             SNAP_ICON_MAX_WIDTH_PX,
+            SNAP_ICON_MAX_OFFSET_X_PX,
         ))
 }
 
-/// One snap marker: a 1px tick plus the icon centered below it. Both hang off
-/// a zero-width anchor placed at the marker fraction, so the tick and the icon
-/// center share the exact same x. The tick matches the icon color, dimmer than
-/// the bright detent dots on the track.
-fn snap_marker(fraction: f32, icon: LocalIcon, icon_width: f32) -> impl IntoElement {
+/// One snap marker: a 1px tick plus an icon below it. Both hang off a
+/// zero-width anchor placed at the marker fraction. The volume icon accepts a
+/// small optical offset because its asymmetric waves make its visual center
+/// sit to the right of its viewbox center.
+fn snap_marker(
+    fraction: f32,
+    icon: LocalIcon,
+    icon_width: f32,
+    icon_offset_x: f32,
+) -> impl IntoElement {
     div()
         .absolute()
         .left(relative(fraction))
@@ -323,7 +354,7 @@ fn snap_marker(fraction: f32, icon: LocalIcon, icon_width: f32) -> impl IntoElem
         .child(
             div()
                 .absolute()
-                .left(px(-icon_width * 0.5))
+                .left(px(-icon_width * 0.5 + icon_offset_x))
                 .top(px(4.0))
                 .child(snap_icon(icon, icon_width)),
         )
