@@ -42,14 +42,16 @@ pub(crate) fn slider_pointer_surface(
             hitbox: window.insert_hitbox(bounds, HitboxBehavior::Normal),
             logical_bounds: slider_logical_bounds(bounds, thumb_diameter),
         },
-        move |_, paint, window, cx| on_paint(paint, window, cx),
+        move |_, paint, window, cx| {
+            window.set_cursor_style(slider_pointer_cursor(active), &paint.hitbox);
+            on_paint(paint, window, cx);
+        },
     )
     .absolute()
     .left(px(-thumb_inset))
     .right(px(-thumb_inset))
     .top_0()
     .bottom_0()
-    .cursor(slider_pointer_cursor(active))
 }
 
 #[cfg(test)]
