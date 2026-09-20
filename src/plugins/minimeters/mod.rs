@@ -13,8 +13,7 @@ use std::sync::{
 pub(super) const DEFINITION: PluginDefinition = PluginDefinition {
     id: "minimeters",
     name: "MiniMeters",
-    version: "1.0.0",
-    author: "ralgruM",
+    icon: crate::assets::LocalIcon::WaveSquare,
     description: "Send playback audio to MiniMeters. Set Audio Source in MiniMeters to Audio Server (Plug-In).",
     validate_enable,
     on_enable: enable,

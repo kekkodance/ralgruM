@@ -6,7 +6,7 @@ letter, digit, or hyphen name. Add its module and `PluginDefinition` to
 `src/plugins/mod.rs`. The registry test checks IDs, required metadata, and
 that every registered plugin has a matching folder.
 
-The definition supplies the card's name, version, author, and description,
+The definition supplies the card's name, icon, and description,
 plus an enable validation hook and enable and disable callbacks. Validation
 runs on a background thread for user toggles; startup validation should be
 quick. Callbacks run on the GPUI application thread and must not block it.

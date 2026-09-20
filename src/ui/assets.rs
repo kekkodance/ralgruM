@@ -77,6 +77,7 @@ pub(crate) enum LocalIcon {
     Sliders,
     HardDrive,
     Signal,
+    WaveSquare,
     RotateRight,
     IdCard,
     Scissors,
@@ -93,7 +94,7 @@ pub(crate) enum LocalIcon {
 
 impl LocalIcon {
     #[cfg(test)]
-    pub(crate) const ALL: [LocalIcon; 84] = [
+    pub(crate) const ALL: [LocalIcon; 85] = [
         LocalIcon::Music,
         LocalIcon::QuoteRight,
         LocalIcon::Compass,
@@ -166,6 +167,7 @@ impl LocalIcon {
         LocalIcon::Sliders,
         LocalIcon::HardDrive,
         LocalIcon::Signal,
+        LocalIcon::WaveSquare,
         LocalIcon::RotateRight,
         LocalIcon::IdCard,
         LocalIcon::Scissors,
@@ -266,6 +268,7 @@ impl LocalIcon {
             Self::Sliders => "ralgrum/icons/fontawesome-free-7.3.1/solid/sliders.svg",
             Self::HardDrive => "ralgrum/icons/fontawesome-free-7.3.1/solid/hard-drive.svg",
             Self::Signal => "ralgrum/icons/fontawesome-free-7.3.1/solid/signal.svg",
+            Self::WaveSquare => "ralgrum/icons/fontawesome-free-7.3.1/solid/wave-square.svg",
             Self::RotateRight => "ralgrum/icons/fontawesome-free-7.3.1/solid/rotate-right.svg",
             Self::IdCard => "ralgrum/icons/fontawesome-free-7.3.1/solid/id-card.svg",
             Self::Scissors => "ralgrum/icons/fontawesome-free-7.3.1/solid/scissors.svg",

@@ -4,6 +4,7 @@
 pub(crate) mod minimeters;
 mod store;
 
+use crate::assets::LocalIcon;
 use gpui::{App, Window};
 
 pub(crate) use store::{PluginStore, PluginStoreError};
@@ -11,8 +12,7 @@ pub(crate) use store::{PluginStore, PluginStoreError};
 pub(crate) struct PluginDefinition {
     pub id: &'static str,
     pub name: &'static str,
-    pub version: &'static str,
-    pub author: &'static str,
+    pub icon: LocalIcon,
     pub description: &'static str,
     pub validate_enable: fn() -> Result<(), String>,
     pub on_enable: fn(&mut App),
@@ -87,8 +87,6 @@ mod tests {
                     .is_dir()
             );
             assert!(!plugin.name.trim().is_empty());
-            assert!(!plugin.version.trim().is_empty());
-            assert!(!plugin.author.trim().is_empty());
             assert!(!plugin.description.trim().is_empty());
         }
     }

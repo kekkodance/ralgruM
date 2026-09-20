@@ -8,7 +8,7 @@ use super::{
     settings_switch,
 };
 use crate::{
-    assets::LocalIcon,
+    assets::{LocalIcon, local_icon},
     plugins::{self, PluginDefinition},
     theme::{FOREGROUND, MUTED},
 };
@@ -62,20 +62,15 @@ impl SettingsView {
                     .child(
                         div()
                             .flex()
-                            .items_baseline()
+                            .items_center()
                             .gap(px(9.))
+                            .child(local_icon(plugin.icon, FOREGROUND).size(px(16.)))
                             .child(
                                 div()
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(rgb(FOREGROUND))
                                     .child(plugin.name),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(MUTED))
-                                    .child(plugin.version),
                             ),
                     )
                     .child(
@@ -101,31 +96,16 @@ impl SettingsView {
                                         this.set_plugin_enabled(plugin, *checked, cx);
                                     }),
                                 )
-                                .label(if enabled { "Enabled" } else { "Disabled" })
-                                .text_size(px(12.))
-                                .text_color(rgb(MUTED))
                                 .disabled(self.plugin_store.is_none() || self.plugin_write_pending),
                             ),
                     ),
             )
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .child(format!("By {}", plugin.author)),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.5))
-                            .line_height(px(18.75))
-                            .text_color(rgb(MUTED))
-                            .child(plugin.description),
-                    ),
+                    .text_size(px(12.5))
+                    .line_height(px(18.75))
+                    .text_color(rgb(MUTED))
+                    .child(plugin.description),
             )
             .into_any_element()
     }
