@@ -9,11 +9,11 @@ use crate::theme::{PRIMARY, SCROLLBAR_THUMB};
 const SLIDER_CONTROL_HEIGHT_PX: f32 = 24.;
 const SLIDER_TRACK_HEIGHT_PX: f32 = 4.;
 const SLIDER_THUMB_DIAMETER_PX: f32 = 13.;
-const SLIDER_DETENT_DIAMETER_PX: f32 = 3.;
+const SLIDER_DETENT_DIAMETER_PX: f32 = 4.;
 
 /// Marker color: light enough to read on the unfilled track, bright enough to
 /// stay visible where the primary fill passes through it.
-const SLIDER_DETENT_COLOR: u32 = 0xd4d4d8;
+pub(super) const SLIDER_DETENT_COLOR: u32 = 0xd4d4d8;
 
 /// Shared 0..120 action slider scale (see controller::action_position). Both
 /// the controller math and the paint path use this, so the scale has a single
@@ -64,6 +64,7 @@ fn cs2_slider_with_detents(
         .relative()
         .w_full()
         .h(px(SLIDER_CONTROL_HEIGHT_PX))
+        .cursor_pointer()
         .child(cs2_slider_track(fraction, detents))
         .child(
             div()
@@ -119,7 +120,8 @@ fn detent_dot(fraction: f32) -> impl IntoElement {
         .absolute()
         .left(relative(fraction))
         .top(px(
-            (SLIDER_TRACK_HEIGHT_PX - SLIDER_DETENT_DIAMETER_PX) * 0.5
+            // Deliberately 1px below the track centerline (user request).
+            (SLIDER_TRACK_HEIGHT_PX - SLIDER_DETENT_DIAMETER_PX) * 0.5 + 1.0,
         ))
         .ml(px(-SLIDER_DETENT_DIAMETER_PX * 0.5))
         .size(px(SLIDER_DETENT_DIAMETER_PX))

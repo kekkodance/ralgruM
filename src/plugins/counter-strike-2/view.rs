@@ -73,11 +73,12 @@ fn open_loaded(settings: Settings, window: &mut Window, cx: &mut App) {
         return;
     }
     let dialog = cx.new(|cx| Cs2SettingsDialog::new(settings, cx));
-    let viewport_height = f32::from(window.viewport_size().height);
-    let max_h = dialog_max_height(viewport_height);
-    let centered_top = crate::dialog_layout::centered_margin_top(viewport_height, max_h.min(650.0));
     let content = dialog.clone();
-    window.open_dialog(cx, move |dialog_view, _, cx| {
+    window.open_dialog(cx, move |dialog_view, dialog_window, cx| {
+        let viewport_height = f32::from(dialog_window.viewport_size().height);
+        let max_h = dialog_max_height(viewport_height);
+        let centered_top =
+            crate::dialog_layout::centered_margin_top(viewport_height, max_h.min(650.0));
         let closing = content.read(cx).close_motion.closing();
         let close_epoch = content.read(cx).close_motion.epoch();
         let cancel = content.clone();

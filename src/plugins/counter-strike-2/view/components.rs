@@ -7,7 +7,8 @@ use gpui_component::slider::SliderState;
 use super::Cs2SettingsDialog;
 use super::controller::action_fraction;
 use super::slider::{
-    ACTION_MUTE_POSITION, ACTION_SLIDER_MAX, cs2_action_slider, cs2_slider, slider_fraction,
+    ACTION_MUTE_POSITION, ACTION_SLIDER_MAX, SLIDER_DETENT_COLOR, cs2_action_slider, cs2_slider,
+    slider_fraction,
 };
 use crate::{
     app_button::secondary_dialog_button_with_disabled,
@@ -21,7 +22,7 @@ use crate::{
 const SUCCESS: u32 = 0x22c55e;
 
 /// Height of the row of snap markers below the action sliders.
-const ACTION_LABEL_ROW_HEIGHT_PX: f32 = 15.0;
+const ACTION_LABEL_ROW_HEIGHT_PX: f32 = 18.0;
 
 /// Icon height for the snap markers below the action sliders, matching the
 /// text size of the old labels. Widths follow each icon's viewbox aspect.
@@ -29,6 +30,7 @@ const SNAP_ICON_HEIGHT_PX: f32 = 10.5;
 const SNAP_ICON_VIEWBOX_HEIGHT: f32 = 512.;
 const SNAP_ICON_PAUSE_WIDTH_PX: f32 = SNAP_ICON_HEIGHT_PX * 384. / SNAP_ICON_VIEWBOX_HEIGHT;
 const SNAP_ICON_MUTE_WIDTH_PX: f32 = SNAP_ICON_HEIGHT_PX * 576. / SNAP_ICON_VIEWBOX_HEIGHT;
+const SNAP_ICON_MAX_WIDTH_PX: f32 = SNAP_ICON_HEIGHT_PX * 640. / SNAP_ICON_VIEWBOX_HEIGHT;
 
 /// Vertical space the dialog keeps for its header and footer when clamping
 /// the scrollable body against the viewport.
@@ -259,7 +261,8 @@ fn action_row(
         .child(
             div()
                 .w_full()
-                .px(px(3.0))
+                .pl(px(3.0))
+                .pr(px(8.0))
                 .flex()
                 .flex_col()
                 .gap(px(10.0))
@@ -269,32 +272,63 @@ fn action_row(
 }
 
 /// Row of snap markers below an action slider. It lives inside the same
-/// px(3) wrapper as the slider, so its edges line up with the track and the
+/// wrapper as the slider, so its edges line up with the track and the
 /// marker centers land on the exact x positions of the detent dots and the
 /// thumb rest positions. Taffy positions absolute children against the
 /// padding box, so the row itself must not add padding.
 fn action_marker_row() -> impl IntoElement {
+    // Fractions of the track where each marker sits: Pause at 0, Mute at its
+    // snap point, and the max-volume icon at the right end where the thumb
+    // rests at 100%.
+    let pause_fraction = 0.0;
+    let mute_fraction = ACTION_MUTE_POSITION / ACTION_SLIDER_MAX;
+    let max_fraction = 1.0;
     div()
         .relative()
         .h(px(ACTION_LABEL_ROW_HEIGHT_PX))
-        .text_size(px(10.5))
-        .text_color(rgb(MUTED))
         // The negative half-width margins center each icon on its detent.
+        // Each icon sits below a 1px tick that marks the detent x.
+        .child(snap_marker(
+            pause_fraction,
+            LocalIcon::Pause,
+            SNAP_ICON_PAUSE_WIDTH_PX,
+        ))
+        .child(snap_marker(
+            mute_fraction,
+            LocalIcon::VolumeMuted,
+            SNAP_ICON_MUTE_WIDTH_PX,
+        ))
+        .child(snap_marker(
+            max_fraction,
+            LocalIcon::VolumeHigh,
+            SNAP_ICON_MAX_WIDTH_PX,
+        ))
+}
+
+/// One snap marker: a 1px tick at the top of the row plus the icon centered
+/// below it. Both hang off a zero-width anchor placed at the marker fraction,
+/// so the tick and the icon center share the exact same x.
+fn snap_marker(fraction: f32, icon: LocalIcon, icon_width: f32) -> impl IntoElement {
+    div()
+        .absolute()
+        .left(relative(fraction))
+        .top_0()
         .child(
             div()
                 .absolute()
-                .left(relative(0.0))
-                .ml(px(-SNAP_ICON_PAUSE_WIDTH_PX * 0.5))
-                .child(snap_icon(LocalIcon::Pause, SNAP_ICON_PAUSE_WIDTH_PX)),
+                .left(px(-0.5))
+                .top_0()
+                .w(px(1.0))
+                .h(px(4.0))
+                .bg(rgb(SLIDER_DETENT_COLOR)),
         )
         .child(
             div()
                 .absolute()
-                .left(relative(ACTION_MUTE_POSITION / ACTION_SLIDER_MAX))
-                .ml(px(-SNAP_ICON_MUTE_WIDTH_PX * 0.5))
-                .child(snap_icon(LocalIcon::VolumeMuted, SNAP_ICON_MUTE_WIDTH_PX)),
+                .left(px(-icon_width * 0.5))
+                .top(px(6.0))
+                .child(snap_icon(icon, icon_width)),
         )
-        .child(div().absolute().right_0().child("100%"))
 }
 
 fn snap_icon(icon: LocalIcon, width: f32) -> impl IntoElement {
@@ -308,6 +342,9 @@ fn snap_icon(icon: LocalIcon, width: f32) -> impl IntoElement {
 fn value_badge(value: impl Into<SharedString>) -> impl IntoElement {
     div()
         .flex_none()
+        .flex()
+        .justify_center()
+        .min_w(px(50.0))
         .px(px(8.0))
         .py(px(4.0))
         .rounded(px(5.0))
