@@ -70,12 +70,14 @@ impl Render for Cs2SettingsDialog {
                     self.settings.between_rounds,
                     &self.between_rounds,
                 ),
+                &self.slider_pointer,
             ))
             .child(fade_card(
                 self.settings.fade_out_ms,
                 self.settings.fade_in_ms,
                 &self.fade_out,
                 &self.fade_in,
+                &self.slider_pointer,
                 cx,
             ))
             .when_some(self.error.clone(), |this, error| {
@@ -243,17 +245,21 @@ fn action_controls_card(
     active_round: ActionControl<'_>,
     player_dead: ActionControl<'_>,
     between_rounds: ActionControl<'_>,
+    pointer: &super::slider::SliderPointerState,
 ) -> impl IntoElement {
     card()
         .gap(px(14.0))
-        .child(action_control(active_round))
+        .child(action_control(active_round, pointer))
         .child(action_control_divider())
-        .child(action_control(player_dead))
+        .child(action_control(player_dead, pointer))
         .child(action_control_divider())
-        .child(action_control(between_rounds))
+        .child(action_control(between_rounds, pointer))
 }
 
-fn action_control((title, action, slider): ActionControl<'_>) -> impl IntoElement {
+fn action_control(
+    (title, action, slider): ActionControl<'_>,
+    pointer: &super::slider::SliderPointerState,
+) -> impl IntoElement {
     div()
         .w_full()
         .flex()
@@ -281,7 +287,7 @@ fn action_control((title, action, slider): ActionControl<'_>) -> impl IntoElemen
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(cs2_action_slider(slider, action_fraction(action)))
+                .child(cs2_action_slider(slider, action_fraction(action), pointer))
                 .child(action_marker_row()),
         )
 }
@@ -389,6 +395,7 @@ fn fade_card(
     fade_in_ms: u32,
     fade_out: &Entity<SliderState>,
     fade_in: &Entity<SliderState>,
+    pointer: &super::slider::SliderPointerState,
     cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     card()
@@ -410,8 +417,8 @@ fn fade_card(
                 .flex()
                 .items_start()
                 .gap(px(16.0))
-                .child(fade_row("Fade in", fade_in_ms, fade_in, cx))
-                .child(fade_row("Fade out", fade_out_ms, fade_out, cx)),
+                .child(fade_row("Fade in", fade_in_ms, fade_in, pointer, cx))
+                .child(fade_row("Fade out", fade_out_ms, fade_out, pointer, cx)),
         )
 }
 
@@ -419,6 +426,7 @@ fn fade_row(
     label: &'static str,
     milliseconds: u32,
     slider: &Entity<SliderState>,
+    pointer: &super::slider::SliderPointerState,
     cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     div()
@@ -440,12 +448,11 @@ fn fade_row(
                         .child(format_duration(milliseconds)),
                 ),
         )
-        .child(
-            div()
-                .w_full()
-                .px(px(3.0))
-                .child(cs2_slider(slider, slider_fraction(slider, cx))),
-        )
+        .child(div().w_full().px(px(3.0)).child(cs2_slider(
+            slider,
+            slider_fraction(slider, cx),
+            pointer,
+        )))
 }
 
 fn card() -> gpui::Div {

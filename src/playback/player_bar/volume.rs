@@ -1,15 +1,6 @@
 use super::*;
 
-pub(super) fn volume_logical_bounds(expanded_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
-    let inset = px(VOLUME_THUMB_DIAMETER_PX * 0.5);
-    Bounds {
-        origin: point(expanded_bounds.origin.x + inset, expanded_bounds.origin.y),
-        size: size(
-            (expanded_bounds.size.width - inset * 2.).max(px(0.)),
-            expanded_bounds.size.height,
-        ),
-    }
-}
+use crate::ui::slider_pointer::{SliderPointerPaint, slider_pointer_surface};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct VolumeVisual {
@@ -122,20 +113,14 @@ impl VolumeMotion {
     }
 }
 
-pub(super) struct VolumePointerPaintState {
-    pub(super) hitbox: Hitbox,
-    pub(super) logical_bounds: Bounds<Pixels>,
-    pub(super) displayed_value: f32,
-}
-
 pub(super) fn register_volume_pointer_handlers(
-    paint: VolumePointerPaintState,
+    paint: SliderPointerPaint,
+    displayed_value: f32,
     model: Entity<PlaybackModel>,
     state: Rc<Cell<VolumePointerState>>,
     window: &mut Window,
 ) {
     let down_hitbox = paint.hitbox.clone();
-    let down_displayed_value = paint.displayed_value;
     let down_state = state.clone();
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
         if !phase.capture() {
@@ -145,7 +130,7 @@ pub(super) fn register_volume_pointer_handlers(
             down_state.set(VolumePointerState::pending(
                 f32::from(event.position.x),
                 f32::from(event.position.y),
-                down_displayed_value,
+                displayed_value,
             ));
             window.capture_pointer(down_hitbox.id);
             window.prevent_default();
@@ -225,7 +210,10 @@ pub(super) fn volume_controls(
     offset_visual: RectMotionVisual,
 ) -> AnyElement {
     let pointer_state_for_canvas = pointer_state.clone();
-    let thumb_inset = VOLUME_THUMB_DIAMETER_PX * 0.5;
+    let pointer_active = matches!(
+        pointer_state.get().phase,
+        VolumePointerPhase::PendingClick { .. } | VolumePointerPhase::Dragging
+    );
     let container = div()
         .id("volume-container")
         .w_full()
@@ -253,29 +241,19 @@ pub(super) fn volume_controls(
                         .cursor_pointer()
                         .child(Slider::new(&slider).horizontal().opacity(0.)),
                 )
-                .child(
-                    canvas(
-                        move |bounds, window, _cx| VolumePointerPaintState {
-                            hitbox: window.insert_hitbox(bounds, HitboxBehavior::Normal),
-                            logical_bounds: volume_logical_bounds(bounds),
+                .child(slider_pointer_surface(
+                    VOLUME_THUMB_DIAMETER_PX,
+                    pointer_active,
+                    move |paint, window, _| {
+                        register_volume_pointer_handlers(
+                            paint,
                             displayed_value,
-                        },
-                        move |_bounds, paint, window, _cx| {
-                            register_volume_pointer_handlers(
-                                paint,
-                                model.clone(),
-                                pointer_state_for_canvas.clone(),
-                                window,
-                            );
-                        },
-                    )
-                    .cursor_pointer()
-                    .absolute()
-                    .left(px(-thumb_inset))
-                    .right(px(-thumb_inset))
-                    .top_0()
-                    .bottom_0(),
-                ),
+                            model.clone(),
+                            pointer_state_for_canvas.clone(),
+                            window,
+                        );
+                    },
+                )),
         );
     let target_offsets = (offset_visual.target.left, offset_visual.target.top);
     if offset_visual.active {

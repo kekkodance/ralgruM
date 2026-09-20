@@ -7,6 +7,7 @@ use gpui::{
 };
 use gpui_component::{WindowExt, slider::SliderState};
 
+use self::slider::SliderPointerState;
 use super::settings::Settings;
 use crate::browser_scroll::BrowserScrollState;
 use crate::dialog_layout::DialogCloseMotion;
@@ -31,6 +32,7 @@ pub(super) struct Cs2SettingsDialog {
     between_rounds: Entity<SliderState>,
     fade_out: Entity<SliderState>,
     fade_in: Entity<SliderState>,
+    slider_pointer: SliderPointerState,
     error: Option<SharedString>,
     repairing: bool,
     scroll: ScrollHandle,

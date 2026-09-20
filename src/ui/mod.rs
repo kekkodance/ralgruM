@@ -13,6 +13,7 @@ pub(crate) mod empty_state;
 pub(crate) mod motion;
 pub(crate) mod music_ui;
 pub(crate) mod playing_indicator;
+pub(crate) mod slider_pointer;
 pub(crate) mod tab_keyboard;
 pub(crate) mod theme;
 pub(crate) mod toast;

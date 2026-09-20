@@ -14,7 +14,7 @@ use gpui::{
     Entity, Font, FontWeight, Hitbox, HitboxBehavior, Hsla, ImageCacheError, ImageSource,
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ObjectFit, Pixels, Render, RenderImage, Resource, Role, TextRun, Window, canvas, div, img,
-    point, prelude::*, px, relative, rgb, rgba, size,
+    prelude::*, px, relative, rgb, rgba,
 };
 
 use gpui_component::slider::{Slider, SliderState, SliderValue};

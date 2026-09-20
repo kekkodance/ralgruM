@@ -20,7 +20,7 @@ use super::{
     rendered_current_artist_text, resolve_artwork, search_provider_for_playback,
     seekbar_display_progress, update_last_quality_label, update_quality_label_for_generation,
     volume_container_offsets, volume_icon_dimensions, volume_icon_speaker_offset,
-    volume_logical_bounds, volume_motion_mode_for_render, wide_volume_inset,
+    volume_motion_mode_for_render, wide_volume_inset,
 };
 use crate::{
     entity_navigation::{MenuRoute, MenuRouteKind},
@@ -28,6 +28,7 @@ use crate::{
     playback::{PlaybackProvider, PlaybackStatus, PlaybackTrack},
     search::{Provider, TrackArtistRef},
     theme::{FOREGROUND, MUTED},
+    ui::slider_pointer::slider_logical_bounds,
 };
 use gpui::{Bounds, ImageCacheError, RenderImage, Resource, point, px, size};
 use image::{Frame, Rgba, RgbaImage};
@@ -615,7 +616,7 @@ fn expanded_volume_hitbox_keeps_fraction_mapping_on_the_logical_track() {
         origin: point(px(93.5), px(0.)),
         size: size(px(93.), px(24.)),
     };
-    let logical = volume_logical_bounds(expanded);
+    let logical = slider_logical_bounds(expanded, VOLUME_THUMB_DIAMETER_PX);
 
     assert_eq!(logical.origin.x, px(100.));
     assert_eq!(logical.size.width, px(VOLUME_SLIDER_WIDTH_PX));

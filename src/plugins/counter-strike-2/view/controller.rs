@@ -43,6 +43,7 @@ impl Cs2SettingsDialog {
             between_rounds,
             fade_out,
             fade_in,
+            slider_pointer: Default::default(),
             error: None,
             repairing: false,
             scroll: gpui::ScrollHandle::new(),
