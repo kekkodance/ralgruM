@@ -245,6 +245,7 @@ impl PlaybackModel {
             *progress = DownloadProgress::for_generation(generation);
         }
         self.state.loaded_fully_buffered(generation, armed_duration);
+        self.reapply_automation_after_load(cx);
         self.resolved_quality = armed_quality;
         self.current_audio_info =
             armed_audio_info.map(|info| (armed_track.provider, armed_track.id.clone(), info));

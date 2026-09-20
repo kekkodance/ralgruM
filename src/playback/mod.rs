@@ -1,4 +1,5 @@
 pub(crate) mod asio_drivers;
+pub(crate) mod automation;
 mod cache;
 mod deezer_extension;
 mod download_variant;
@@ -26,6 +27,7 @@ mod track_info;
 mod view;
 
 pub(crate) use crate::murglar_backend::MediaCredentials;
+pub(crate) use automation::{AutomationDirective, AutomationTransition};
 pub(crate) use cache::{AudioCache, CACHED_DOWNLOAD_INVALID, CachedDownload, LIMITS_MB, Overview};
 pub(crate) use deezer_extension::{
     ExtensionObserverKey, duplicate_retry_delay, should_extend_at_tail,

@@ -41,6 +41,7 @@ rodio = { version = "0.21.1", default-features = false, features = ["playback", 
 clack-host = "0.2.0"
 clack-extensions = { version = "0.2.0", features = ["audio-ports", "gui", "clack-host"] }
 crossbeam-queue = "0.3.12"
+cs2-gsi = "=0.1.1"
 roxmltree = "0.20.0"
 ogg = "0.8.0"
 opus-decoder = "0.1.1"

@@ -1,6 +1,8 @@
 //! Built-in integrations are compiled into ralgruM and reviewed with the app.
 //! Add each integration under `src/plugins/<id>/` and register it in `ALL`.
 
+#[path = "counter-strike-2/mod.rs"]
+mod counter_strike_2;
 pub(crate) mod minimeters;
 mod store;
 
@@ -21,7 +23,7 @@ pub(crate) struct PluginDefinition {
     pub open_settings: Option<fn(&mut Window, &mut App)>,
 }
 
-const ALL: &[PluginDefinition] = &[minimeters::DEFINITION];
+const ALL: &[PluginDefinition] = &[minimeters::DEFINITION, counter_strike_2::DEFINITION];
 
 pub(crate) fn all() -> &'static [PluginDefinition] {
     ALL

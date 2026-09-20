@@ -84,6 +84,9 @@ pub(crate) trait AudioEngine {
     fn set_transport_gain_target(&self, target: f32);
     fn reset_transport_gain(&self, gain: f32);
     fn transport_gain_settled(&self, target: f32) -> bool;
+    fn set_automation_gain_target(&self, target: f32, duration: Duration);
+    fn reset_automation_gain(&self, gain: f32);
+    fn automation_gain_settled(&self, target: f32) -> bool;
     fn set_volume(&self, volume: f32);
     fn position(&self) -> Duration;
     fn ended(&self) -> bool;
@@ -179,6 +182,7 @@ pub(crate) struct RodioEngine {
     active_suffix: Option<Duration>,
     playback_intent: Arc<AtomicBool>,
     transport_gain: Arc<RampedGain>,
+    automation_gain: Arc<RampedGain>,
     output_target: AudioOutputTarget,
 }
 
@@ -202,6 +206,7 @@ impl RodioEngine {
             active_suffix: None,
             playback_intent: Arc::new(AtomicBool::new(false)),
             transport_gain: Arc::new(RampedGain::default()),
+            automation_gain: Arc::new(RampedGain::default()),
             output_target,
         })
     }
@@ -380,7 +385,7 @@ impl RodioEngine {
 
     fn wrap_source(&self, source: DecodedSource) -> DecodedSource {
         Box::new(crate::plugins::minimeters::tap::wrap(
-            self.transport_gain.wrap(source),
+            self.automation_gain.wrap(self.transport_gain.wrap(source)),
         ))
     }
 
@@ -1225,6 +1230,16 @@ impl AudioEngine for RodioEngine {
     }
     fn transport_gain_settled(&self, target: f32) -> bool {
         self.transport_gain.is_at_target(target)
+    }
+    fn set_automation_gain_target(&self, target: f32, duration: Duration) {
+        self.automation_gain
+            .set_target_with_duration(target, duration);
+    }
+    fn reset_automation_gain(&self, gain: f32) {
+        self.automation_gain.reset(gain);
+    }
+    fn automation_gain_settled(&self, target: f32) -> bool {
+        self.automation_gain.is_at_target(target)
     }
     /// Commits a stream and decoder prepared off the UI thread. The caller
     /// holds the old sink paused while preparing, so its captured position

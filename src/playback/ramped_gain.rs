@@ -2,6 +2,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
+use std::time::Duration;
 
 use rodio::Source;
 
@@ -18,6 +19,7 @@ pub(crate) struct RampedGain {
     // both values in one atomic word makes every audio-side update compare
     // against the complete control snapshot, including resets.
     state: AtomicU64,
+    duration_micros: AtomicU64,
 }
 
 impl Default for RampedGain {
@@ -31,6 +33,7 @@ impl RampedGain {
         let gain = normalized_gain(gain);
         Self {
             state: AtomicU64::new(pack_state(gain, gain)),
+            duration_micros: AtomicU64::new(duration_micros(USER_FADE_DURATION)),
         }
     }
 
@@ -45,7 +48,13 @@ impl RampedGain {
     }
 
     pub(crate) fn set_target(&self, target: f32) {
+        self.set_target_with_duration(target, USER_FADE_DURATION);
+    }
+
+    pub(crate) fn set_target_with_duration(&self, target: f32, duration: Duration) {
         let target = normalized_gain(target);
+        self.duration_micros
+            .store(duration_micros(duration), Ordering::Release);
         let mut snapshot = self.state.load(Ordering::Acquire);
         loop {
             let (current, _) = unpack_state(snapshot);
@@ -80,9 +89,11 @@ impl RampedGain {
         S: Source<Item = f32>,
     {
         RampedSource {
-            step: fade_step(source.sample_rate(), source.channels()),
+            samples_per_second: f64::from(source.sample_rate()) * f64::from(source.channels()),
             inner: source,
             gain: Arc::clone(self),
+            duration_micros: u64::MAX,
+            step: 1.0,
         }
     }
 
@@ -108,6 +119,8 @@ impl RampedGain {
 pub(crate) struct RampedSource<S> {
     inner: S,
     gain: Arc<RampedGain>,
+    samples_per_second: f64,
+    duration_micros: u64,
     step: f32,
 }
 
@@ -119,6 +132,14 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let sample = self.inner.next()?;
+        let duration_micros = self.gain.duration_micros.load(Ordering::Acquire);
+        if duration_micros != self.duration_micros {
+            self.duration_micros = duration_micros;
+            self.step = fade_step(
+                self.samples_per_second,
+                Duration::from_micros(duration_micros),
+            );
+        }
         let gain = self.gain.advance(self.step);
         Some(sample * gain)
     }
@@ -149,10 +170,13 @@ where
     }
 }
 
-fn fade_step(sample_rate: rodio::SampleRate, channels: rodio::ChannelCount) -> f32 {
-    let sample_count =
-        f64::from(sample_rate) * f64::from(channels) * USER_FADE_DURATION.as_secs_f64();
+fn fade_step(samples_per_second: f64, duration: Duration) -> f32 {
+    let sample_count = samples_per_second * duration.as_secs_f64();
     (1.0 / sample_count.max(1.0)) as f32
+}
+
+fn duration_micros(duration: Duration) -> u64 {
+    duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 fn pack_state(current: f32, target: f32) -> u64 {
@@ -202,6 +226,16 @@ mod tests {
         RampedGain::wrap(gain, SamplesBuffer::new(channels, 1_000, vec![1.0; count])).collect()
     }
 
+    fn samples_with_duration(
+        gain: &Arc<RampedGain>,
+        target: f32,
+        duration: Duration,
+        count: usize,
+    ) -> Vec<f32> {
+        gain.set_target_with_duration(target, duration);
+        RampedGain::wrap(gain, SamplesBuffer::new(1, 1_000, vec![1.0; count])).collect()
+    }
+
     #[test]
     fn fade_out_is_monotonic_and_reaches_exact_zero() {
         let gain = Arc::new(RampedGain::new(1.0));
@@ -230,6 +264,29 @@ mod tests {
         assert!((values[0] - 1.0 / 300.0).abs() < 0.000001);
         assert_eq!(values[299], 1.0);
         assert!(values[298] < 1.0);
+    }
+
+    #[test]
+    fn caller_selected_duration_controls_the_sample_ramp() {
+        let gain = Arc::new(RampedGain::new(0.0));
+        let values = samples_with_duration(&gain, 1.0, Duration::from_millis(300), 310);
+
+        assert!(values[298] < 1.0);
+        assert_eq!(values[299], 1.0);
+        assert!(values[300..].iter().all(|value| *value == 1.0));
+    }
+
+    #[test]
+    fn an_existing_source_observes_a_new_duration() {
+        let gain = Arc::new(RampedGain::new(1.0));
+        let mut source = RampedGain::wrap(&gain, SamplesBuffer::new(1, 1_000, vec![1.0; 400]));
+
+        gain.set_target_with_duration(0.0, Duration::from_millis(300));
+        let first = source.next().unwrap();
+
+        assert!((first - (1.0 - 1.0 / 300.0)).abs() < 0.000001);
+        assert_eq!(source.take(299).last(), Some(0.0));
+        assert_eq!(gain.current(), 0.0);
     }
 
     #[test]

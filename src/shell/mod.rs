@@ -695,6 +695,7 @@ impl RalgrumApp {
                 cx,
             )
         });
+        crate::playback::automation::set_global(cx, &playback);
         let toasts = cx.new(|_| ToastStack::new());
         let updater = cx.new(|cx| UpdaterModel::new(runtime.clone(), cx));
         cx.observe(&updater, |_, _, cx| cx.notify()).detach();

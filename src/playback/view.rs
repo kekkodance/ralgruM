@@ -16,6 +16,7 @@ use crate::{
     settings::AccountState,
 };
 
+mod automation_control;
 mod configuration;
 mod helpers;
 mod listen_reporting;
@@ -55,6 +56,8 @@ pub(crate) struct PlaybackModel {
     engine: Result<RodioEngine, String>,
     user_fade_supervisor: UserFadeSupervisor,
     user_fade_task: Option<Task<()>>,
+    automation: super::automation::AutomationState,
+    automation_task: Option<Task<()>>,
     cancellation: CancellationToken,
     pub(crate) seek_slider: Entity<SliderState>,
     pub(crate) volume_slider: Entity<SliderState>,
@@ -434,6 +437,8 @@ impl PlaybackModel {
             engine,
             user_fade_supervisor: UserFadeSupervisor::default(),
             user_fade_task: None,
+            automation: super::automation::AutomationState::default(),
+            automation_task: None,
             cancellation: CancellationToken::new(),
             seek_slider: seek_slider.clone(),
             volume_slider: volume_slider.clone(),
@@ -870,6 +875,7 @@ impl PlaybackModel {
                                     duration,
                                     initial_progress,
                                 );
+                                this.reapply_automation_after_load(cx);
                                 this.restore_output_position(generation, cx);
                                 this.current_audio_info =
                                     Some((track_provider, track_id.clone(), info));
@@ -993,6 +999,10 @@ impl PlaybackModel {
     }
 
     pub(crate) fn toggle(&mut self, cx: &mut Context<Self>) {
+        // A manual pause keeps the current automation gain while the
+        // transport fades down, avoiding a brief volume jump. Manual play
+        // resets it before the transport fades back in.
+        self.release_automation_for_manual_control(self.state.status != PlaybackStatus::Playing);
         if self.state.status == PlaybackStatus::Loading {
             self.cancel_pending_load(cx);
             return;
