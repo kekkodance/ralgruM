@@ -141,7 +141,12 @@ fn main() {
             let device_identity = murglar_backend::load_current_user();
             let account_session = account_session::SessionStore::load_current_user();
             let app_settings = navigation_state::SettingsStore::load_current_user();
-            let plugin_settings = plugins::PluginStore::load_current_user();
+            let mut plugin_startup_errors = Vec::new();
+            let plugin_settings = plugins::PluginStore::load_current_user().map(|store| {
+                let (store, errors) = plugins::prepare_startup(store);
+                plugin_startup_errors = errors;
+                store
+            });
             let restore_window = app_settings
                 .as_ref()
                 .map(|store| store.settings().restore_window)
@@ -277,6 +282,14 @@ fn main() {
                     let root = cx.new(|cx| Root::new(view, window, cx));
                     if let Some(store) = plugin_startup.as_ref() {
                         plugins::activate_enabled(store, cx);
+                    }
+                    for error in plugin_startup_errors.drain(..) {
+                        toast::push_global(
+                            cx,
+                            toast::ToastKind::Error,
+                            "Plugin could not be enabled",
+                            Some(error.into()),
+                        );
                     }
                     if let Some(id) = update_confirmation {
                         updater::helper::confirm(id);

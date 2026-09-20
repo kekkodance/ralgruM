@@ -65,14 +65,19 @@ impl PluginStore {
     }
 
     pub(crate) fn is_enabled(&self, id: &str) -> bool {
-        self.enabled.get(id).copied().unwrap_or(true)
+        self.enabled.get(id).copied().unwrap_or(false)
     }
 
     pub(crate) fn with_enabled(&self, id: &str, enabled: bool) -> Result<Self, PluginStoreError> {
-        let mut next = self.clone();
-        next.enabled.insert(id.to_owned(), enabled);
+        let next = self.with_enabled_in_memory(id, enabled);
         next.persist()?;
         Ok(next)
+    }
+
+    pub(crate) fn with_enabled_in_memory(&self, id: &str, enabled: bool) -> Self {
+        let mut next = self.clone();
+        next.enabled.insert(id.to_owned(), enabled);
+        next
     }
 
     fn persist(&self) -> Result<(), PluginStoreError> {
@@ -133,11 +138,11 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn missing_file_enables_plugins_by_default_and_changes_survive_reload() {
+    fn missing_file_disables_plugins_by_default_and_changes_survive_reload() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("plugin_settings.json");
         let store = PluginStore::load(path.clone()).unwrap();
-        assert!(store.is_enabled("future-plugin"));
+        assert!(!store.is_enabled("future-plugin"));
         assert!(!path.exists());
 
         let disabled = store.with_enabled("future-plugin", false).unwrap();

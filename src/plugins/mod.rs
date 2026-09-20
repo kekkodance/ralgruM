@@ -1,6 +1,7 @@
 //! Built-in integrations are compiled into ralgruM and reviewed with the app.
 //! Add each integration under `src/plugins/<id>/` and register it in `ALL`.
 
+pub(crate) mod minimeters;
 mod store;
 
 use gpui::{App, Window};
@@ -13,13 +14,13 @@ pub(crate) struct PluginDefinition {
     pub version: &'static str,
     pub author: &'static str,
     pub description: &'static str,
+    pub validate_enable: fn() -> Result<(), String>,
     pub on_enable: fn(&mut App),
     pub on_disable: fn(&mut App),
     pub open_settings: Option<fn(&mut Window, &mut App)>,
 }
 
-// No integrations have been approved yet. Each new plugin is registered here.
-const ALL: &[PluginDefinition] = &[];
+const ALL: &[PluginDefinition] = &[minimeters::DEFINITION];
 
 pub(crate) fn all() -> &'static [PluginDefinition] {
     ALL
@@ -34,6 +35,29 @@ fn valid_id(id: &str) -> bool {
         return false;
     }
     true
+}
+
+pub(crate) fn prepare_startup(mut store: PluginStore) -> (PluginStore, Vec<String>) {
+    let mut errors = Vec::new();
+    for plugin in all() {
+        if store.is_enabled(plugin.id)
+            && let Err(error) = (plugin.validate_enable)()
+        {
+            match store.with_enabled(plugin.id, false) {
+                Ok(updated) => {
+                    store = updated;
+                    errors.push(error);
+                }
+                Err(persist_error) => {
+                    store = store.with_enabled_in_memory(plugin.id, false);
+                    errors.push(format!(
+                        "{error} Could not save the disabled state: {persist_error}"
+                    ));
+                }
+            }
+        }
+    }
+    (store, errors)
 }
 
 pub(crate) fn activate_enabled(store: &PluginStore, cx: &mut App) {

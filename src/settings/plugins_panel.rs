@@ -148,9 +148,14 @@ impl SettingsView {
             return;
         }
         self.plugin_write_pending = true;
-        let task = self
-            .runtime
-            .spawn_blocking(move || store.with_enabled(plugin.id, enabled));
+        let task = self.runtime.spawn_blocking(move || {
+            if enabled {
+                (plugin.validate_enable)()?;
+            }
+            store
+                .with_enabled(plugin.id, enabled)
+                .map_err(|error| error.to_string())
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -165,7 +170,19 @@ impl SettingsView {
                             (plugin.on_disable)(cx);
                         }
                     }
-                    Ok(Err(error)) => this.plugin_error = Some(error.to_string().into()),
+                    Ok(Err(error)) => {
+                        crate::toast::push_global(
+                            cx,
+                            crate::toast::ToastKind::Error,
+                            if enabled {
+                                "Plugin could not be enabled"
+                            } else {
+                                "Plugin could not be disabled"
+                            },
+                            Some(error.clone().into()),
+                        );
+                        this.plugin_error = Some(error.into());
+                    }
                     Err(error) => {
                         this.plugin_error =
                             Some(format!("Plugin settings task failed: {error}").into())

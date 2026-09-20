@@ -7,8 +7,10 @@ letter, digit, or hyphen name. Add its module and `PluginDefinition` to
 that every registered plugin has a matching folder.
 
 The definition supplies the card's name, version, author, and description,
-plus enable and disable callbacks. Callbacks run on the GPUI application
-thread. They must not block that thread. Enabling a plugin should be safe to
+plus an enable validation hook and enable and disable callbacks. Validation
+runs on a background thread for user toggles; startup validation should be
+quick. Callbacks run on the GPUI application thread and must not block it.
+Enabling a plugin should be safe to
 call once on startup or after a user toggle, and disabling it should undo its
 active subscriptions and other runtime effects. Only provide `open_settings`
 when the plugin has settings. The plugin owns that dialog and its settings

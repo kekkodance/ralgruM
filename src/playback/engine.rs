@@ -379,7 +379,9 @@ impl RodioEngine {
     }
 
     fn wrap_source(&self, source: DecodedSource) -> DecodedSource {
-        Box::new(self.transport_gain.wrap(source))
+        Box::new(crate::plugins::minimeters::tap::wrap(
+            self.transport_gain.wrap(source),
+        ))
     }
 
     fn decoder(path: &Path, format: AudioFormat) -> Result<Decoder<BufReader<File>>, String> {
@@ -1050,6 +1052,7 @@ impl Source for ProgressiveOpus {
 
 impl AudioEngine for RodioEngine {
     fn load(&mut self, prepared: PreparedSource, volume: f32, playing: bool) -> Option<Duration> {
+        crate::plugins::minimeters::tap::clear();
         self.set_playback_intent(false);
         self.cancel_pending_progressive_reload();
         self.active_suffix = None;
@@ -1059,6 +1062,7 @@ impl AudioEngine for RodioEngine {
         self.sink = Arc::new(Sink::connect_new(self.stream.mixer()));
         self.sink.set_volume(volume);
         self.transport_gain.reset(1.0);
+        crate::plugins::minimeters::tap::set_volume(volume);
         self.position_base = Duration::ZERO;
         let duration = prepared.duration();
         self.front_reopen = prepared.output_reopen();
@@ -1083,9 +1087,11 @@ impl AudioEngine for RodioEngine {
     fn pause(&self) {
         self.set_playback_intent(false);
         self.sink.pause();
+        crate::plugins::minimeters::tap::clear();
     }
     fn stop(&mut self) {
         self.set_playback_intent(false);
+        crate::plugins::minimeters::tap::clear();
         self.cancel_pending_progressive_reload();
         self.active_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
@@ -1095,6 +1101,7 @@ impl AudioEngine for RodioEngine {
         self.sink.stop();
     }
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, String> {
+        crate::plugins::minimeters::tap::clear();
         if let Some(progressive_seek) = self.progressive_seek.as_ref() {
             if !progressive_seek.completion.is_complete() {
                 // While the buffer is still downloading, a timeline session
@@ -1287,6 +1294,7 @@ impl AudioEngine for RodioEngine {
     }
     fn set_volume(&self, volume: f32) {
         self.sink.set_volume(volume);
+        crate::plugins::minimeters::tap::set_volume(volume);
     }
     fn position(&self) -> Duration {
         self.reported_position()

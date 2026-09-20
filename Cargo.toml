@@ -38,6 +38,9 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread
 tokio-util = { version = "0.7.18", features = ["rt"] }
 futures = "0.3"
 rodio = { version = "0.21.1", default-features = false, features = ["playback", "flac", "mp3", "mp4", "symphonia-aac", "symphonia-aiff", "vorbis", "wav"] }
+clack-host = "0.2.0"
+clack-extensions = { version = "0.2.0", features = ["audio-ports", "clack-host"] }
+crossbeam-queue = "0.3.12"
 roxmltree = "0.20.0"
 ogg = "0.8.0"
 opus-decoder = "0.1.1"
@@ -59,7 +62,7 @@ tray-icon = { version = "=0.24.1", default-features = false }
 wry = { version = "0.55.1", default-features = false }
 windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-registry = "0.6.0"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
 wmi = { version = "0.18.4", default-features = false }
 
 # Linux MPRIS support is intentionally cfg'd out: souvlaki would pull its
