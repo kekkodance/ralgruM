@@ -1,12 +1,12 @@
 use gpui::{
-    AnyElement, App, ClickEvent, Context, CursorStyle, Div, FontWeight, IntoElement, Role,
-    SharedString, Stateful, Window, div, prelude::*, px, rgb, rgba,
+    AnyElement, App, ClickEvent, Context, CursorStyle, Div, IntoElement, Role, SharedString,
+    Stateful, Window, div, prelude::*, px, rgb, rgba,
 };
 use gpui_component::Disableable as _;
 
 use super::{
     SettingsView,
-    service_panel::{panel_heading, settings_card},
+    service_panel::{panel_heading, settings_card, settings_card_heading},
     settings_switch,
 };
 
@@ -64,20 +64,7 @@ impl SettingsView {
                     .items_center()
                     .justify_between()
                     .gap(px(12.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(9.))
-                            .child(local_icon(plugin.icon, FOREGROUND).size(px(16.)))
-                            .child(
-                                div()
-                                    .text_size(px(14.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(FOREGROUND))
-                                    .child(plugin.name),
-                            ),
-                    )
+                    .child(settings_card_heading(plugin.icon, plugin.name))
                     .child(
                         div()
                             .flex()

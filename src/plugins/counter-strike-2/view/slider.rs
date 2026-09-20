@@ -1,8 +1,8 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Bounds, CursorStyle, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Window, div, prelude::*, px, relative, rgb,
+    Bounds, Entity, EntityId, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Window, div, prelude::*, px, relative, rgb,
 };
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 
@@ -143,7 +143,6 @@ fn register_slider_pointer_handlers(
             window,
             cx,
         );
-        window.set_window_cursor_style(CursorStyle::ClosedHand);
         window.prevent_default();
         cx.stop_propagation();
     });
@@ -164,7 +163,6 @@ fn register_slider_pointer_handlers(
                 window,
                 cx,
             );
-            window.set_window_cursor_style(CursorStyle::ClosedHand);
         } else {
             update_slider_from_pointer(
                 &move_slider,
@@ -193,7 +191,6 @@ fn register_slider_pointer_handlers(
         update_slider_from_pointer(&slider, event.position.x, up_bounds, true, window, cx);
         up_pointer.owner.set(None);
         window.release_pointer();
-        window.set_window_cursor_style(CursorStyle::OpenHand);
         window.prevent_default();
         cx.stop_propagation();
     });
@@ -280,9 +277,7 @@ fn detent_dot(fraction: f32) -> impl IntoElement {
         .absolute()
         .left(relative(fraction))
         .top(px(
-            // Deliberately half a pixel below the track centerline, between
-            // centered and the previous full pixel below (user request).
-            (SLIDER_TRACK_HEIGHT_PX - SLIDER_DETENT_DIAMETER_PX) * 0.5 + 0.5,
+            (SLIDER_TRACK_HEIGHT_PX - SLIDER_DETENT_DIAMETER_PX) * 0.5
         ))
         .ml(px(-SLIDER_DETENT_DIAMETER_PX * 0.5))
         .size(px(SLIDER_DETENT_DIAMETER_PX))

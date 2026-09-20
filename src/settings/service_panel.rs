@@ -47,6 +47,18 @@ pub(super) fn settings_card() -> Div {
         .rounded(px(8.))
 }
 
+pub(super) fn settings_card_heading(icon: LocalIcon, title: &'static str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .text_size(px(13.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(FOREGROUND))
+        .child(local_icon(icon, MUTED).size(px(13.)))
+        .child(title)
+}
+
 impl SettingsView {
     pub(super) fn render_providers(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div().flex().flex_col().gap(px(28.)).children([

@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crate::{
-    assets::{LocalIcon, local_icon},
+    assets::LocalIcon,
     context_menu::{CONTEXT_MENU_BORDER, CONTEXT_MENU_FOREGROUND, CONTEXT_MENU_SURFACE},
     theme::{BACKGROUND, BORDER, FOREGROUND, MUTED, PRIMARY},
 };
@@ -17,7 +17,7 @@ use super::{
         secondary_action_button, secondary_action_button_disabled,
         secondary_action_button_small_icon,
     },
-    service_panel::{panel_heading, settings_card},
+    service_panel::{panel_heading, settings_card, settings_card_heading},
     settings_switch,
 };
 
@@ -49,7 +49,10 @@ impl SettingsView {
                 .prepare(used_fraction, Instant::now(), cx.reduce_motion());
 
         settings_card()
-            .child(card_heading(LocalIcon::HardDrive, "Cache & storage"))
+            .child(settings_card_heading(
+                LocalIcon::HardDrive,
+                "Cache & storage",
+            ))
             .child(control_list(vec![
                 control_row(
                     "Cache tracks in the background",
@@ -202,7 +205,10 @@ impl SettingsView {
 
     fn render_behavior_section(&self, cx: &mut Context<Self>) -> AnyElement {
         settings_card()
-            .child(card_heading(LocalIcon::WindowMaximize, "App behavior"))
+            .child(settings_card_heading(
+                LocalIcon::WindowMaximize,
+                "App behavior",
+            ))
             .child(control_list(vec![
                 control_row(
                     "Start page",
@@ -296,7 +302,7 @@ impl SettingsView {
 
     fn render_playback_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         settings_card()
-            .child(card_heading(LocalIcon::Play, "Playback"))
+            .child(settings_card_heading(LocalIcon::Play, "Playback"))
             .child(control_list({
                 let mut playback_rows = vec![
                     control_row(
@@ -380,18 +386,6 @@ impl SettingsView {
             }))
             .into_any_element()
     }
-}
-
-fn card_heading(icon: LocalIcon, title: &'static str) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .text_size(px(13.))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(FOREGROUND))
-        .child(local_icon(icon, MUTED).size(px(13.)))
-        .child(title)
 }
 
 fn settings_select(
