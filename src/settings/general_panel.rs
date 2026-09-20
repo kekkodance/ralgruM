@@ -110,17 +110,34 @@ impl SettingsView {
                                 Some(LocalIcon::FolderOpen),
                                 "Change folder",
                                 "Choose a different downloads folder",
-                                cx.listener(move |this, _, _, cx| {
-                                    let Some(path) = rfd::FileDialog::new()
-                                        .set_directory(&downloads_dir)
-                                        .pick_folder()
-                                    else {
-                                        return;
-                                    };
-                                    this.update_draft_and_persist(
-                                        |draft| draft.downloads_dir = Some(path),
-                                        cx,
-                                    );
+                                cx.listener({
+                                    let downloads_dir = downloads_dir.clone();
+                                    move |_, _, window, cx| {
+                                        // The native folder picker must not
+                                        // run on the UI thread: its modal
+                                        // message pump re-enters gpui while
+                                        // the App is still borrowed and
+                                        // panics. The async dialog runs the
+                                        // picker on its own thread instead.
+                                        let downloads_dir = downloads_dir.clone();
+                                        cx.spawn_in(window, async move |this, cx| {
+                                            let folder = rfd::AsyncFileDialog::new()
+                                                .set_directory(downloads_dir.as_path())
+                                                .pick_folder();
+                                            let Some(folder) = folder.await else {
+                                                return;
+                                            };
+                                            let path = folder.path().to_path_buf();
+                                            this.update_in(cx, |this, _, cx| {
+                                                this.update_draft_and_persist(
+                                                    |draft| draft.downloads_dir = Some(path),
+                                                    cx,
+                                                );
+                                            })
+                                            .ok();
+                                        })
+                                        .detach();
+                                    }
                                 }),
                             ))
                             .child(secondary_action_button(
