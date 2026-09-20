@@ -1,6 +1,6 @@
 use gpui::{
-    AnyElement, App, ClickEvent, Context, CursorStyle, Div, ElementId, FontWeight, IntoElement,
-    Role, Stateful, Window, div, prelude::*, px, rgb, rgba,
+    AnyElement, App, ClickEvent, Context, CursorStyle, Div, FontWeight, IntoElement, Role,
+    SharedString, Stateful, Window, div, prelude::*, px, rgb, rgba,
 };
 use gpui_component::Disableable as _;
 
@@ -188,24 +188,31 @@ impl SettingsView {
 }
 
 fn plugin_ui_button(
-    id: impl Into<ElementId>,
+    id: impl Into<SharedString>,
     disabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let id = id.into();
+    let hover_group = id.clone();
     let button = div()
         .id(id)
+        .when(!disabled, |this| this.group(hover_group.clone()))
         .role(Role::Button)
         .aria_label("Open plugin UI")
-        .size(px(32.))
+        .size(px(34.))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(6.))
         .border_1()
-        .border_color(rgb(crate::theme::BORDER))
+        .border_color(rgba(0x00000000))
         .bg(rgba(0x00000000))
-        .child(local_icon(LocalIcon::ArrowUpRightFromSquare, FOREGROUND).size(px(13.)))
+        .child(
+            local_icon(LocalIcon::ArrowUpRightFromSquare, MUTED)
+                .size(px(13.))
+                .group_hover(hover_group, |style| style.text_color(rgb(FOREGROUND))),
+        )
         .app_tooltip(if disabled {
             "Enable the plugin to open its UI"
         } else {
@@ -219,7 +226,7 @@ fn plugin_ui_button(
             .tab_stop(true)
             .cursor_pointer()
             .hover(|style| style.bg(rgb(crate::theme::BORDER)))
-            .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
+            .focus_visible(|style| style.border_color(rgb(crate::theme::PRIMARY)))
             .on_click(on_click)
     }
 }

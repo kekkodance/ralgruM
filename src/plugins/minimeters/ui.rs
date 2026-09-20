@@ -12,10 +12,12 @@ mod platform {
     };
     use windows::{
         Win32::{
-            Foundation::HWND,
+            Foundation::{HWND, POINT},
+            Graphics::Gdi::ClientToScreen,
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, MoveWindow, SW_HIDE, SW_SHOW, ShowWindow,
-                WINDOW_EX_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+                CreateWindowExW, DestroyWindow, HWND_TOP, SW_HIDE, SWP_NOACTIVATE,
+                SWP_NOOWNERZORDER, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
+                WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
         core::{PCWSTR, w},
@@ -29,8 +31,8 @@ mod platform {
     };
 
     const TITLEBAR_HEIGHT: f32 = 32.0;
-    const INITIAL_WIDTH: f32 = 640.0;
-    const INITIAL_HEIGHT: f32 = 480.0;
+    const INITIAL_WIDTH: f32 = 370.0;
+    const INITIAL_HEIGHT: f32 = 250.0 + TITLEBAR_HEIGHT;
 
     static EDITOR_WINDOW: OnceLock<Mutex<Option<WindowHandle<EditorWindow>>>> = OnceLock::new();
 
@@ -160,7 +162,7 @@ mod platform {
                                         ));
                                         view.attached = true;
                                         if let Some(container) = &view.container {
-                                            container.show();
+                                            container.show(window, width, height);
                                         }
                                     }
                                     Err(error) => {
@@ -355,35 +357,38 @@ mod platform {
             )
     }
 
-    struct NativeContainer(HWND);
+    struct NativeContainer {
+        hwnd: HWND,
+        owner: HWND,
+    }
 
     impl NativeContainer {
         fn new(window: &Window) -> Result<Self, String> {
             let parent = crate::media_control::window_handle(window)
                 .ok_or("The MiniMeters window handle is unavailable")?;
-            let parent = HWND(parent as *mut c_void);
+            let owner = HWND(parent as *mut c_void);
             let hwnd = unsafe {
                 CreateWindowExW(
-                    WINDOW_EX_STYLE::default(),
+                    WS_EX_TOOLWINDOW,
                     w!("STATIC"),
                     PCWSTR::null(),
-                    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                    WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                     0,
-                    TITLEBAR_HEIGHT as i32,
+                    0,
                     1,
                     1,
-                    Some(parent),
+                    Some(owner),
                     None,
                     None,
                     None,
                 )
             }
             .map_err(|error| format!("MiniMeters container could not be created: {error}"))?;
-            Ok(Self(hwnd))
+            Ok(Self { hwnd, owner })
         }
 
         fn raw(&self) -> isize {
-            self.0.0 as isize
+            self.hwnd.0 as isize
         }
 
         fn resize(&self, window: &Window) {
@@ -394,21 +399,44 @@ mod platform {
             let height = ((f32::from(viewport.height) - TITLEBAR_HEIGHT) * scale)
                 .round()
                 .max(1.0) as i32;
-            let _ = unsafe { MoveWindow(self.0, 0, titlebar, width.max(1), height, true) };
+            self.set_bounds(titlebar, width.max(1), height, false);
         }
 
-        fn show(&self) {
-            let _ = unsafe { ShowWindow(self.0, SW_SHOW) };
+        fn show(&self, window: &Window, width: u32, height: u32) {
+            let titlebar = (TITLEBAR_HEIGHT * window.scale_factor()).round() as i32;
+            self.set_bounds(titlebar, width as i32, height as i32, true);
         }
 
         fn hide(&self) {
-            let _ = unsafe { ShowWindow(self.0, SW_HIDE) };
+            let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+        }
+
+        fn set_bounds(&self, titlebar: i32, width: i32, height: i32, show: bool) {
+            let mut origin = POINT { x: 0, y: titlebar };
+            if !unsafe { ClientToScreen(self.owner, &mut origin) }.as_bool() {
+                return;
+            }
+            let flags = SWP_NOACTIVATE
+                | SWP_NOOWNERZORDER
+                | if show { SWP_SHOWWINDOW } else { SWP_NOZORDER };
+            let insert_after = show.then_some(HWND_TOP);
+            let _ = unsafe {
+                SetWindowPos(
+                    self.hwnd,
+                    insert_after,
+                    origin.x,
+                    origin.y,
+                    width.max(1),
+                    height.max(1),
+                    flags,
+                )
+            };
         }
     }
 
     impl Drop for NativeContainer {
         fn drop(&mut self) {
-            let _ = unsafe { DestroyWindow(self.0) };
+            let _ = unsafe { DestroyWindow(self.hwnd) };
         }
     }
 
