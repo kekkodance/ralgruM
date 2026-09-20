@@ -31,7 +31,6 @@ pub(super) struct Cs2SettingsDialog {
     between_rounds: Entity<SliderState>,
     fade_out: Entity<SliderState>,
     fade_in: Entity<SliderState>,
-    pending_snap: Option<(ActionSetting, f32)>,
     error: Option<SharedString>,
     repairing: bool,
     scroll: ScrollHandle,

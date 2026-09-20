@@ -86,7 +86,7 @@ impl SettingsView {
                             .when_some(plugin.open_ui, |this, open_ui| {
                                 this.child(plugin_ui_button(
                                     format!("plugin-ui-{}", plugin.id),
-                                    !enabled || self.plugin_write_pending,
+                                    !enabled || self.plugin_write_pending == Some(plugin.id),
                                     move |_, window, cx| open_ui(window, cx),
                                 ))
                             })
@@ -97,7 +97,7 @@ impl SettingsView {
                                     "Open plugin settings",
                                     "Enable the plugin to change its settings",
                                     "Open plugin settings",
-                                    !enabled || self.plugin_write_pending,
+                                    !enabled || self.plugin_write_pending == Some(plugin.id),
                                     move |_, window, cx| open_settings(window, cx),
                                 ))
                             })
@@ -109,7 +109,10 @@ impl SettingsView {
                                         this.set_plugin_enabled(plugin, *checked, cx);
                                     }),
                                 )
-                                .disabled(self.plugin_store.is_none() || self.plugin_write_pending),
+                                .disabled(
+                                    self.plugin_store.is_none()
+                                        || self.plugin_write_pending == Some(plugin.id),
+                                ),
                             ),
                     ),
             )
@@ -129,7 +132,7 @@ impl SettingsView {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.plugin_write_pending {
+        if self.plugin_write_pending.is_some() {
             return;
         }
         let Some(store) = self.plugin_store.clone() else {
@@ -140,7 +143,7 @@ impl SettingsView {
         if store.is_enabled(plugin.id) == enabled {
             return;
         }
-        self.plugin_write_pending = true;
+        self.plugin_write_pending = Some(plugin.id);
         let task = self.runtime.spawn_blocking(move || {
             if enabled {
                 (plugin.validate_enable)()?;
@@ -152,7 +155,7 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                this.plugin_write_pending = false;
+                this.plugin_write_pending = None;
                 match result {
                     Ok(Ok(store)) => {
                         this.plugin_store = Some(store);

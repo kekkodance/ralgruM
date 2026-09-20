@@ -1,26 +1,34 @@
 use gpui::{
-    AnimationExt, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Render, Window, div,
-    prelude::*, px, relative, rgb, rgba,
+    AnimationExt, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Render, SharedString,
+    Window, div, prelude::*, px, relative, rgb, rgba,
 };
 use gpui_component::slider::SliderState;
 
 use super::Cs2SettingsDialog;
-use super::slider::{cs2_action_slider, cs2_slider, slider_fraction};
+use super::controller::action_fraction;
+use super::slider::{
+    ACTION_MUTE_POSITION, ACTION_SLIDER_MAX, cs2_action_slider, cs2_slider, slider_fraction,
+};
 use crate::{
     app_button::secondary_dialog_button_with_disabled,
     assets::{LocalIcon, local_icon},
     browser_scroll::{BrowserScrollTarget, browser_scroll_surface},
     dialog_layout::request_dialog_close,
     plugins::counter_strike_2::{service, settings::PlaybackAction, state::MatchState},
-    theme::{BACKGROUND, BORDER, DANGER, FOREGROUND, MUTED},
+    theme::{BACKGROUND, BORDER, DANGER, FOREGROUND, MUTED, PRIMARY},
 };
 
 const SUCCESS: u32 = 0x22c55e;
 
-// Em-height matching the player bar volume icons so the action indicator has
-// the same visual weight; widths follow each icon's viewbox aspect.
-const ACTION_ICON_EM_HEIGHT_PX: f32 = 14.5;
-const ACTION_ICON_VIEWBOX_HEIGHT: f32 = 512.;
+/// Height of the row of snap markers below the action sliders.
+const ACTION_LABEL_ROW_HEIGHT_PX: f32 = 15.0;
+
+/// Icon height for the snap markers below the action sliders, matching the
+/// text size of the old labels. Widths follow each icon's viewbox aspect.
+const SNAP_ICON_HEIGHT_PX: f32 = 10.5;
+const SNAP_ICON_VIEWBOX_HEIGHT: f32 = 512.;
+const SNAP_ICON_PAUSE_WIDTH_PX: f32 = SNAP_ICON_HEIGHT_PX * 384. / SNAP_ICON_VIEWBOX_HEIGHT;
+const SNAP_ICON_MUTE_WIDTH_PX: f32 = SNAP_ICON_HEIGHT_PX * 576. / SNAP_ICON_VIEWBOX_HEIGHT;
 
 /// Vertical space the dialog keeps for its header and footer when clamping
 /// the scrollable body against the viewport.
@@ -28,13 +36,6 @@ const DIALOG_CHROME_HEIGHT: f32 = 160.;
 
 impl Render for Cs2SettingsDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some((setting, position)) = self.pending_snap.take() {
-            let slider = self.action_slider_for(setting);
-            window.defer(cx, move |window, cx| {
-                slider.update(cx, |slider, cx| slider.set_value(position, window, cx));
-            });
-        }
-
         let runtime = service::snapshot();
         let closing = self.close_motion.closing();
         let close_epoch = self.close_motion.epoch();
@@ -54,21 +55,18 @@ impl Render for Cs2SettingsDialog {
                 "Applied after freeze time while you are alive.",
                 self.settings.active_round,
                 &self.active_round,
-                cx,
             ))
             .child(action_row(
                 "Player dead",
                 "Overrides the active-round behavior after you die.",
                 self.settings.player_dead,
                 &self.player_dead,
-                cx,
             ))
             .child(action_row(
                 "Between rounds",
                 "Applied from round conclusion through the next freeze time.",
                 self.settings.between_rounds,
                 &self.between_rounds,
-                cx,
             ))
             .child(fade_card(
                 self.settings.fade_out_ms,
@@ -227,7 +225,6 @@ fn action_row(
     description: &'static str,
     action: PlaybackAction,
     slider: &Entity<SliderState>,
-    cx: &Context<Cs2SettingsDialog>,
 ) -> impl IntoElement {
     card()
         .child(
@@ -257,24 +254,68 @@ fn action_row(
                                 .child(description),
                         ),
                 )
-                .child(action_icon(action)),
+                .child(value_badge(action.label())),
         )
         .child(
             div()
                 .w_full()
                 .px(px(3.0))
-                .child(cs2_action_slider(slider, slider_fraction(slider, cx))),
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .child(cs2_action_slider(slider, action_fraction(action)))
+                .child(action_marker_row()),
+        )
+}
+
+/// Row of snap markers below an action slider. It lives inside the same
+/// px(3) wrapper as the slider, so its edges line up with the track and the
+/// marker centers land on the exact x positions of the detent dots and the
+/// thumb rest positions. Taffy positions absolute children against the
+/// padding box, so the row itself must not add padding.
+fn action_marker_row() -> impl IntoElement {
+    div()
+        .relative()
+        .h(px(ACTION_LABEL_ROW_HEIGHT_PX))
+        .text_size(px(10.5))
+        .text_color(rgb(MUTED))
+        // The negative half-width margins center each icon on its detent.
+        .child(
+            div()
+                .absolute()
+                .left(relative(0.0))
+                .ml(px(-SNAP_ICON_PAUSE_WIDTH_PX * 0.5))
+                .child(snap_icon(LocalIcon::Pause, SNAP_ICON_PAUSE_WIDTH_PX)),
         )
         .child(
             div()
-                .relative()
-                .h(px(15.0))
-                .text_size(px(10.5))
-                .text_color(rgb(MUTED))
-                .child(div().absolute().left_0().child("Pause"))
-                .child(div().absolute().left(relative(0.083)).child("Mute"))
-                .child(div().absolute().right_0().child("100%")),
+                .absolute()
+                .left(relative(ACTION_MUTE_POSITION / ACTION_SLIDER_MAX))
+                .ml(px(-SNAP_ICON_MUTE_WIDTH_PX * 0.5))
+                .child(snap_icon(LocalIcon::VolumeMuted, SNAP_ICON_MUTE_WIDTH_PX)),
         )
+        .child(div().absolute().right_0().child("100%"))
+}
+
+fn snap_icon(icon: LocalIcon, width: f32) -> impl IntoElement {
+    gpui::svg()
+        .path(icon.path())
+        .text_color(rgb(MUTED))
+        .w(px(width))
+        .h(px(SNAP_ICON_HEIGHT_PX))
+}
+
+fn value_badge(value: impl Into<SharedString>) -> impl IntoElement {
+    div()
+        .flex_none()
+        .px(px(8.0))
+        .py(px(4.0))
+        .rounded(px(5.0))
+        .bg(rgba(0x6366f126))
+        .text_size(px(11.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(PRIMARY))
+        .child(value.into())
 }
 
 fn fade_card(
@@ -344,33 +385,6 @@ fn card() -> gpui::Div {
         .border_1()
         .border_color(rgb(BORDER))
         .bg(rgba(0x18181bb8))
-}
-
-/// Indicator icon for the current action, sized with the same em-height
-/// scaling as the player bar volume icons.
-fn action_icon(action: PlaybackAction) -> impl IntoElement {
-    let icon = match action {
-        PlaybackAction::Pause => LocalIcon::Pause,
-        PlaybackAction::Mute => LocalIcon::VolumeMuted,
-        PlaybackAction::Volume(percent) if percent <= 33 => LocalIcon::VolumeOff,
-        PlaybackAction::Volume(percent) if percent <= 66 => LocalIcon::VolumeLow,
-        PlaybackAction::Volume(_) => LocalIcon::VolumeHigh,
-    };
-    let viewbox_width = match icon {
-        LocalIcon::Pause => 384.,
-        LocalIcon::VolumeMuted => 576.,
-        LocalIcon::VolumeOff => 320.,
-        LocalIcon::VolumeLow => 448.,
-        _ => 640.,
-    };
-    let width = ACTION_ICON_EM_HEIGHT_PX * viewbox_width / ACTION_ICON_VIEWBOX_HEIGHT;
-    div().flex_none().flex().items_center().child(
-        gpui::svg()
-            .path(icon.path())
-            .text_color(rgb(FOREGROUND))
-            .w(px(width))
-            .h(px(ACTION_ICON_EM_HEIGHT_PX)),
-    )
 }
 
 fn format_duration(milliseconds: u32) -> String {

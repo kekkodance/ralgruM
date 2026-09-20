@@ -15,13 +15,18 @@ const SLIDER_DETENT_DIAMETER_PX: f32 = 3.;
 /// stay visible where the primary fill passes through it.
 const SLIDER_DETENT_COLOR: u32 = 0xd4d4d8;
 
-/// End of the shared 0..120 action slider scale.
-const ACTION_SLIDER_MAX: f32 = 120.;
+/// Shared 0..120 action slider scale (see controller::action_position). Both
+/// the controller math and the paint path use this, so the scale has a single
+/// source of truth.
+pub(super) const ACTION_SLIDER_MAX: f32 = 120.;
 
-/// Slider positions that get a visible detent dot: Pause, Mute, and the
-/// 25/50/75/100 percent volume landmarks on the same 0..120 scale the
-/// controller uses (see action_position).
-const ACTION_SLIDER_DETENTS: [f32; 6] = [0., 10., 41.21, 67.52, 93.74, 120.];
+/// Snap position of the Mute action on the shared scale. The slider detent,
+/// the controller's action math, and the marker below the track all use it.
+pub(super) const ACTION_MUTE_POSITION: f32 = 10.;
+
+/// Slider positions that get a visible detent dot: the Pause and Mute snap
+/// points only. The volume zone is continuous, so it gets no landmarks.
+const ACTION_SLIDER_DETENTS: [f32; 2] = [0., ACTION_MUTE_POSITION];
 
 /// Read the current fill fraction (0..1) of a single-value slider.
 pub(super) fn slider_fraction(slider: &Entity<SliderState>, cx: &gpui::App) -> f32 {

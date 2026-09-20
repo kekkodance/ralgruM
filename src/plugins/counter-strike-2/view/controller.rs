@@ -1,6 +1,7 @@
 use gpui::{AppContext as _, Context, Entity};
 use gpui_component::slider::{SliderEvent, SliderState, SliderValue};
 
+use super::slider::{ACTION_MUTE_POSITION, ACTION_SLIDER_MAX};
 use super::{ActionSetting, Cs2SettingsDialog, FadeSetting};
 use crate::dialog_layout::{DialogCloseMotion, DialogCloseTarget};
 use crate::plugins::counter_strike_2::{
@@ -8,7 +9,6 @@ use crate::plugins::counter_strike_2::{
     settings::{PlaybackAction, Settings},
 };
 
-const ACTION_SLIDER_MAX: f32 = 120.0;
 const ACTION_PAUSE_END: f32 = 5.0;
 const ACTION_MUTE_END: f32 = 15.0;
 const ACTION_VOLUME_START: f32 = 16.0;
@@ -44,7 +44,6 @@ impl Cs2SettingsDialog {
             between_rounds,
             fade_out,
             fade_in,
-            pending_snap: None,
             error: None,
             repairing: false,
             scroll: gpui::ScrollHandle::new(),
@@ -72,10 +71,6 @@ impl Cs2SettingsDialog {
             ActionSetting::PlayerDead => self.settings.player_dead = action,
             ActionSetting::BetweenRounds => self.settings.between_rounds = action,
         }
-        // Snap the thumb while it is being dragged, not only on release, so
-        // the detents hold visually during the hold. set_value does not emit
-        // Change, so this cannot loop.
-        self.pending_snap = Some((setting, action_position(action)));
         if matches!(event, SliderEvent::Release(_)) {
             self.persist(cx);
         }
@@ -151,14 +146,6 @@ impl Cs2SettingsDialog {
         })
         .detach();
     }
-
-    pub(super) fn action_slider_for(&self, setting: ActionSetting) -> Entity<SliderState> {
-        match setting {
-            ActionSetting::ActiveRound => self.active_round.clone(),
-            ActionSetting::PlayerDead => self.player_dead.clone(),
-            ActionSetting::BetweenRounds => self.between_rounds.clone(),
-        }
-    }
 }
 
 impl DialogCloseTarget for Cs2SettingsDialog {
@@ -227,13 +214,19 @@ fn action_from_position(value: f32) -> PlaybackAction {
 fn action_position(action: PlaybackAction) -> f32 {
     match action {
         PlaybackAction::Pause => 0.0,
-        PlaybackAction::Mute => 10.0,
+        PlaybackAction::Mute => ACTION_MUTE_POSITION,
         PlaybackAction::Volume(percent) => {
             ACTION_VOLUME_START
                 + (f32::from(percent.clamp(1, 100)) - 1.0) / 99.0
                     * (ACTION_SLIDER_MAX - ACTION_VOLUME_START)
         }
     }
+}
+
+/// Paint fraction for the action sliders, derived from the dialog's current
+/// action rather than the raw slider entity so a drag cannot fight a snap.
+pub(super) fn action_fraction(action: PlaybackAction) -> f32 {
+    action_position(action) / ACTION_SLIDER_MAX
 }
 
 #[cfg(test)]
