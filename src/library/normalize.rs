@@ -159,6 +159,11 @@ pub(crate) fn track(value: &Value) -> Track {
             || value_string(value.get("EXPLICIT_TRACK_CONTENT")) == "1"
             || value.get("explicit_lyrics").and_then(Value::as_bool) == Some(true)
             || title.to_ascii_lowercase().contains("explicit"),
+        ai_generated: value
+            .get("hasIdentifiedAIContent")
+            .or_else(|| value.get("ai_generated"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         // Deezer track links are derived from the numeric id.
         service_url: String::new(),
     }

@@ -42,9 +42,9 @@ pub(crate) use media_source::{AudioFormat, DownloadOutput, ProgressCallback, Pro
 pub(crate) use queue::QueuePanel;
 pub(crate) use resolver::{ResolvedSource, StreamResolver};
 pub(crate) use state::{
-    DeezerFlowKind, ExtensionApply, PlaybackContext, PlaybackProvider, PlaybackState,
-    PlaybackStatus, PlaybackTrack, PreviousAction, QueueExtensionTicket, RepeatMode, RightSidebar,
-    VolumeIconLevel,
+    ContentPreferences, DeezerFlowKind, ExtensionApply, PlaybackContext, PlaybackProvider,
+    PlaybackState, PlaybackStatus, PlaybackTrack, PreviousAction, QueueExtensionTicket, RepeatMode,
+    RightSidebar, VolumeIconLevel,
 };
 pub(crate) use track_info::{ResolvedTrackInfo, TrackInfoProbe, describe_track_info};
 pub(crate) use view::{AudioOutputSettings, PlaybackModel};

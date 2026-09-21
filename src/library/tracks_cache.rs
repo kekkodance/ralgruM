@@ -60,6 +60,8 @@ struct StoredTrack {
     duration: u64,
     artwork: String,
     explicit: bool,
+    #[serde(default)]
+    ai_generated: bool,
     service_url: String,
 }
 
@@ -269,6 +271,7 @@ impl From<&Track> for StoredTrack {
             duration: track.duration,
             artwork: track.artwork.clone(),
             explicit: track.explicit,
+            ai_generated: track.ai_generated,
             service_url: track.service_url.clone(),
         }
     }
@@ -292,6 +295,7 @@ impl From<StoredTrack> for Track {
             duration: track.duration,
             artwork: track.artwork,
             explicit: track.explicit,
+            ai_generated: track.ai_generated,
             service_url: track.service_url,
         }
     }
@@ -341,7 +345,9 @@ pub(super) fn enrich_live_page(cached: Option<&Page>, live: &Page) -> Page {
             .get(id.as_str())
             .and_then(|tracks| tracks.get(*occurrence))
         {
+            let ai_generated = track.ai_generated;
             *track = (*cached_track).clone();
+            track.ai_generated = ai_generated;
         }
         *occurrence += 1;
     }
@@ -475,6 +481,7 @@ mod tests {
                 duration: 123,
                 artwork: "https://example.test/cover.jpg".into(),
                 explicit: true,
+                ai_generated: true,
                 service_url: String::new(),
             },
             Track {
@@ -659,10 +666,12 @@ mod tests {
 
     #[test]
     fn enrichment_matches_duplicate_occurrences_without_changing_live_shape() {
-        let cached = fixture_page("rich cache");
+        let mut cached = fixture_page("rich cache");
+        cached.tracks[0].ai_generated = false;
         let live = fixture_page("raw response");
         let enriched = enrich_live_page(Some(&cached), &live);
         assert_eq!(enriched.tracks[0].title, "First rich cache");
+        assert!(enriched.tracks[0].ai_generated);
         assert_eq!(enriched.tracks[1].title, "Duplicate");
         assert_eq!(enrich_live_page(None, &live).tracks, live.tracks);
     }

@@ -16,6 +16,7 @@ use crate::{
     settings::AccountState,
 };
 
+mod ai_content;
 mod automation_control;
 mod configuration;
 mod helpers;
@@ -28,9 +29,9 @@ use output_switch::{OutputResume, restore_output_state};
 
 use super::state::{ExactQueueAppend, ExactQueueAppendTicket};
 use super::{
-    AudioCache, DeezerFlowKind, ExtensionApply, PlaybackContext, PlaybackProvider, PlaybackState,
-    PlaybackStatus, PlaybackTrack, PreviousAction, QueueExtensionTicket, ResolvedTrackInfo,
-    RightSidebar, asio_drivers,
+    AudioCache, ContentPreferences, DeezerFlowKind, ExtensionApply, PlaybackContext,
+    PlaybackProvider, PlaybackState, PlaybackStatus, PlaybackTrack, PreviousAction,
+    QueueExtensionTicket, ResolvedTrackInfo, RightSidebar, asio_drivers,
     deezer_extension::{self, ExtensionObserverKey},
     engine::{AudioEngine, AudioOutputTarget, RodioEngine, SeekCompletion, SeekOutcome},
     fade::{
@@ -85,6 +86,10 @@ pub(crate) struct PlaybackModel {
     asio_bridge_origin: Option<AudioOutputTarget>,
     queued_output_request: Option<(bool, Option<String>, Option<String>)>,
     pending_output_resume: Option<OutputResume>,
+    ai_client: Result<crate::search::SearchClient, String>,
+    ai_enrichment_abort: Option<tokio::task::AbortHandle>,
+    ai_enrichment_id: u64,
+    ai_warning_shown: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -379,8 +384,7 @@ impl PlaybackModel {
         record_deezer_plays: bool,
         listen_history_changed: Arc<ListenHistorySignal>,
         playback_preferences: (f32, bool, super::state::RepeatMode, bool),
-        skip_explicit: bool,
-        block_ai: bool,
+        content_preferences: ContentPreferences,
         sidebar_preferences: (bool, RightSidebar),
         media: MediaSession,
         cx: &mut Context<Self>,
@@ -389,8 +393,8 @@ impl PlaybackModel {
         state.restore_volume(playback_preferences.0, playback_preferences.1);
         state.set_repeat_mode(playback_preferences.2);
         state.set_shuffle_enabled(playback_preferences.3);
-        let _ = state.set_skip_explicit(skip_explicit);
-        let _ = state.set_block_ai(block_ai);
+        let _ = state.set_skip_explicit(content_preferences.block_explicit);
+        let _ = state.set_block_ai(content_preferences.block_ai);
         state.restore_sidebar(sidebar_preferences.0, sidebar_preferences.1);
         let seek_slider = cx.new(|_| {
             SliderState::new()
@@ -468,6 +472,10 @@ impl PlaybackModel {
             asio_bridge_origin: None,
             queued_output_request: None,
             pending_output_resume: None,
+            ai_client: crate::search::SearchClient::new().map_err(|error| error.message),
+            ai_enrichment_abort: None,
+            ai_enrichment_id: 0,
+            ai_warning_shown: false,
         };
         cx.subscribe(&seek_slider, |this, _, event: &SliderEvent, cx| {
             if let SliderEvent::Change(value) = event {
@@ -1143,6 +1151,10 @@ impl PlaybackModel {
         if let Some(generation) = self.state.next() {
             self.start(generation, cx);
         } else {
+            self.standby = StandbyPhase::Idle;
+            if let Ok(engine) = self.engine.as_mut() {
+                engine.stop();
+            }
             self.sync_discord();
             cx.notify();
         }

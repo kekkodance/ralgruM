@@ -1743,6 +1743,7 @@ fn track(value: &Value) -> Track {
                 .and_then(Value::as_bool)
                 == Some(true)
             || title.to_ascii_lowercase().contains("explicit"),
+        ai_generated: false,
         service_url: crate::search::soundcloud_service_url(value),
     }
 }

@@ -469,12 +469,22 @@ pub(super) fn current_text_intrinsic_width(
     show_explicit: bool,
     show_ai: bool,
 ) -> f32 {
-    let text_width = text_measure_width(window, title, 14., FontWeight::SEMIBOLD)
-        .max(text_measure_width(window, artist, 12., FontWeight::NORMAL));
     // Content badges reserve their footprints next to the title: the explicit
     // pill is 14px wide and the AI pill 18px, each with a 5px gap.
     let badge_width = if show_explicit { 19. } else { 0. } + if show_ai { 23. } else { 0. };
-    text_width + badge_width
+    current_text_intrinsic_width_from_measurements(
+        text_measure_width(window, title, 14., FontWeight::SEMIBOLD),
+        text_measure_width(window, artist, 12., FontWeight::NORMAL),
+        badge_width,
+    )
+}
+
+pub(super) fn current_text_intrinsic_width_from_measurements(
+    title_width: f32,
+    artist_width: f32,
+    badge_width: f32,
+) -> f32 {
+    (title_width + badge_width).max(artist_width)
 }
 
 pub(super) fn current_text_width_for_layout(

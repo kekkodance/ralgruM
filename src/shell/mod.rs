@@ -683,8 +683,10 @@ impl RalgrumApp {
                     },
                     saved.remember_playback_modes && saved.shuffle_enabled,
                 ),
-                saved.block_explicit_content,
-                saved.block_ai_content,
+                crate::playback::ContentPreferences {
+                    block_explicit: saved.block_explicit_content,
+                    block_ai: saved.block_ai_content,
+                },
                 (
                     saved.right_sidebar_open,
                     match saved.right_sidebar_view {

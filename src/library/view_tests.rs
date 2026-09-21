@@ -138,6 +138,7 @@ fn local_page_keeps_provider_origins_and_user_facing_empty_copy() {
         duration: 180,
         artwork: String::new(),
         explicit: false,
+        ai_generated: false,
         service_url: "https://soundcloud.com/a/t".into(),
     }];
     let page = local_tracks_page(&tracks);
@@ -177,6 +178,7 @@ fn local_playlist_cards_and_details_keep_local_navigation_and_origins() {
             duration: 180,
             artwork: String::new(),
             explicit: false,
+            ai_generated: false,
             service_url: String::new(),
         }],
     };

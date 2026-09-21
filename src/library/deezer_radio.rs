@@ -97,9 +97,14 @@ impl LibraryClient {
         saved_user_id: Option<String>,
     ) -> Result<DeezerRadioBatch, String> {
         let config_id = valid_flow_config_id(config_id)?;
+        let ai_arl = arl.clone();
         let (session, user_id) = self.bootstrap(arl, saved_user_id).await?;
-        self.load_flow_radio_with_session(&config_id, tuner, &user_id, session)
-            .await
+        let mut batch = self
+            .load_flow_radio_with_session(&config_id, tuner, &user_id, session)
+            .await?;
+        self.enrich_deezer_ai_tracks(&mut batch.tracks, ai_arl)
+            .await;
+        Ok(batch)
     }
 
     pub(crate) async fn load_smart_tracklist(
@@ -109,6 +114,7 @@ impl LibraryClient {
         saved_user_id: Option<String>,
     ) -> Result<DeezerSmartTracklist, String> {
         let smarttracklist_id = valid_flow_config_id(smarttracklist_id)?;
+        let ai_arl = arl.clone();
         let session = self.bootstrap(arl, saved_user_id).await?.0;
         let results = self
             .gateway_call(
@@ -118,7 +124,10 @@ impl LibraryClient {
                 session.cookie,
             )
             .await?;
-        parse_smart_tracklist(&results, &smarttracklist_id)
+        let mut smart = parse_smart_tracklist(&results, &smarttracklist_id)?;
+        self.enrich_deezer_ai_tracks(&mut smart.tracks, ai_arl)
+            .await;
+        Ok(smart)
     }
 
     pub(crate) async fn load_track_mix(
@@ -128,13 +137,18 @@ impl LibraryClient {
         saved_user_id: Option<String>,
     ) -> Result<DeezerRadioBatch, String> {
         let track_id = valid_deezer_id(track_id)?;
+        let ai_arl = arl.clone();
         let session = self.bootstrap(arl, saved_user_id).await?.0;
-        self.load_radio_operation(
-            "song.getSearchTrackMix",
-            track_mix_request(&track_id),
-            session,
-        )
-        .await
+        let mut batch = self
+            .load_radio_operation(
+                "song.getSearchTrackMix",
+                track_mix_request(&track_id),
+                session,
+            )
+            .await?;
+        self.enrich_deezer_ai_tracks(&mut batch.tracks, ai_arl)
+            .await;
+        Ok(batch)
     }
 
     pub(crate) async fn load_artist_mix(
@@ -144,13 +158,18 @@ impl LibraryClient {
         saved_user_id: Option<String>,
     ) -> Result<DeezerRadioBatch, String> {
         let artist_id = valid_deezer_id(artist_id)?;
+        let ai_arl = arl.clone();
         let session = self.bootstrap(arl, saved_user_id).await?.0;
-        self.load_radio_operation(
-            "smart.getSmartRadio",
-            artist_mix_request(&artist_id),
-            session,
-        )
-        .await
+        let mut batch = self
+            .load_radio_operation(
+                "smart.getSmartRadio",
+                artist_mix_request(&artist_id),
+                session,
+            )
+            .await?;
+        self.enrich_deezer_ai_tracks(&mut batch.tracks, ai_arl)
+            .await;
+        Ok(batch)
     }
 
     pub(crate) async fn load_similar_artists(

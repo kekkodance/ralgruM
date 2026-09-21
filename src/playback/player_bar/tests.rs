@@ -12,16 +12,28 @@ use super::{
     VolumePointerRelease, VolumePointerState, WIDE_VOLUME_INSET_PX, accessibility_seek_fraction,
     artist_routes_for_track, artwork_resource, bare_action_visual, close_player_tooltip_gap,
     current_block_width, current_favorite_key, current_subtitle, current_text_available_width,
-    current_text_width_for_layout, current_track_title, desktop_player_geometry,
-    download_available, fade_motion_geometry, fade_motion_opacity, favorite_feedback_opacity,
-    favorite_left_for_text_width, favorite_top, finish_volume_pointer_interaction,
-    pointer_seek_fraction, quality_badge_animation_key, quality_badge_opacity_endpoints,
-    quality_text_animation_key, quality_text_opacity_endpoints, rendered_artist_text,
-    rendered_current_artist_text, resolve_artwork, search_provider_for_playback,
-    seekbar_display_progress, update_last_quality_label, update_quality_label_for_generation,
-    volume_container_offsets, volume_icon_dimensions, volume_icon_speaker_offset,
-    volume_motion_mode_for_render, wide_volume_inset,
+    current_text_intrinsic_width_from_measurements, current_text_width_for_layout,
+    current_track_title, desktop_player_geometry, download_available, fade_motion_geometry,
+    fade_motion_opacity, favorite_feedback_opacity, favorite_left_for_text_width, favorite_top,
+    finish_volume_pointer_interaction, pointer_seek_fraction, quality_badge_animation_key,
+    quality_badge_opacity_endpoints, quality_text_animation_key, quality_text_opacity_endpoints,
+    rendered_artist_text, rendered_current_artist_text, resolve_artwork,
+    search_provider_for_playback, seekbar_display_progress, update_last_quality_label,
+    update_quality_label_for_generation, volume_container_offsets, volume_icon_dimensions,
+    volume_icon_speaker_offset, volume_motion_mode_for_render, wide_volume_inset,
 };
+
+#[test]
+fn current_track_badges_extend_the_title_line_only() {
+    assert_eq!(
+        current_text_intrinsic_width_from_measurements(100., 110., 42.),
+        142.
+    );
+    assert_eq!(
+        current_text_intrinsic_width_from_measurements(40., 110., 19.),
+        110.
+    );
+}
 use crate::{
     entity_navigation::{MenuRoute, MenuRouteKind},
     library::{FavoriteKey, FavoriteKind},

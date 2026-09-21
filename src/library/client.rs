@@ -85,6 +85,7 @@ pub(super) struct DeezerTracksCompletion {
 #[derive(Clone)]
 pub(super) struct DeezerTracksContinuation {
     client: LibraryClient,
+    arl: DeezerArl,
     session: DeezerSession,
     user_id: String,
     suffix: Vec<Value>,
@@ -94,6 +95,7 @@ pub(super) struct DeezerTracksContinuation {
 #[derive(Clone)]
 pub(super) struct DeezerTracksHydration {
     client: LibraryClient,
+    arl: DeezerArl,
     session: DeezerSession,
     source: Vec<Value>,
     total: usize,
@@ -104,7 +106,11 @@ impl DeezerTracksHydration {
         let ids = track_ids(&self.source);
         let hydrated = self.client.hydrate_track_values(&self.session, ids).await?;
         let items = merge_hydrated_tracks(self.source, hydrated);
-        Ok(normalized_root_page(Category::Tracks, self.total, &items))
+        let mut page = normalized_root_page(Category::Tracks, self.total, &items);
+        self.client
+            .enrich_deezer_ai_tracks(&mut page.tracks, self.arl)
+            .await;
+        Ok(page)
     }
 }
 
@@ -133,10 +139,14 @@ impl DeezerTracksContinuation {
                 Err(error) => return Err(error.into_message()),
             }
         };
-        let page = normalized_root_page(Category::Tracks, total, &items);
+        let mut page = normalized_root_page(Category::Tracks, total, &items);
+        self.client
+            .enrich_deezer_ai_tracks(&mut page.tracks, self.arl.clone())
+            .await;
         let ids = track_ids(&items);
         let hydration = (!ids.is_empty()).then(|| DeezerTracksHydration {
             client: self.client,
+            arl: self.arl,
             session: self.session,
             source: items,
             total,
@@ -300,12 +310,15 @@ impl LibraryClient {
         arl: DeezerArl,
         saved_user_id: Option<String>,
     ) -> Result<Page, String> {
+        let ai_arl = arl.clone();
         let (session, user) = self.bootstrap(arl, saved_user_id).await?;
         if category == Category::Flow {
             return self.load_flow(session).await;
         }
         if category == Category::History {
-            return self.load_history(session, &user).await;
+            let mut page = self.load_history(session, &user).await?;
+            self.enrich_deezer_ai_tracks(&mut page.tracks, ai_arl).await;
+            return Ok(page);
         }
         let (mut items, total) = self
             .fetch_root_collection(category, &session, &user)
@@ -317,7 +330,9 @@ impl LibraryClient {
                 items = merge_hydrated_tracks(items, hydrated);
             }
         }
-        Ok(normalized_root_page(category, total, &items))
+        let mut page = normalized_root_page(category, total, &items);
+        self.enrich_deezer_ai_tracks(&mut page.tracks, ai_arl).await;
+        Ok(page)
     }
 
     pub(super) async fn load_tracks_progressive(
@@ -325,11 +340,15 @@ impl LibraryClient {
         arl: DeezerArl,
         saved_user_id: Option<String>,
     ) -> Result<DeezerTracksLoad, String> {
+        let ai_arl = arl.clone();
         let (session, user) = self.bootstrap(arl, saved_user_id).await?;
         let (suffix, total) = self.fetch_tracks_preview(&session, &user).await?;
-        let page = normalized_root_page(Category::Tracks, total, &suffix);
+        let mut page = normalized_root_page(Category::Tracks, total, &suffix);
+        self.enrich_deezer_ai_tracks(&mut page.tracks, ai_arl.clone())
+            .await;
         let continuation = (!suffix.is_empty()).then(|| DeezerTracksContinuation {
             client: self.clone(),
+            arl: ai_arl,
             session,
             user_id: user.clone(),
             suffix,
@@ -340,6 +359,24 @@ impl LibraryClient {
             continuation,
             user_id: user,
         })
+    }
+
+    pub(super) async fn enrich_deezer_ai_tracks(&self, tracks: &mut [Track], arl: DeezerArl) {
+        let Ok(client) = self.search_client.clone() else {
+            return;
+        };
+        let album_ids = tracks
+            .iter()
+            .map(|track| track.album_id.clone())
+            .collect::<Vec<_>>();
+        let Ok(albums) = client.deezer_ai_content(album_ids, arl).await else {
+            return;
+        };
+        for track in tracks {
+            if let Some(ai_generated) = albums.get(&track.album_id).copied() {
+                track.ai_generated = ai_generated;
+            }
+        }
     }
 
     async fn fetch_tracks_preview(
@@ -590,6 +627,7 @@ impl LibraryClient {
     }
 
     async fn load_flow_tracks(&self, route: Route, arl: DeezerArl) -> Result<Page, String> {
+        let ai_arl = arl.clone();
         let (session, user) = self.bootstrap(arl, None).await?;
         let page = self.load_flow(session.clone()).await?;
         let flow_title = page
@@ -598,7 +636,7 @@ impl LibraryClient {
             .find(|card| card.id == route.id)
             .map(|card| card.title.clone())
             .ok_or_else(|| "Flow mix is no longer available".to_string())?;
-        let batch = self
+        let mut batch = self
             .load_flow_radio_with_session(
                 &route.id,
                 super::deezer_radio::FlowTuner::initial(super::deezer_radio::FlowMode::Default),
@@ -606,6 +644,8 @@ impl LibraryClient {
                 session,
             )
             .await?;
+        self.enrich_deezer_ai_tracks(&mut batch.tracks, ai_arl)
+            .await;
         Ok(Page {
             title: if route.title.is_empty() {
                 flow_title
@@ -1240,6 +1280,7 @@ fn search_track(track: SearchTrack) -> Track {
         duration: track.duration,
         artwork: track.artwork,
         explicit: track.explicit,
+        ai_generated: track.ai_generated,
         service_url: track.service_url,
         ..Track::default()
     }

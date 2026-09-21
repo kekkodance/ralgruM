@@ -213,6 +213,7 @@ impl SearchView {
         if artist_id.trim().is_empty() || !artist_id.bytes().all(|byte| byte.is_ascii_digit()) {
             return;
         }
+        self.cancel_artist_page_ai_request();
         let card = Card {
             kind: ResultType::Artists,
             id: artist_id,
@@ -397,11 +398,13 @@ impl SearchView {
     }
 
     pub(crate) fn close_detail(&mut self, cx: &mut Context<Self>) {
+        self.cancel_artist_page_ai_request();
         self.pending_forward_detail_scroll_reset = None;
         let offset = self
             .detail
             .back_with_scroll(self.active_vertical_scroll_offset());
         self.restore_detail_scroll(offset);
+        self.start_artist_page_ai_enrichment(cx);
         cx.notify();
     }
 
@@ -425,6 +428,7 @@ impl SearchView {
     ) {
         self.detail.toggle_artist_section(section);
         self.reset_detail_scroll();
+        self.start_artist_page_ai_enrichment(cx);
         cx.notify();
     }
 }

@@ -82,6 +82,8 @@ struct StoredTrack {
     duration: u64,
     artwork: String,
     explicit: bool,
+    #[serde(default)]
+    ai_generated: bool,
     service_url: String,
 }
 
@@ -570,6 +572,7 @@ fn stored_track(track: &LocalTrack) -> StoredTrack {
         duration: track.duration,
         artwork: track.artwork.clone(),
         explicit: track.explicit,
+        ai_generated: track.ai_generated,
         service_url: track.service_url.clone(),
     }
 }
@@ -597,6 +600,7 @@ fn local_track(track: StoredTrack) -> Result<LocalTrack, LocalPlaylistError> {
         duration: track.duration,
         artwork: track.artwork,
         explicit: track.explicit,
+        ai_generated: track.ai_generated,
         service_url: track.service_url,
     })
 }
@@ -806,6 +810,7 @@ mod tests {
             duration: 180,
             artwork: "https://example.test/artwork".into(),
             explicit: false,
+            ai_generated: false,
             service_url: "https://example.test/track".into(),
         }
     }

@@ -73,6 +73,8 @@ struct StoredItem {
     duration: u64,
     artwork: String,
     explicit: bool,
+    #[serde(default)]
+    ai_generated: bool,
     service_url: String,
 }
 
@@ -98,6 +100,7 @@ pub(crate) struct LocalTrack {
     pub(crate) duration: u64,
     pub(crate) artwork: String,
     pub(crate) explicit: bool,
+    pub(crate) ai_generated: bool,
     pub(crate) service_url: String,
 }
 
@@ -123,6 +126,7 @@ impl LocalTrack {
             duration: self.duration,
             artwork: self.artwork,
             explicit: self.explicit,
+            ai_generated: self.ai_generated,
             service_url: self.service_url,
         }
     }
@@ -142,6 +146,7 @@ impl From<&LocalTrack> for super::model::Track {
             duration: track.duration,
             artwork: track.artwork.clone(),
             explicit: track.explicit,
+            ai_generated: track.ai_generated,
             service_url: track.service_url.clone(),
         }
     }
@@ -164,6 +169,7 @@ impl From<&crate::playback::PlaybackTrack> for LocalTrack {
             duration: track.duration.as_secs(),
             artwork: track.artwork.clone(),
             explicit: track.explicit,
+            ai_generated: track.ai_generated,
             service_url: track.service_url.clone(),
         }
     }
@@ -205,6 +211,7 @@ impl TryFrom<StoredItem> for LocalTrack {
             duration: item.duration,
             artwork: item.artwork,
             explicit: item.explicit,
+            ai_generated: item.ai_generated,
             service_url: item.service_url,
         })
     }
@@ -551,6 +558,7 @@ mod tests {
             duration: 180,
             artwork: "artwork".into(),
             explicit: false,
+            ai_generated: false,
             service_url: "https://example.test/track".into(),
         }
     }
@@ -612,7 +620,7 @@ mod tests {
             downloadable: true,
             progressive: true,
             explicit: true,
-            ai_generated: false,
+            ai_generated: true,
             service_url: "https://soundcloud.example/track".into(),
         };
         let local = LocalTrack::from(&playback);
@@ -627,6 +635,7 @@ mod tests {
         assert_eq!(local.duration, 241);
         assert_eq!(local.artwork, playback.artwork);
         assert_eq!(local.explicit, playback.explicit);
+        assert_eq!(local.ai_generated, playback.ai_generated);
         assert_eq!(local.service_url, playback.service_url);
     }
 

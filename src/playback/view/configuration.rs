@@ -19,6 +19,7 @@ impl PlaybackModel {
             self.resolved_quality = None;
             self.sync_discord();
         }
+        self.refresh_deezer_ai_content(cx);
     }
 
     pub(crate) fn set_discord_presence(&mut self, enabled: bool) {
@@ -38,6 +39,11 @@ impl PlaybackModel {
             self.next(cx);
         } else {
             cx.notify();
+        }
+        if enabled {
+            self.refresh_deezer_ai_content(cx);
+        } else {
+            self.ai_warning_shown = false;
         }
     }
 
@@ -113,6 +119,9 @@ impl PlaybackModel {
                 } else if added > 0 {
                     cx.notify();
                 }
+                if added > 0 {
+                    self.refresh_deezer_ai_content(cx);
+                }
                 true
             }
         }
@@ -148,6 +157,7 @@ impl PlaybackModel {
             self.state.replace_context(context);
             self.reset_extension_state();
             cx.notify();
+            self.refresh_deezer_ai_content(cx);
         } else {
             self.replace_queue(tracks, 0, cx);
             self.set_context(context, cx);
@@ -269,6 +279,9 @@ impl PlaybackModel {
         {
             ExtensionApply::Stale => Err(()),
             ExtensionApply::Applied { added } => {
+                if added > 0 {
+                    self.refresh_deezer_ai_content(cx);
+                }
                 let resume_after_extension =
                     added > 0 && self.state.status == PlaybackStatus::Ended;
                 if deezer_extension::should_retry_duplicate_batch(

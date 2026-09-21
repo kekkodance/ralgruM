@@ -41,6 +41,12 @@ pub(crate) struct PlaybackTrack {
     pub(crate) service_url: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ContentPreferences {
+    pub(crate) block_explicit: bool,
+    pub(crate) block_ai: bool,
+}
+
 fn queue_identity(tracks: &[PlaybackTrack]) -> Vec<(PlaybackProvider, String)> {
     tracks
         .iter()
@@ -119,7 +125,7 @@ impl PlaybackTrack {
             downloadable: false,
             progressive: false,
             explicit: track.explicit,
-            ai_generated: false,
+            ai_generated: track.ai_generated,
             service_url: track.service_url.clone(),
         }
     }

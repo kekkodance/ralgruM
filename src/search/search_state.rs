@@ -17,6 +17,79 @@ pub(super) struct ActiveRequest {
     pub(super) abort: AbortHandle,
 }
 
+fn artist_page_ai_album_ids(
+    artist: &super::models::ArtistPage,
+    expanded: Option<super::detail::ArtistSection>,
+) -> Vec<String> {
+    use super::detail::ArtistSection;
+
+    let track_limit = match expanded {
+        None => super::detail::artist_section_preview_limit(ArtistSection::PopularTracks),
+        Some(ArtistSection::PopularTracks) => usize::MAX,
+        Some(_) => 0,
+    };
+    let album_limit = match expanded {
+        None => super::detail::artist_section_preview_limit(ArtistSection::Albums),
+        Some(ArtistSection::Albums) => usize::MAX,
+        Some(_) => 0,
+    };
+    let featured_limit = match expanded {
+        None => super::detail::artist_section_preview_limit(ArtistSection::Featured),
+        Some(ArtistSection::Featured) => usize::MAX,
+        Some(_) => 0,
+    };
+
+    artist
+        .popular_tracks
+        .iter()
+        .take(track_limit)
+        .filter(|track| track.source == Provider::Deezer)
+        .map(|track| track.album_id.clone())
+        .chain(
+            artist
+                .albums
+                .iter()
+                .take(album_limit)
+                .filter(|card| card.source == Provider::Deezer)
+                .map(|card| card.id.clone()),
+        )
+        .chain(
+            artist
+                .featured
+                .iter()
+                .take(featured_limit)
+                .filter(|card| card.source == Provider::Deezer)
+                .map(|card| card.id.clone()),
+        )
+        .collect()
+}
+
+fn apply_artist_page_ai_content(
+    artist: &mut super::models::ArtistPage,
+    albums: &std::collections::HashMap<String, bool>,
+) -> bool {
+    let mut changed = false;
+    for track in &mut artist.popular_tracks {
+        if track.source == Provider::Deezer
+            && let Some(ai_generated) = albums.get(&track.album_id).copied()
+            && track.ai_generated != ai_generated
+        {
+            track.ai_generated = ai_generated;
+            changed = true;
+        }
+    }
+    for card in artist.albums.iter_mut().chain(artist.featured.iter_mut()) {
+        if card.source == Provider::Deezer
+            && let Some(ai_generated) = albums.get(&card.id).copied()
+            && card.ai_generated != ai_generated
+        {
+            card.ai_generated = ai_generated;
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SearchRequestKey {
     source: Source,
@@ -700,9 +773,19 @@ impl SearchView {
         cx: &mut Context<Self>,
     ) {
         self.cancel_deezer_ai_enrichment_request();
-        let Some(arl) = deezer_arl else { return };
-        let Ok(client) = self.client.clone() else {
+        let Some(arl) = deezer_arl else {
+            self.report_deezer_ai_failure(
+                "Sign in to Deezer so ralgruM can identify AI generated tracks.",
+                cx,
+            );
             return;
+        };
+        let client = match self.client.clone() {
+            Ok(client) => client,
+            Err(error) => {
+                self.report_deezer_ai_failure(error.message.as_str(), cx);
+                return;
+            }
         };
         let album_ids = self
             .state
@@ -738,19 +821,24 @@ impl SearchView {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.clear_deezer_ai_enrichment_request(generation, request_id);
-                let Ok(Ok(albums)) = result else {
+                if this.account_scope != account_scope || this.state.generation() != generation {
                     return;
-                };
-                if this.account_scope == account_scope {
-                    let search_changed = this.state.apply_deezer_ai_content(generation, &albums);
-                    this.playback.update(cx, |playback, cx| {
-                        if playback.state.apply_deezer_ai_content(&albums) {
-                            cx.notify();
-                        }
-                    });
-                    if search_changed {
-                        cx.notify();
+                }
+                let albums = match result {
+                    Ok(Ok(albums)) => albums,
+                    Ok(Err(error)) => {
+                        this.report_deezer_ai_failure(error.message.as_str(), cx);
+                        return;
                     }
+                    Err(_) => return,
+                };
+                this.ai_failure_notified = false;
+                let search_changed = this.state.apply_deezer_ai_content(generation, &albums);
+                this.playback.update(cx, |playback, cx| {
+                    playback.apply_deezer_ai_content(&albums, cx);
+                });
+                if search_changed {
+                    cx.notify();
                 }
             })
             .ok();
@@ -764,21 +852,23 @@ impl SearchView {
     pub(super) fn start_artist_page_ai_enrichment(&mut self, cx: &mut Context<Self>) {
         self.cancel_artist_page_ai_request();
         let Some(arl) = self.search_credentials(cx).0 else {
+            self.report_deezer_ai_failure(
+                "Sign in to Deezer so ralgruM can identify AI generated tracks.",
+                cx,
+            );
             return;
         };
-        let Ok(client) = self.client.clone() else {
-            return;
+        let client = match self.client.clone() {
+            Ok(client) => client,
+            Err(error) => {
+                self.report_deezer_ai_failure(error.message.as_str(), cx);
+                return;
+            }
         };
         let album_ids = match &self.detail.state {
             super::detail::DetailState::Results(page) | super::detail::DetailState::Empty(page) => {
                 page.artist.as_ref().map(|artist| {
-                    artist
-                        .albums
-                        .iter()
-                        .chain(artist.featured.iter())
-                        .filter(|card| card.source == Provider::Deezer)
-                        .map(|card| card.id.clone())
-                        .collect::<Vec<_>>()
+                    artist_page_ai_album_ids(artist, self.detail.expanded_artist_section)
                 })
             }
             _ => None,
@@ -802,13 +892,19 @@ impl SearchView {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.clear_artist_page_ai_request(generation, request_id);
-                let Ok(Ok(albums)) = result else {
+                if this.account_scope != account_scope || this.detail.generation() != generation {
                     return;
+                }
+                let albums = match result {
+                    Ok(Ok(albums)) => albums,
+                    Ok(Err(error)) => {
+                        this.report_deezer_ai_failure(error.message.as_str(), cx);
+                        return;
+                    }
+                    Err(_) => return,
                 };
-                if this.account_scope != account_scope
-                    || this.detail.generation() != generation
-                    || albums.is_empty()
-                {
+                this.ai_failure_notified = false;
+                if albums.is_empty() {
                     return;
                 }
                 let Some(artist) = (match &mut this.detail.state {
@@ -818,15 +914,10 @@ impl SearchView {
                 }) else {
                     return;
                 };
-                let mut changed = false;
-                for card in artist.albums.iter_mut().chain(artist.featured.iter_mut()) {
-                    if let Some(ai_generated) = albums.get(&card.id).copied() {
-                        if card.ai_generated != ai_generated {
-                            card.ai_generated = ai_generated;
-                            changed = true;
-                        }
-                    }
-                }
+                let changed = apply_artist_page_ai_content(artist, &albums);
+                this.playback.update(cx, |playback, cx| {
+                    playback.apply_deezer_ai_content(&albums, cx);
+                });
                 if changed {
                     cx.notify();
                 }
@@ -834,5 +925,105 @@ impl SearchView {
             .ok();
         })
         .detach();
+    }
+
+    fn report_deezer_ai_failure(&mut self, detail: &str, cx: &mut Context<Self>) {
+        if self.ai_failure_notified || !self.playback.read(cx).state.block_ai {
+            return;
+        }
+        self.ai_failure_notified = true;
+        crate::toast::push_global(
+            cx,
+            crate::toast::ToastKind::Warning,
+            "AI content blocking unavailable",
+            Some(detail.to_owned().into()),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::{Card, Track};
+
+    fn deezer_track(index: usize) -> Track {
+        Track {
+            album_id: format!("{}", 1_000 + index),
+            source: Provider::Deezer,
+            ..Track::default()
+        }
+    }
+
+    fn deezer_card(index: usize) -> Card {
+        Card {
+            id: format!("{}", 2_000 + index),
+            source: Provider::Deezer,
+            ..Card::default()
+        }
+    }
+
+    #[test]
+    fn collapsed_artist_ai_lookup_only_requests_visible_sections() {
+        let artist = super::super::models::ArtistPage {
+            popular_tracks: (0..30).map(deezer_track).collect(),
+            albums: (0..30).map(deezer_card).collect(),
+            featured: (30..60).map(deezer_card).collect(),
+            ..Default::default()
+        };
+
+        let ids = artist_page_ai_album_ids(&artist, None);
+
+        assert_eq!(ids.len(), 5 + 12 + 12);
+        assert_eq!(ids.first().map(String::as_str), Some("1000"));
+        assert_eq!(ids.get(5).map(String::as_str), Some("2000"));
+        assert_eq!(ids.get(17).map(String::as_str), Some("2030"));
+    }
+
+    #[test]
+    fn expanded_artist_ai_lookup_only_requests_selected_section() {
+        let artist = super::super::models::ArtistPage {
+            popular_tracks: (0..5).map(deezer_track).collect(),
+            albums: (0..30).map(deezer_card).collect(),
+            featured: (30..60).map(deezer_card).collect(),
+            ..Default::default()
+        };
+
+        let ids =
+            artist_page_ai_album_ids(&artist, Some(super::super::detail::ArtistSection::Albums));
+
+        assert_eq!(ids.len(), 30);
+        assert!(
+            ids.iter()
+                .all(|id| ("2000"..="2029").contains(&id.as_str()))
+        );
+    }
+
+    #[test]
+    fn artist_ai_results_update_deezer_tracks_and_cards_only() {
+        let mut artist = super::super::models::ArtistPage {
+            popular_tracks: vec![
+                deezer_track(0),
+                Track {
+                    album_id: "1000".into(),
+                    source: Provider::SoundCloud,
+                    ..Track::default()
+                },
+            ],
+            albums: vec![deezer_card(0)],
+            featured: vec![deezer_card(1)],
+            ..Default::default()
+        };
+        let albums = std::collections::HashMap::from([
+            ("1000".into(), true),
+            ("2000".into(), true),
+            ("2001".into(), true),
+        ]);
+
+        assert!(apply_artist_page_ai_content(&mut artist, &albums));
+        assert!(artist.popular_tracks[0].ai_generated);
+        assert!(!artist.popular_tracks[1].ai_generated);
+        assert!(artist.albums[0].ai_generated);
+        assert!(artist.featured[0].ai_generated);
+        assert!(!apply_artist_page_ai_content(&mut artist, &albums));
     }
 }

@@ -374,6 +374,7 @@ mod tests {
                     duration: 1,
                     artwork: String::new(),
                     explicit: false,
+                    ai_generated: false,
                     service_url: String::new(),
                 }],
             })

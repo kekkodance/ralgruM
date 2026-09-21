@@ -658,7 +658,8 @@ fn render_provider_header_snapshot(
         description: page.description.clone(),
         provider: route.source,
         kind,
-        ai_generated: false,
+        ai_generated: kind == crate::search::ResultType::Albums
+            && page.tracks.iter().any(|track| track.ai_generated),
         total: page.owns_top_level_count().then_some(page.total),
         actions,
         body_fills: false,

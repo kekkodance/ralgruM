@@ -19,6 +19,7 @@ impl PlaybackModel {
         let should_play = self.state.status == PlaybackStatus::Ended;
         let count = self.state.insert_queue_additions(additions, last);
         self.reset_extension_state();
+        self.refresh_deezer_ai_content(cx);
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Success,
@@ -129,6 +130,7 @@ impl PlaybackModel {
         let should_play = self.state.status == PlaybackStatus::Ended;
         self.state.insert_queue_additions(vec![track], last);
         self.reset_extension_state();
+        self.refresh_deezer_ai_content(cx);
         if should_play {
             self.next(cx);
         } else {

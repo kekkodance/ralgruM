@@ -130,6 +130,7 @@ fn source_conversions_preserve_all_artist_refs_and_ids() {
     let library_track = crate::library::Track {
         artists: artists.clone(),
         artist: "Primary, Collaborator".into(),
+        ai_generated: true,
         ..crate::library::Track::default()
     };
 
@@ -138,6 +139,9 @@ fn source_conversions_preserve_all_artist_refs_and_ids() {
     assert_eq!(
         PlaybackTrack::from_library(&library_track, crate::search::Provider::Deezer).artists,
         artists
+    );
+    assert!(
+        PlaybackTrack::from_library(&library_track, crate::search::Provider::Deezer).ai_generated
     );
 }
 
@@ -151,10 +155,17 @@ fn deezer_ai_content_updates_matching_queue_albums_only() {
     state.queue[0].album_id = "10".into();
     state.queue[1].provider = PlaybackProvider::SoundCloud;
     state.queue[1].album_id = "10".into();
+    state.current_index = Some(0);
+    state.block_ai = true;
 
     assert!(state.apply_deezer_ai_content(&std::collections::HashMap::from([("10".into(), true)])));
     assert!(state.queue[0].ai_generated);
     assert!(!state.queue[1].ai_generated);
+    assert!(
+        state
+            .current()
+            .is_some_and(|track| state.content_blocked(track))
+    );
 }
 
 fn explicit_tracks(ids: &[usize]) -> Vec<PlaybackTrack> {
@@ -461,6 +472,7 @@ fn content_blocked_covers_explicit_and_ai_independently() {
     assert!(state.content_blocked(&ai_track));
 }
 
+#[test]
 fn set_block_ai_reports_blocked_current_and_defaults_off() {
     let mut state = PlaybackState::default();
     let mut ai_track = tracks()[0].clone();

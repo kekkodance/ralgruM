@@ -178,6 +178,7 @@ pub(crate) struct Track {
     pub duration: u64,
     pub artwork: String,
     pub explicit: bool,
+    pub ai_generated: bool,
     /// Provider-supplied public web URL (SoundCloud permalink). Deezer links
     /// are derived from the numeric id instead.
     pub service_url: String,
