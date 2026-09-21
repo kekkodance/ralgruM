@@ -694,6 +694,14 @@ impl SearchView {
             .iter()
             .filter(|track| track.source == Provider::Deezer)
             .map(|track| track.album_id.clone())
+            .chain(
+                self.state
+                    .groups
+                    .albums
+                    .iter()
+                    .filter(|card| card.source == Provider::Deezer)
+                    .map(|card| card.id.clone()),
+            )
             .collect::<Vec<_>>();
         if album_ids.is_empty() {
             return;
@@ -716,10 +724,16 @@ impl SearchView {
                 let Ok(Ok(albums)) = result else {
                     return;
                 };
-                if this.account_scope == account_scope
-                    && this.state.apply_deezer_ai_content(generation, &albums)
-                {
-                    cx.notify();
+                if this.account_scope == account_scope {
+                    let search_changed = this.state.apply_deezer_ai_content(generation, &albums);
+                    this.playback.update(cx, |playback, cx| {
+                        if playback.state.apply_deezer_ai_content(&albums) {
+                            cx.notify();
+                        }
+                    });
+                    if search_changed {
+                        cx.notify();
+                    }
                 }
             })
             .ok();

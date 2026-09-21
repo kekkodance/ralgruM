@@ -612,6 +612,7 @@ mod tests {
             downloadable: true,
             progressive: true,
             explicit: true,
+            ai_generated: false,
             service_url: "https://soundcloud.example/track".into(),
         };
         let local = LocalTrack::from(&playback);

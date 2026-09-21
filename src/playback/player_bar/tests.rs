@@ -78,6 +78,7 @@ fn current_track_actions_match_provider_availability() {
         artwork: String::new(),
         duration: Duration::ZERO,
         explicit: false,
+        ai_generated: false,
         service_url: String::new(),
     };
     let deezer = track(PlaybackProvider::Deezer);
@@ -1420,6 +1421,7 @@ fn ended_queue_keeps_the_last_track_artist_visible() {
         artwork: String::new(),
         duration: Duration::from_secs(10),
         explicit: false,
+        ai_generated: false,
         service_url: String::new(),
     };
     assert_eq!(
@@ -1469,6 +1471,7 @@ fn cached_loading_keeps_the_artist_visible() {
         artwork: String::new(),
         duration: Duration::from_secs(10),
         explicit: false,
+        ai_generated: false,
         service_url: String::new(),
     };
 
@@ -1498,6 +1501,7 @@ fn pending_load_titles_the_bar_instead_of_claiming_nothing_plays() {
         artwork: String::new(),
         duration: Duration::from_secs(10),
         explicit: false,
+        ai_generated: false,
         service_url: String::new(),
     };
 

@@ -160,6 +160,11 @@ pub(super) fn render_current(
     let subtitle = current_subtitle(track, status, loading_from_cache);
     let rendered_artist =
         rendered_current_artist_text(track, status, subtitle, artist_navigation.as_ref());
+    let show_ai = track.is_some_and(|track| track.ai_generated)
+        && matches!(
+            status,
+            PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
+        );
     // Fixed side widths only on desktop layouts; narrow rows stretch, so there
     // is no cheap width to compare against for overflow tooltips there. The
     // compact heart lives outside this row and does not reserve text width.
@@ -203,17 +208,39 @@ pub(super) fn render_current(
         .flex()
         .flex_col()
         .gap(px(2.))
-        .child(overflow_tooltip(
+        .child(
             div()
-                .id("player-title")
-                .truncate()
-                .text_size(px(14.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(FOREGROUND))
-                .child(title.to_owned()),
-            title,
-            text_width.map(|width| text_fits(window, title, 14., FontWeight::SEMIBOLD, px(width))),
-        ))
+                .w_full()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .child(overflow_tooltip(
+                    div()
+                        .id("player-title")
+                        .flex_shrink_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(FOREGROUND))
+                        .child(title.to_owned()),
+                    title,
+                    text_width.map(|width| {
+                        let badge_width = if show_ai { 23. } else { 0. };
+                        text_fits(
+                            window,
+                            title,
+                            14.,
+                            FontWeight::SEMIBOLD,
+                            px((width - badge_width).max(0.)),
+                        )
+                    }),
+                ))
+                .when(show_ai, |this| {
+                    this.child(crate::music_ui::ai_content_badge())
+                }),
+        )
         .child(overflow_tooltip(
             div()
                 .id("player-artist")

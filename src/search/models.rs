@@ -209,6 +209,7 @@ pub(crate) struct Card {
     pub(crate) subtitle: String,
     pub(crate) artwork: String,
     pub(crate) source: Provider,
+    pub(crate) ai_generated: bool,
     pub(crate) badge: String,
     pub(crate) release_date: String,
     /// Provider-supplied public web URL (SoundCloud permalink). Deezer
@@ -377,8 +378,10 @@ impl SearchState {
             return false;
         }
         let mut changed = apply_deezer_ai_to_tracks(&mut self.groups.tracks, albums);
+        changed |= apply_deezer_ai_to_cards(&mut self.groups.albums, albums);
         for snapshot in self.result_cache.values_mut() {
             changed |= apply_deezer_ai_to_tracks(&mut snapshot.groups.tracks, albums);
+            changed |= apply_deezer_ai_to_cards(&mut snapshot.groups.albums, albums);
         }
         changed
     }
@@ -742,6 +745,23 @@ fn apply_deezer_ai_to_tracks(tracks: &mut [Track], albums: &HashMap<String, bool
     changed
 }
 
+fn apply_deezer_ai_to_cards(cards: &mut [Card], albums: &HashMap<String, bool>) -> bool {
+    let mut changed = false;
+    for card in cards {
+        if card.source != Provider::Deezer || card.kind != ResultType::Albums {
+            continue;
+        }
+        let Some(ai_generated) = albums.get(&card.id).copied() else {
+            continue;
+        };
+        if card.ai_generated != ai_generated {
+            card.ai_generated = ai_generated;
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn normalize_cache_query(query: &str) -> String {
     query.trim().to_lowercase()
 }
@@ -858,12 +878,19 @@ mod tests {
                 ..Track::default()
             },
         ];
+        state.groups.albums = vec![Card {
+            kind: ResultType::Albums,
+            id: "album-1".into(),
+            source: Provider::Deezer,
+            ..Card::default()
+        }];
         let generation = state.generation();
         assert!(
             state.apply_deezer_ai_content(generation, &HashMap::from([("album-1".into(), true)]))
         );
         assert!(state.groups.tracks[0].ai_generated);
         assert!(!state.groups.tracks[1].ai_generated);
+        assert!(state.groups.albums[0].ai_generated);
 
         state.generation = state.generation.wrapping_add(1);
         assert!(

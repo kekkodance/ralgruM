@@ -1411,6 +1411,7 @@ mod tests {
             downloadable: false,
             progressive: false,
             explicit: false,
+            ai_generated: false,
             service_url: String::new(),
         };
         let mut soundcloud = deezer.clone();

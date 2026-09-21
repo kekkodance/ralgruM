@@ -439,6 +439,7 @@ async fn cache_maintenance_does_not_interrupt_cached_progressive_playback() {
         downloadable: false,
         progressive: true,
         explicit: false,
+        ai_generated: false,
         service_url: String::new(),
     };
     let (mut writer, result) = fixture
@@ -534,6 +535,7 @@ impl ResolvePath {
             downloadable: false,
             progressive: false,
             explicit: false,
+            ai_generated: false,
             service_url: String::new(),
         };
         let credentials = crate::murglar_backend::test_media_credentials();
@@ -877,6 +879,7 @@ async fn resolve_deezer_progressive_fixture(
         downloadable: false,
         progressive: false,
         explicit: false,
+        ai_generated: false,
         service_url: String::new(),
     };
     resolver

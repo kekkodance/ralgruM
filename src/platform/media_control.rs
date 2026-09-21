@@ -462,6 +462,7 @@ mod tests {
                 artwork: "https://art.example/cover.jpg".into(),
                 duration: Duration::from_secs(120),
                 explicit: false,
+                ai_generated: false,
                 service_url: String::new(),
             })
             .into_iter()

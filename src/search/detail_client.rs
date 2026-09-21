@@ -70,7 +70,9 @@ impl SearchClient {
                     if let Some(info) = album_info.as_ref() {
                         apply_deezer_metadata(&mut route, info);
                     }
-                    ai_generated = album_ai_generated;
+                    if album_ai_generated.is_some() {
+                        ai_generated = album_ai_generated;
+                    }
                     (
                         items,
                         total,

@@ -858,6 +858,7 @@ pub(crate) fn collection_card(
         is_private,
         id,
         CollectionCardTitleAlignment::KindDefault,
+        false,
     )
 }
 
@@ -881,6 +882,7 @@ pub(crate) fn local_collection_card(
         is_private,
         id,
         CollectionCardTitleAlignment::KindDefault,
+        false,
     )
 }
 
@@ -907,6 +909,7 @@ pub(crate) fn collection_card_with_title_alignment(
     is_private: Option<bool>,
     id: &str,
     title_alignment: CollectionCardTitleAlignment,
+    ai_generated: bool,
 ) -> AnyElement {
     collection_card_with_title_alignment_source(
         title,
@@ -918,6 +921,7 @@ pub(crate) fn collection_card_with_title_alignment(
         is_private,
         id,
         title_alignment,
+        ai_generated,
     )
 }
 
@@ -932,6 +936,7 @@ fn collection_card_with_title_alignment_source(
     is_private: Option<bool>,
     id: &str,
     title_alignment: CollectionCardTitleAlignment,
+    ai_generated: bool,
 ) -> AnyElement {
     // The subtitle renders whenever it carries real information. Eponymous
     // releases (an album named after its artist) must still show the artist,
@@ -955,22 +960,31 @@ fn collection_card_with_title_alignment_source(
                 .pb(px(3.))
                 .child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .when(
+                            matches!(title_alignment, CollectionCardTitleAlignment::Center)
+                                || matches!(
+                                    title_alignment,
+                                    CollectionCardTitleAlignment::KindDefault
+                                ) && matches!(kind, CardKind::Flow),
+                            |this| this.justify_center(),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_shrink_1()
+                                .truncate()
+                                .child(title.to_owned()),
+                        )
+                        .when(ai_generated, |this| this.child(ai_content_badge()))
                         .text_size(px(12.5))
                         .line_height(px(COLLECTION_CARD_TITLE_LINE_HEIGHT_PX))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_align(match title_alignment {
-                            CollectionCardTitleAlignment::Left => TextAlign::Left,
-                            CollectionCardTitleAlignment::Center => TextAlign::Center,
-                            CollectionCardTitleAlignment::KindDefault => {
-                                if matches!(kind, CardKind::Flow) {
-                                    TextAlign::Center
-                                } else {
-                                    TextAlign::Left
-                                }
-                            }
-                        })
-                        .truncate()
-                        .child(title.to_owned()),
+                        .text_align(TextAlign::Left),
                 )
                 .when(has_subtitle_row, |this| {
                     this.child(
@@ -1160,7 +1174,6 @@ pub(crate) fn track_row_with_action(
                         .gap(px(5.))
                         .child(
                             div()
-                                .flex_1()
                                 .min_w_0()
                                 .text_size(px(13.5))
                                 .font_weight(FontWeight::SEMIBOLD)
@@ -1370,14 +1383,14 @@ fn track_content_labels(labels: TrackRowLabels) -> Div {
         .items_center()
         .gap(px(4.))
         .when(labels.explicit, |this| this.child(explicit_badge()))
-        .when(labels.ai_generated, |this| this.child(ai_badge()))
+        .when(labels.ai_generated, |this| this.child(ai_content_badge()))
 }
 
 fn explicit_badge() -> Div {
     content_badge("E", 14., DANGER, 0xef444466, 0xef444426)
 }
 
-fn ai_badge() -> Div {
+pub(crate) fn ai_content_badge() -> Div {
     content_badge("AI", 18., PRIMARY, 0x6366f166, 0x6366f126)
 }
 

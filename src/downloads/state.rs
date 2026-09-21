@@ -221,6 +221,7 @@ mod tests {
                 artwork: String::new(),
                 duration: Duration::ZERO,
                 explicit: false,
+                ai_generated: false,
                 service_url: String::new(),
             },
             DownloadVariant::Standard,

@@ -16,6 +16,7 @@ fn tracks() -> Vec<PlaybackTrack> {
             artwork: String::new(),
             duration: Duration::from_secs(10),
             explicit: false,
+            ai_generated: false,
             service_url: String::new(),
         })
         .collect()
@@ -123,6 +124,7 @@ fn source_conversions_preserve_all_artist_refs_and_ids() {
     let search_track = crate::search::Track {
         artists: artists.clone(),
         artist: "Primary, Collaborator".into(),
+        ai_generated: true,
         ..crate::search::Track::default()
     };
     let library_track = crate::library::Track {
@@ -132,10 +134,27 @@ fn source_conversions_preserve_all_artist_refs_and_ids() {
     };
 
     assert_eq!(PlaybackTrack::from_search(&search_track).artists, artists);
+    assert!(PlaybackTrack::from_search(&search_track).ai_generated);
     assert_eq!(
         PlaybackTrack::from_library(&library_track, crate::search::Provider::Deezer).artists,
         artists
     );
+}
+
+#[test]
+fn deezer_ai_content_updates_matching_queue_albums_only() {
+    let mut state = PlaybackState {
+        queue: tracks(),
+        ..PlaybackState::default()
+    };
+    state.queue[0].provider = PlaybackProvider::Deezer;
+    state.queue[0].album_id = "10".into();
+    state.queue[1].provider = PlaybackProvider::SoundCloud;
+    state.queue[1].album_id = "10".into();
+
+    assert!(state.apply_deezer_ai_content(&std::collections::HashMap::from([("10".into(), true)])));
+    assert!(state.queue[0].ai_generated);
+    assert!(!state.queue[1].ai_generated);
 }
 
 fn explicit_tracks(ids: &[usize]) -> Vec<PlaybackTrack> {

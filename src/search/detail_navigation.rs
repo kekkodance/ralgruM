@@ -359,6 +359,7 @@ impl SearchView {
                             subtitle: artist.subtitle,
                             artwork: artist.artwork,
                             source: Provider::Deezer,
+                            ai_generated: false,
                             badge: artist.badge,
                             release_date: String::new(),
                             service_url: String::new(),

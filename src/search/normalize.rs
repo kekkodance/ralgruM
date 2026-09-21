@@ -439,6 +439,7 @@ fn deezer_card(kind: ResultType, value: &Value) -> Card {
         subtitle,
         artwork,
         source: Provider::Deezer,
+        ai_generated: boolean(value.get("hasIdentifiedAIContent")).unwrap_or(false),
         badge,
         release_date: release_date(value),
         service_url: String::new(),
@@ -461,6 +462,7 @@ fn soundcloud_card(kind: ResultType, value: &Value) -> Card {
             subtitle: soundcloud_artist_subtitle(value),
             artwork: soundcloud_artwork(value),
             source: Provider::SoundCloud,
+            ai_generated: false,
             badge: String::new(),
             release_date: release_date(value),
             service_url: soundcloud_service_url(value),
@@ -506,6 +508,7 @@ fn soundcloud_card(kind: ResultType, value: &Value) -> Card {
             }
         },
         source: Provider::SoundCloud,
+        ai_generated: false,
         badge: if kind == ResultType::Albums {
             release_year(value)
         } else {
@@ -758,11 +761,13 @@ mod tests {
             ResultType::Albums,
             &json!({
                 "ALB_ID": "2", "ALB_TITLE": "Album", "ART_NAME": "Artist",
-                "DIGITAL_RELEASE_DATE": "2024-01-01"
+                "DIGITAL_RELEASE_DATE": "2024-01-01",
+                "hasIdentifiedAIContent": true
             }),
         );
         assert_eq!(album.subtitle, "Artist");
         assert_eq!(album.badge, "2024");
+        assert!(album.ai_generated);
         let playlist = soundcloud_card(
             ResultType::Playlists,
             &json!({

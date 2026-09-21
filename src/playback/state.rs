@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use crate::{library, search};
 
@@ -32,6 +35,7 @@ pub(crate) struct PlaybackTrack {
     pub(crate) downloadable: bool,
     pub(crate) progressive: bool,
     pub(crate) explicit: bool,
+    pub(crate) ai_generated: bool,
     /// Provider-supplied public web URL (SoundCloud permalink). Deezer links
     /// are derived from the numeric id when a link is needed.
     pub(crate) service_url: String,
@@ -95,6 +99,7 @@ impl PlaybackTrack {
             downloadable: track.downloadable,
             progressive: track.progressive,
             explicit: track.explicit,
+            ai_generated: track.ai_generated,
             service_url: track.service_url.clone(),
         }
     }
@@ -114,6 +119,7 @@ impl PlaybackTrack {
             downloadable: false,
             progressive: false,
             explicit: track.explicit,
+            ai_generated: false,
             service_url: track.service_url.clone(),
         }
     }
@@ -369,6 +375,23 @@ impl Default for PlaybackState {
 }
 
 impl PlaybackState {
+    pub(crate) fn apply_deezer_ai_content(&mut self, albums: &HashMap<String, bool>) -> bool {
+        let mut changed = false;
+        for track in &mut self.queue {
+            if track.provider != PlaybackProvider::Deezer || track.album_id.is_empty() {
+                continue;
+            }
+            let Some(ai_generated) = albums.get(&track.album_id).copied() else {
+                continue;
+            };
+            if track.ai_generated != ai_generated {
+                track.ai_generated = ai_generated;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub(crate) fn current(&self) -> Option<&PlaybackTrack> {
         self.current_index.and_then(|index| self.queue.get(index))
     }

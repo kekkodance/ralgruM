@@ -243,6 +243,7 @@ mod tests {
             downloadable,
             progressive: true,
             explicit: false,
+            ai_generated: false,
             service_url: String::new(),
         }
     }

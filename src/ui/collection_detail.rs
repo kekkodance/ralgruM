@@ -102,6 +102,7 @@ pub(crate) struct CollectionCardPresentation {
     pub(crate) show_badge: bool,
     pub(crate) show_privacy: bool,
     pub(crate) title_alignment: CollectionCardTitleAlignment,
+    pub(crate) ai_generated: bool,
 }
 
 impl CollectionCardPresentation {
@@ -111,6 +112,7 @@ impl CollectionCardPresentation {
             show_badge: false,
             show_privacy: false,
             title_alignment: CollectionCardTitleAlignment::Left,
+            ai_generated: false,
         }
     }
 }
@@ -122,6 +124,7 @@ impl Default for CollectionCardPresentation {
             show_badge: true,
             show_privacy: true,
             title_alignment: CollectionCardTitleAlignment::KindDefault,
+            ai_generated: false,
         }
     }
 }
@@ -150,6 +153,7 @@ pub(crate) fn collection_card_content_with_presentation(
         effective_privacy,
         id,
         presentation.title_alignment,
+        presentation.ai_generated,
     )
 }
 
@@ -160,6 +164,7 @@ pub(crate) struct ProviderHeaderSpec {
     pub(crate) description: String,
     pub(crate) provider: Provider,
     pub(crate) kind: ResultType,
+    pub(crate) ai_generated: bool,
     pub(crate) total: Option<usize>,
     pub(crate) actions: Vec<AnyElement>,
     pub(crate) body_fills: bool,
@@ -217,6 +222,7 @@ pub(crate) fn render_provider_header(spec: ProviderHeaderSpec) -> AnyElement {
         description,
         provider,
         kind,
+        ai_generated,
         total,
         actions,
         body_fills: _,
@@ -229,6 +235,7 @@ pub(crate) fn render_provider_header(spec: ProviderHeaderSpec) -> AnyElement {
         HeaderContext::Provider(provider),
         total,
         actions,
+        ai_generated,
     );
     div()
         .w_full()
@@ -259,6 +266,7 @@ pub(crate) fn render_local_playlist_header(spec: LocalPlaylistHeaderSpec) -> Any
         HeaderContext::Local,
         None,
         spec.actions,
+        false,
     )
 }
 
@@ -269,6 +277,7 @@ fn render_collection_header(
     context: HeaderContext,
     total: Option<usize>,
     actions: Vec<AnyElement>,
+    ai_generated: bool,
 ) -> AnyElement {
     let mut title_block = div()
         .flex_1()
@@ -286,11 +295,16 @@ fn render_collection_header(
                 .child(
                     div()
                         .min_w_0()
-                        .truncate()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
                         .text_size(px(18.))
                         .line_height(px(22.5))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(title),
+                        .child(div().min_w_0().flex_shrink_1().truncate().child(title))
+                        .when(ai_generated, |this| {
+                            this.child(crate::music_ui::ai_content_badge())
+                        }),
                 )
                 .when(!metadata.trim().is_empty(), |this| {
                     this.child(

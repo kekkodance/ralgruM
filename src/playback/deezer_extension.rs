@@ -89,6 +89,7 @@ mod tests {
             downloadable: false,
             progressive: false,
             explicit,
+            ai_generated: false,
             service_url: String::new(),
         }
     }

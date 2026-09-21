@@ -228,6 +228,7 @@ impl Card {
             subtitle: self.subtitle.clone(),
             artwork: self.artwork.clone(),
             source: self.source,
+            ai_generated: false,
             badge: self.badge.clone(),
             release_date: if self.kind == Category::Albums {
                 if self.release_date.trim().is_empty() {

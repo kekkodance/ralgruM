@@ -228,9 +228,10 @@ pub(super) fn render_card_with_presentation(
     narrow: bool,
     account: &Entity<AccountState>,
     preserve_discover_channel: bool,
-    presentation: CollectionCardPresentation,
+    mut presentation: CollectionCardPresentation,
     discover_occurrence: Option<(&str, usize)>,
 ) -> AnyElement {
+    presentation.ai_generated = card.ai_generated;
     let route = DetailRoute::from_card(card);
     let card_arc = Arc::new(card.clone());
     let card_content = div()
@@ -614,6 +615,7 @@ pub(super) fn stable_card_identity(card: &Card) -> String {
         card.artwork.hash(&mut hasher);
         card.badge.hash(&mut hasher);
         card.release_date.hash(&mut hasher);
+        card.ai_generated.hash(&mut hasher);
         card.service_url.hash(&mut hasher);
         format!("fields:{:016x}", hasher.finish())
     };
@@ -639,6 +641,7 @@ pub(super) fn card_content_signature(cards: &[Card]) -> u64 {
         card.source.hash(&mut hasher);
         card.badge.hash(&mut hasher);
         card.release_date.hash(&mut hasher);
+        card.ai_generated.hash(&mut hasher);
         card.service_url.hash(&mut hasher);
     }
     hasher.finish()
@@ -853,6 +856,13 @@ mod tests {
         assert_ne!(
             card_content_signature(&first),
             card_content_signature(&artwork_changed)
+        );
+
+        let mut ai_changed = first.clone();
+        ai_changed[0].ai_generated = true;
+        assert_ne!(
+            card_content_signature(&first),
+            card_content_signature(&ai_changed)
         );
     }
 

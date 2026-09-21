@@ -658,6 +658,7 @@ fn render_provider_header_snapshot(
         description: page.description.clone(),
         provider: route.source,
         kind,
+        ai_generated: false,
         total: page.owns_top_level_count().then_some(page.total),
         actions,
         body_fills: false,
