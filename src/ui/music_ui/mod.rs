@@ -1387,13 +1387,28 @@ fn track_content_labels(labels: TrackRowLabels) -> Div {
 }
 
 fn explicit_badge() -> Stateful<Div> {
-    content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit")
+    content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit", 1.)
 }
 
 pub(crate) fn ai_content_badge() -> Stateful<Div> {
-    content_badge("AI", 18., PRIMARY, 0x6366f166, 0x6366f126, "AI generated")
+    ai_content_badge_with_top(1.)
 }
 
+/// Player bar variant: the taller title row needs the badge one pixel lower
+/// than the card rows do.
+pub(crate) fn ai_content_badge_with_top(top: f32) -> Stateful<Div> {
+    content_badge(
+        "AI",
+        18.,
+        PRIMARY,
+        0x6366f166,
+        0x6366f126,
+        "AI generated",
+        top,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn content_badge(
     label: &'static str,
     width: f32,
@@ -1401,12 +1416,13 @@ fn content_badge(
     border: u32,
     bg: u32,
     tooltip: &'static str,
+    top: f32,
 ) -> Stateful<Div> {
     div()
         .id(label)
         .app_tooltip(tooltip)
         .relative()
-        .top(px(1.))
+        .top(px(top))
         .w(px(width))
         .h(px(14.))
         .flex_none()
@@ -1420,7 +1436,11 @@ fn content_badge(
         .text_size(px(8.))
         .font_weight(FontWeight::EXTRA_BOLD)
         .text_color(rgb(color))
-        .child(label)
+        .child(
+            // The glyph advance leaves the ink sitting left of the visual
+            // center, so nudge the label half a pixel right.
+            div().relative().left(px(0.5)).child(label),
+        )
 }
 
 pub(crate) fn playlist_header_action_button(

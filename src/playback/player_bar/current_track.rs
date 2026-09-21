@@ -238,7 +238,7 @@ pub(super) fn render_current(
                     }),
                 ))
                 .when(show_ai, |this| {
-                    this.child(crate::music_ui::ai_content_badge())
+                    this.child(crate::music_ui::ai_content_badge_with_top(2.))
                 }),
         )
         .child(overflow_tooltip(
