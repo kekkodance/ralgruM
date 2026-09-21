@@ -228,7 +228,8 @@ pub(super) fn render_current(
                         .child(title.to_owned()),
                     title,
                     text_width.map(|width| {
-                        let badge_width = if show_ai { 23. } else { 0. };
+                        let badge_width =
+                            if show_explicit { 19. } else { 0. } + if show_ai { 23. } else { 0. };
                         text_fits(
                             window,
                             title,
@@ -467,17 +468,15 @@ pub(super) fn current_text_intrinsic_width(
     window: &Window,
     title: &str,
     artist: &str,
+    show_explicit: bool,
     show_ai: bool,
 ) -> f32 {
     let text_width = text_measure_width(window, title, 14., FontWeight::SEMIBOLD)
         .max(text_measure_width(window, artist, 12., FontWeight::NORMAL));
-    // The AI badge reserves its own footprint (18px badge plus 5px gap) next
-    // to the title, so the block must be that much wider to fit both.
-    if show_ai {
-        text_width + 23.
-    } else {
-        text_width
-    }
+    // Content badges reserve their footprints next to the title: the explicit
+    // pill is 14px wide and the AI pill 18px, each with a 5px gap.
+    let badge_width = if show_explicit { 19. } else { 0. } + if show_ai { 23. } else { 0. };
+    text_width + badge_width
 }
 
 pub(super) fn current_text_width_for_layout(
