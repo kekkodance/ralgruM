@@ -1406,7 +1406,7 @@ fn content_badge(
         .id(label)
         .app_tooltip(tooltip)
         .relative()
-        .top(px(2.))
+        .top(px(1.))
         .w(px(width))
         .h(px(14.))
         .flex_none()
