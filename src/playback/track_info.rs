@@ -63,7 +63,12 @@ impl TrackInfoProbe {
                 && let Some(arl) = arl.as_ref()
             {
                 match resolver
-                    .resolve_direct_deezer_source_for_info(&track.id, arl, &cancellation)
+                    .resolve_direct_deezer_source_for_info(
+                        &track.id,
+                        arl,
+                        source.format_name(),
+                        &cancellation,
+                    )
                     .await
                 {
                     Ok(source) => {

@@ -2,16 +2,39 @@ use super::*;
 
 use crate::playback::resolve_limiter::ResolvePriority;
 
+fn direct_deezer_info_format(format_name: &str) -> Option<&'static str> {
+    ["FLAC", "MP3_320", "MP3_128"]
+        .into_iter()
+        .find(|candidate| format_name.eq_ignore_ascii_case(candidate))
+}
+
 impl StreamResolver {
     pub(crate) async fn resolve_direct_deezer_source_for_info(
         &self,
         track_id: &str,
         deezer_arl: &DeezerArl,
+        expected_format: &str,
         cancellation: &CancellationToken,
     ) -> Result<ResolvedSource, String> {
-        self.resolve_deezer(track_id, Some(deezer_arl), false, cancellation, true)
-            .await
-            .map(ResolvedSource::from_remote)
+        let expected_format = direct_deezer_info_format(expected_format)
+            .ok_or_else(|| "The backend format cannot be probed directly in Deezer".to_owned())?;
+        let source = self
+            .resolve_deezer_exact_direct(
+                track_id,
+                Some(deezer_arl),
+                expected_format,
+                cancellation,
+                true,
+            )
+            .await?;
+        if source.format_name.eq_ignore_ascii_case(expected_format) {
+            Ok(ResolvedSource::from_remote(source))
+        } else {
+            Err(format!(
+                "Deezer returned {} while {} metadata was requested.",
+                source.format_name, expected_format
+            ))
+        }
     }
 
     pub(crate) async fn resolve_source(
@@ -740,5 +763,19 @@ impl StreamResolver {
             declared_bitrate.map_or_else(|| "-".to_owned(), |bitrate| bitrate.to_string())
         );
         quality
+    }
+}
+
+#[cfg(test)]
+mod info_tests {
+    use super::direct_deezer_info_format;
+
+    #[test]
+    fn direct_info_formats_are_exact_and_case_insensitive() {
+        assert_eq!(direct_deezer_info_format("flac"), Some("FLAC"));
+        assert_eq!(direct_deezer_info_format("MP3_320"), Some("MP3_320"));
+        assert_eq!(direct_deezer_info_format("MP3_128"), Some("MP3_128"));
+        assert_eq!(direct_deezer_info_format("MP3"), None);
+        assert_eq!(direct_deezer_info_format("AAC"), None);
     }
 }

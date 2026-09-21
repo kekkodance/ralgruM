@@ -24,20 +24,36 @@ pub(super) fn resolve(snapshot: &GameState) -> MatchState {
     };
     match round.phase {
         RoundPhase::Freezetime | RoundPhase::Over => MatchState::BetweenRounds,
-        RoundPhase::Live if snapshot.local_is_dead() => MatchState::PlayerDead,
+        RoundPhase::Live if local_player_is_dead(snapshot) => MatchState::PlayerDead,
         RoundPhase::Live if snapshot.player.is_some() => MatchState::ActiveRound,
         RoundPhase::Live | RoundPhase::Unknown => MatchState::Inactive,
     }
 }
 
+fn local_player_is_dead(snapshot: &GameState) -> bool {
+    let Some(player) = snapshot.player.as_ref() else {
+        return false;
+    };
+    let local_steam_id = snapshot.provider.steamid.trim();
+    let observed_steam_id = player.steamid.trim();
+    let spectating_another_player = !local_steam_id.is_empty()
+        && !observed_steam_id.is_empty()
+        && local_steam_id != observed_steam_id;
+    spectating_another_player || snapshot.local_is_dead()
+}
+
 #[cfg(test)]
 mod tests {
-    use cs2_gsi::model::{Map, Player, PlayerActivity, PlayerState, Round};
+    use cs2_gsi::model::{Map, Player, PlayerActivity, PlayerState, Provider, Round};
 
     use super::*;
 
     fn snapshot(round: RoundPhase, health: i32) -> GameState {
         GameState {
+            provider: Provider {
+                steamid: "local-player".into(),
+                ..Provider::default()
+            },
             map: Some(Map {
                 phase: MapPhase::Live,
                 ..Map::default()
@@ -47,6 +63,7 @@ mod tests {
                 ..Round::default()
             }),
             player: Some(Player {
+                steamid: "local-player".into(),
                 activity: PlayerActivity::Playing,
                 state: PlayerState {
                     health,
@@ -76,6 +93,14 @@ mod tests {
             resolve(&snapshot(RoundPhase::Live, 0)),
             MatchState::PlayerDead
         );
+    }
+
+    #[test]
+    fn spectating_a_living_teammate_keeps_the_local_player_dead() {
+        let mut state = snapshot(RoundPhase::Live, 100);
+        state.player.as_mut().unwrap().steamid = "living-teammate".into();
+
+        assert_eq!(resolve(&state), MatchState::PlayerDead);
     }
 
     #[test]

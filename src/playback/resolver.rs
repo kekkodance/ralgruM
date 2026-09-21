@@ -171,6 +171,10 @@ impl ResolvedSource {
                 || matches!(&self.data, SourceData::Backend(source) if source.metadata().timeline))
     }
 
+    pub(crate) fn format_name(&self) -> &str {
+        &self.format_name
+    }
+
     fn uses_backend(&self) -> bool {
         matches!(&self.data, SourceData::Backend(_))
     }
