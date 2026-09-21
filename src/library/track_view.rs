@@ -496,7 +496,10 @@ fn render_track_item(
             narrow,
             provider_icon_only: narrow,
         },
-        track.explicit,
+        crate::music_ui::TrackRowLabels {
+            explicit: track.explicit,
+            ai_generated: false,
+        },
         row_playing,
         None,
         row_blocked,

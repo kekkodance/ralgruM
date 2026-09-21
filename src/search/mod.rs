@@ -7,6 +7,7 @@ mod cards_view;
 mod client;
 mod collection_actions;
 mod credential;
+mod deezer_ai;
 mod detail;
 mod detail_client;
 mod detail_navigation;

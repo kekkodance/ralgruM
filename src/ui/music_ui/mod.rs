@@ -1026,6 +1026,12 @@ pub(crate) struct TrackRowDisplay {
     pub(crate) provider_icon_only: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TrackRowLabels {
+    pub(crate) explicit: bool,
+    pub(crate) ai_generated: bool,
+}
+
 pub(crate) struct TrackArtistNavigation {
     pub(crate) provider: Provider,
     pub(crate) routes: Vec<MenuRoute>,
@@ -1042,7 +1048,7 @@ pub(crate) fn track_row_with_action(
     artwork: &str,
     duration: u64,
     display: TrackRowDisplay,
-    explicit: bool,
+    labels: TrackRowLabels,
     playing: RowPlaying,
     playing_slot: Option<AnyElement>,
     blocked: bool,
@@ -1154,6 +1160,7 @@ pub(crate) fn track_row_with_action(
                         .gap(px(5.))
                         .child(
                             div()
+                                .flex_1()
                                 .min_w_0()
                                 .text_size(px(13.5))
                                 .font_weight(FontWeight::SEMIBOLD)
@@ -1161,7 +1168,9 @@ pub(crate) fn track_row_with_action(
                                 .truncate()
                                 .child(title.to_owned()),
                         )
-                        .when(explicit, |this| this.child(explicit_badge())),
+                        .when(labels.explicit || labels.ai_generated, |this| {
+                            this.child(track_content_labels(labels))
+                        }),
                 )
                 .child(track_artist_line(
                     index,
@@ -1354,11 +1363,29 @@ fn track_artist_text_and_ranges(
     artist_text_and_ranges(routes)
 }
 
+fn track_content_labels(labels: TrackRowLabels) -> Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .when(labels.explicit, |this| this.child(explicit_badge()))
+        .when(labels.ai_generated, |this| this.child(ai_badge()))
+}
+
 fn explicit_badge() -> Div {
+    content_badge("E", 14., DANGER, 0xef444466, 0xef444426)
+}
+
+fn ai_badge() -> Div {
+    content_badge("AI", 18., PRIMARY, 0x6366f166, 0x6366f126)
+}
+
+fn content_badge(label: &'static str, width: f32, color: u32, border: u32, bg: u32) -> Div {
     div()
         .relative()
         .top(px(2.))
-        .w(px(14.))
+        .w(px(width))
         .h(px(14.))
         .flex_none()
         .flex()
@@ -1366,12 +1393,12 @@ fn explicit_badge() -> Div {
         .justify_center()
         .rounded(px(3.))
         .border_1()
-        .border_color(rgba(0xef444466))
-        .bg(rgba(0xef444426))
+        .border_color(rgba(border))
+        .bg(rgba(bg))
         .text_size(px(8.))
         .font_weight(FontWeight::EXTRA_BOLD)
-        .text_color(rgb(DANGER))
-        .child("E")
+        .text_color(rgb(color))
+        .child(label)
 }
 
 pub(crate) fn playlist_header_action_button(

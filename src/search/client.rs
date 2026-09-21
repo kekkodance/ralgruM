@@ -37,6 +37,7 @@ const fn deezer_spec(category: ResultType) -> Option<(&'static str, u32, u32)> {
 pub(crate) struct SearchClient {
     client: Client,
     deezer_sessions: Arc<DeezerSessionCache>,
+    pub(super) deezer_ai: Arc<super::deezer_ai::DeezerAiCache>,
 }
 
 #[derive(Default)]
@@ -67,6 +68,7 @@ impl SearchClient {
         Self {
             client,
             deezer_sessions: Arc::new(DeezerSessionCache::default()),
+            deezer_ai: Arc::new(super::deezer_ai::DeezerAiCache::default()),
         }
     }
 
@@ -410,7 +412,7 @@ fn value_string(value: Option<&Value>) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
-fn response_cookies(response: &Response) -> String {
+pub(super) fn response_cookies(response: &Response) -> String {
     response
         .headers()
         .get_all(header::SET_COOKIE)

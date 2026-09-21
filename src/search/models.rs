@@ -155,6 +155,7 @@ pub(crate) struct Track {
     pub(crate) artwork: String,
     pub(crate) source: Provider,
     pub(crate) explicit: bool,
+    pub(crate) ai_generated: bool,
     pub(crate) favorite: Option<bool>,
     /// Provider-supplied public web URL. SoundCloud fills this from the
     /// permalink; Deezer links are derived from the numeric id instead.
@@ -363,6 +364,25 @@ impl Default for SearchState {
 }
 
 impl SearchState {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn apply_deezer_ai_content(
+        &mut self,
+        generation: u64,
+        albums: &HashMap<String, bool>,
+    ) -> bool {
+        if generation != self.generation || albums.is_empty() {
+            return false;
+        }
+        let mut changed = apply_deezer_ai_to_tracks(&mut self.groups.tracks, albums);
+        for snapshot in self.result_cache.values_mut() {
+            changed |= apply_deezer_ai_to_tracks(&mut snapshot.groups.tracks, albums);
+        }
+        changed
+    }
+
     pub(crate) fn account_scope_changed(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.query.clear();
@@ -705,6 +725,23 @@ impl SearchState {
     }
 }
 
+fn apply_deezer_ai_to_tracks(tracks: &mut [Track], albums: &HashMap<String, bool>) -> bool {
+    let mut changed = false;
+    for track in tracks {
+        if track.source != Provider::Deezer || track.album_id.is_empty() {
+            continue;
+        }
+        let Some(ai_generated) = albums.get(&track.album_id).copied() else {
+            continue;
+        };
+        if track.ai_generated != ai_generated {
+            track.ai_generated = ai_generated;
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn normalize_cache_query(query: &str) -> String {
     query.trim().to_lowercase()
 }
@@ -805,6 +842,35 @@ pub(crate) struct SearchJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deezer_ai_content_applies_only_to_current_deezer_album_tracks() {
+        let mut state = SearchState::default();
+        state.groups.tracks = vec![
+            Track {
+                album_id: "album-1".into(),
+                source: Provider::Deezer,
+                ..Track::default()
+            },
+            Track {
+                album_id: "album-1".into(),
+                source: Provider::SoundCloud,
+                ..Track::default()
+            },
+        ];
+        let generation = state.generation();
+        assert!(
+            state.apply_deezer_ai_content(generation, &HashMap::from([("album-1".into(), true)]))
+        );
+        assert!(state.groups.tracks[0].ai_generated);
+        assert!(!state.groups.tracks[1].ai_generated);
+
+        state.generation = state.generation.wrapping_add(1);
+        assert!(
+            !state.apply_deezer_ai_content(generation, &HashMap::from([("album-1".into(), false)]))
+        );
+        assert!(state.groups.tracks[0].ai_generated);
+    }
 
     #[test]
     fn all_expands_categories_with_deezer_before_soundcloud() {

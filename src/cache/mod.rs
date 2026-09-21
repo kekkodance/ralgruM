@@ -349,7 +349,10 @@ fn render_cache_row(
             narrow,
             provider_icon_only: false,
         },
-        track.explicit,
+        crate::music_ui::TrackRowLabels {
+            explicit: track.explicit,
+            ai_generated: false,
+        },
         playing.row(index),
         None,
         blocked,

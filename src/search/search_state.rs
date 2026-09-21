@@ -59,6 +59,23 @@ impl SearchView {
                 abort.abort();
             }
         }
+        self.cancel_deezer_ai_enrichment_request();
+    }
+
+    fn cancel_deezer_ai_enrichment_request(&mut self) {
+        if let Some(request) = self.deezer_ai_enrichment_request.take() {
+            request.abort.abort();
+        }
+    }
+
+    fn clear_deezer_ai_enrichment_request(&mut self, generation: u64, id: u64) {
+        if self
+            .deezer_ai_enrichment_request
+            .as_ref()
+            .is_some_and(|request| request.generation == generation && request.id == id)
+        {
+            self.deezer_ai_enrichment_request = None;
+        }
     }
 
     pub(super) fn next_request_id(&mut self) -> u64 {
@@ -539,7 +556,10 @@ impl SearchView {
         cx: &mut Context<Self>,
     ) {
         cx.notify();
-        let Some(job) = job else { return };
+        let Some(job) = job else {
+            self.start_deezer_ai_enrichment(deezer_arl, cx);
+            return;
+        };
         let Ok(client) = self.client.clone() else {
             self.state.complete(job.generation, Vec::new());
             cx.notify();
@@ -589,6 +609,7 @@ impl SearchView {
         for task in tasks {
             let account_scope = account_scope.clone();
             let account_required = account_required.clone();
+            let deezer_ai_arl = deezer_arl.clone();
             cx.spawn(async move |this, cx| {
                 let results = task.await.unwrap_or_default();
                 for result in &results {
@@ -644,6 +665,9 @@ impl SearchView {
                             );
                             this.results_entrance_key = Some(identity);
                         }
+                        if final_batch {
+                            this.start_deezer_ai_enrichment(deezer_ai_arl, cx);
+                        }
                         cx.notify();
                     }
                 })
@@ -651,5 +675,55 @@ impl SearchView {
             })
             .detach();
         }
+    }
+
+    fn start_deezer_ai_enrichment(
+        &mut self,
+        deezer_arl: Option<DeezerArl>,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_deezer_ai_enrichment_request();
+        let Some(arl) = deezer_arl else { return };
+        let Ok(client) = self.client.clone() else {
+            return;
+        };
+        let album_ids = self
+            .state
+            .groups
+            .tracks
+            .iter()
+            .filter(|track| track.source == Provider::Deezer)
+            .map(|track| track.album_id.clone())
+            .collect::<Vec<_>>();
+        if album_ids.is_empty() {
+            return;
+        }
+        let generation = self.state.generation();
+        let account_scope = self.account_scope.clone();
+        let task = self
+            .runtime
+            .spawn(async move { client.deezer_ai_content(album_ids, arl).await });
+        let request_id = self.next_request_id();
+        self.deezer_ai_enrichment_request = Some(ActiveRequest {
+            generation,
+            id: request_id,
+            abort: task.abort_handle(),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.clear_deezer_ai_enrichment_request(generation, request_id);
+                let Ok(Ok(albums)) = result else {
+                    return;
+                };
+                if this.account_scope == account_scope
+                    && this.state.apply_deezer_ai_content(generation, &albums)
+                {
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 }

@@ -269,6 +269,12 @@ fn deezer_track(value: &Value) -> Track {
             || string(value.get("EXPLICIT_TRACK_CONTENT")) == "1"
             || value.get("explicit_lyrics").and_then(Value::as_bool) == Some(true)
             || title.to_ascii_lowercase().contains("explicit"),
+        ai_generated: boolean(
+            value
+                .get("hasIdentifiedAIContent")
+                .or_else(|| value.get("ai_generated")),
+        )
+        .unwrap_or(false),
         favorite: boolean(
             value
                 .get("IS_FAVORITE")
@@ -365,6 +371,7 @@ fn soundcloud_track(value: &Value) -> Track {
                 .and_then(Value::as_bool)
                 == Some(true)
             || title.to_ascii_lowercase().contains("explicit"),
+        ai_generated: false,
         favorite: boolean(
             value
                 .get("user_favorite")
@@ -576,6 +583,7 @@ mod tests {
         let item = deezer_track(&json!({
             "SNG_ID": "7", "SNG_TITLE": "Song", "VERSION": "Live",
             "DURATION": "123", "ALB_PICTURE": "hash", "EXPLICIT_LYRICS": "1",
+            "hasIdentifiedAIContent": true,
             "ALB_ID": "302", "ALB_TITLE": "Album",
             "ARTISTS": [{"ART_ID": "11", "ART_NAME": "One"}, {"ART_NAME": "one"}],
             "contributors": [{"id": "12", "name": "Two"}]
@@ -599,6 +607,7 @@ mod tests {
         assert_eq!(item.album, "Album");
         assert_eq!(item.duration, 123);
         assert!(item.explicit);
+        assert!(item.ai_generated);
     }
 
     #[test]

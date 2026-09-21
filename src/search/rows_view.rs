@@ -279,13 +279,14 @@ pub(super) fn search_track_identity(track: &Track) -> String {
     }
     write!(
         identity,
-        ":{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        ":{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         track.album_id,
         track.album,
         track.artwork,
         track.duration,
         track.source.label(),
         track.explicit,
+        track.ai_generated,
         track.service_url,
         track.downloadable,
         track.progressive,
@@ -398,7 +399,10 @@ fn render_track_item(
             narrow,
             provider_icon_only,
         },
-        track.explicit,
+        crate::music_ui::TrackRowLabels {
+            explicit: track.explicit,
+            ai_generated: track.ai_generated,
+        },
         row_playing,
         None,
         row_blocked,

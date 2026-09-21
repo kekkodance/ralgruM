@@ -30,12 +30,15 @@ impl SearchClient {
                 .artist_detail(route, &id, deezer_arl, soundcloud_token)
                 .await;
         }
+        let mut ai_generated = None;
         let (items, total, raw_loaded_count, authoritative_total, description, album_info) =
             match route.provider {
                 Provider::Deezer => {
+                    let ai_arl = deezer_arl.clone();
                     let session = self.deezer_session(deezer_arl).await?;
-                    let (detail, album_info) =
-                        tokio::join!(self.deezer_detail(&route, &id, &session), async {
+                    let (detail, album_info, album_ai_generated) = tokio::join!(
+                        self.deezer_detail(&route, &id, &session),
+                        async {
                             match route.kind {
                                 ResultType::Albums => {
                                     self.deezer_album_info(&id, &session).await.ok()
@@ -45,12 +48,29 @@ impl SearchClient {
                                 }
                                 _ => None,
                             }
-                        },);
+                        },
+                        async {
+                            if route.kind != ResultType::Albums {
+                                return None;
+                            }
+                            let arl = ai_arl?;
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(4),
+                                self.deezer_ai_content(vec![id.clone()], arl),
+                            )
+                            .await
+                            .ok()?
+                            .ok()?
+                            .get(&id)
+                            .copied()
+                        }
+                    );
                     let (items, total) = detail?;
                     let raw_loaded_count = items.len();
                     if let Some(info) = album_info.as_ref() {
                         apply_deezer_metadata(&mut route, info);
                     }
+                    ai_generated = album_ai_generated;
                     (
                         items,
                         total,
@@ -93,7 +113,12 @@ impl SearchClient {
                     )
                 }
             };
-        let tracks = normalize_tracks(route.provider, &items);
+        let mut tracks = normalize_tracks(route.provider, &items);
+        if ai_generated == Some(true) {
+            for track in &mut tracks {
+                track.ai_generated = true;
+            }
+        }
         apply_track_metadata_fallback(&mut route, &tracks);
         let tracks = soundcloud_album_tracks(tracks, &route);
         let normalized_count = tracks.len();
