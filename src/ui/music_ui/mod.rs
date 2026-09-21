@@ -1376,18 +1376,20 @@ fn track_artist_text_and_ranges(
     artist_text_and_ranges(routes)
 }
 
-fn track_content_labels(labels: TrackRowLabels) -> Div {
+pub(crate) fn track_content_labels(labels: TrackRowLabels) -> Div {
     div()
         .flex_none()
         .flex()
         .items_center()
         .gap(px(4.))
         .when(labels.explicit, |this| this.child(explicit_badge()))
-        .when(labels.ai_generated, |this| this.child(ai_content_badge()))
+        .when(labels.ai_generated, |this| {
+            this.child(ai_content_badge_with_top(2.))
+        })
 }
 
 pub(crate) fn explicit_badge() -> Stateful<Div> {
-    content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit", 1., 0.)
+    content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit", 2., 0.)
 }
 
 pub(crate) fn ai_content_badge() -> Stateful<Div> {

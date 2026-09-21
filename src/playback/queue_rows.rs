@@ -6,7 +6,9 @@ use crate::{
     context_menu,
     drag_cursor::{DragCursorOwner, DragCursorState, grabbing_cursor, set_drag_cursor_owned},
     entity_navigation::{NavigationOpener, NavigationTarget},
-    music_ui::{TRACK_TITLE_ARTIST_GAP_PX, danger_remove_button},
+    music_ui::{
+        TRACK_TITLE_ARTIST_GAP_PX, TrackRowLabels, danger_remove_button, track_content_labels,
+    },
     search::{Provider, SearchView},
     theme::{BORDER, DEEZER, MUTED, PRIMARY, SOUNDCLOUD, SURFACE_RAISED},
 };
@@ -58,7 +60,7 @@ pub(super) fn row(
                 .hover(|style| style.bg(rgba(0xffffff0b)).border_color(rgb(BORDER)))
         })
         .aria_label(if blocked {
-            format!("{title} (playback disabled, explicit content blocked)")
+            format!("{title} (playback disabled, blocked content)")
         } else {
             title.clone()
         })
@@ -121,6 +123,7 @@ pub(super) fn row(
     let artwork = track.artwork.clone();
     let has_artwork = !artwork.is_empty();
     let track_artist = track.artist.clone();
+    let labels = queue_content_labels(track);
     let menu_track = track.clone();
     context_menu::queue_menu(
         container
@@ -159,10 +162,22 @@ pub(super) fn row(
                     .gap(px(TRACK_TITLE_ARTIST_GAP_PX))
                     .child(
                         div()
-                            .truncate()
-                            .text_size(px(12.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(title),
+                            .w_full()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(title),
+                            )
+                            .when(labels.explicit || labels.ai_generated, |this| {
+                                this.child(track_content_labels(labels))
+                            }),
                     )
                     .child(
                         div()
@@ -204,6 +219,13 @@ pub(super) fn row(
         open_artist,
         blocked,
     )
+}
+
+fn queue_content_labels(track: &PlaybackTrack) -> TrackRowLabels {
+    TrackRowLabels {
+        explicit: track.explicit,
+        ai_generated: track.ai_generated,
+    }
 }
 
 /// Provider badge plus the single remove control the original rows carried.
@@ -280,10 +302,29 @@ fn queue_openers(
 mod tests {
     use crate::music_ui::{DANGER_REMOVE_HIT_TARGET_PX, DANGER_REMOVE_ICON_SIZE_PX};
 
+    use super::*;
+
     #[test]
     fn remove_button_keeps_the_original_hit_target_and_smaller_glyph() {
         assert_eq!(DANGER_REMOVE_HIT_TARGET_PX, 26.);
         assert_eq!(DANGER_REMOVE_ICON_SIZE_PX, 10.);
         const { assert!(DANGER_REMOVE_ICON_SIZE_PX < 11.) };
+    }
+
+    #[test]
+    fn queue_rows_preserve_explicit_and_ai_labels() {
+        let track = PlaybackTrack::from_search(&crate::search::Track {
+            explicit: true,
+            ai_generated: true,
+            ..crate::search::Track::default()
+        });
+
+        assert_eq!(
+            queue_content_labels(&track),
+            TrackRowLabels {
+                explicit: true,
+                ai_generated: true,
+            }
+        );
     }
 }

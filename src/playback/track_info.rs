@@ -3,7 +3,10 @@ use std::{sync::Arc, time::Duration};
 use tokio::{runtime::Runtime, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use super::{MediaCredentials, PlaybackTrack, StreamResolver, resolver::AudioFormat};
+use super::{
+    MediaCredentials, PlaybackProvider, PlaybackTrack, ResolvedSource, StreamResolver,
+    resolver::AudioFormat,
+};
 use crate::search::{DeezerArl, SoundCloudToken};
 
 /// Everything needed to resolve a track's audio format and size without
@@ -46,19 +49,56 @@ impl TrackInfoProbe {
         self.runtime.spawn(async move {
             let cancellation = CancellationToken::new();
             let source = resolver
-                .resolve_source(&track, arl, soundcloud, murglar, cancellation.clone(), true)
+                .resolve_source(
+                    &track,
+                    arl.clone(),
+                    soundcloud,
+                    murglar,
+                    cancellation.clone(),
+                    true,
+                )
                 .await?;
-            let bytes = resolver
-                .source_size_for_info(&source, &cancellation)
-                .await?;
-            Ok(ResolvedTrackInfo {
-                format: source.format,
-                bytes,
-                timeline_size_unknown: source.timeline_size_unknown(),
-                declared_bitrate: source.declared_bitrate,
-            })
+            let mut info = source_info(&resolver, &source, &cancellation).await?;
+            if should_try_direct_deezer_info(&track, info)
+                && let Some(arl) = arl.as_ref()
+            {
+                match resolver
+                    .resolve_direct_deezer_source_for_info(&track.id, arl, &cancellation)
+                    .await
+                {
+                    Ok(source) => {
+                        let direct_info = source_info(&resolver, &source, &cancellation).await?;
+                        if direct_info.is_useful(track.duration) {
+                            info = direct_info;
+                        }
+                    }
+                    Err(error) => crate::diagnostics::event(
+                        "WARN",
+                        format!("deezer track info direct fallback failed reason={error}"),
+                    ),
+                }
+            }
+            Ok(info)
         })
     }
+}
+
+async fn source_info(
+    resolver: &StreamResolver,
+    source: &ResolvedSource,
+    cancellation: &CancellationToken,
+) -> Result<ResolvedTrackInfo, String> {
+    let bytes = resolver.source_size_for_info(source, cancellation).await?;
+    Ok(ResolvedTrackInfo {
+        format: source.format,
+        bytes,
+        timeline_size_unknown: source.timeline_size_unknown(),
+        declared_bitrate: source.declared_bitrate,
+    })
+}
+
+fn should_try_direct_deezer_info(track: &PlaybackTrack, info: ResolvedTrackInfo) -> bool {
+    track.provider == PlaybackProvider::Deezer && info.bytes == 0 && info.declared_bitrate.is_none()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -199,5 +239,32 @@ mod tests {
             describe_track_info(exact, Duration::from_secs(600)),
             "0.95 MB \u{b7} 978 kbps"
         );
+    }
+
+    #[test]
+    fn direct_deezer_info_fallback_only_fills_missing_metadata() {
+        let missing = ResolvedTrackInfo {
+            format: AudioFormat::Mp3,
+            bytes: 0,
+            timeline_size_unknown: true,
+            declared_bitrate: None,
+        };
+        let deezer = PlaybackTrack::from_search(&crate::search::Track {
+            source: crate::search::Provider::Deezer,
+            ..crate::search::Track::default()
+        });
+        assert!(should_try_direct_deezer_info(&deezer, missing));
+
+        let soundcloud = PlaybackTrack::from_search(&crate::search::Track {
+            source: crate::search::Provider::SoundCloud,
+            ..crate::search::Track::default()
+        });
+        assert!(!should_try_direct_deezer_info(&soundcloud, missing));
+
+        let useful = ResolvedTrackInfo {
+            declared_bitrate: Some(320),
+            ..missing
+        };
+        assert!(!should_try_direct_deezer_info(&deezer, useful));
     }
 }

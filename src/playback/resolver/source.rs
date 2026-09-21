@@ -3,6 +3,17 @@ use super::*;
 use crate::playback::resolve_limiter::ResolvePriority;
 
 impl StreamResolver {
+    pub(crate) async fn resolve_direct_deezer_source_for_info(
+        &self,
+        track_id: &str,
+        deezer_arl: &DeezerArl,
+        cancellation: &CancellationToken,
+    ) -> Result<ResolvedSource, String> {
+        self.resolve_deezer(track_id, Some(deezer_arl), false, cancellation, true)
+            .await
+            .map(ResolvedSource::from_remote)
+    }
+
     pub(crate) async fn resolve_source(
         &self,
         track: &PlaybackTrack,
