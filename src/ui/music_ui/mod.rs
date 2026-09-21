@@ -1386,7 +1386,7 @@ fn track_content_labels(labels: TrackRowLabels) -> Div {
         .when(labels.ai_generated, |this| this.child(ai_content_badge()))
 }
 
-fn explicit_badge() -> Stateful<Div> {
+pub(crate) fn explicit_badge() -> Stateful<Div> {
     content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit", 1.)
 }
 
