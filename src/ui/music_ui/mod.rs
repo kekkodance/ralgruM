@@ -1387,7 +1387,7 @@ fn track_content_labels(labels: TrackRowLabels) -> Div {
 }
 
 pub(crate) fn explicit_badge() -> Stateful<Div> {
-    content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit", 1.)
+    content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit", 1., 0.)
 }
 
 pub(crate) fn ai_content_badge() -> Stateful<Div> {
@@ -1395,7 +1395,8 @@ pub(crate) fn ai_content_badge() -> Stateful<Div> {
 }
 
 /// Player bar variant: the taller title row needs the badge one pixel lower
-/// than the card rows do.
+/// than the card rows do, and its smaller text sits a pixel high inside the
+/// pill, so the glyph gets an extra upward nudge there.
 pub(crate) fn ai_content_badge_with_top(top: f32) -> Stateful<Div> {
     content_badge(
         "AI",
@@ -1405,7 +1406,33 @@ pub(crate) fn ai_content_badge_with_top(top: f32) -> Stateful<Div> {
         0x6366f126,
         "AI generated",
         top,
+        0.,
     )
+}
+
+/// Player bar badges: same geometry as `ai_content_badge_with_top` with the
+/// label lifted one pixel inside the pill.
+pub(crate) fn player_badge(label: PlayerBadge, top: f32) -> Stateful<Div> {
+    match label {
+        PlayerBadge::Explicit => content_badge(
+            "E", 14., DANGER, 0xef444466, 0xef444426, "Explicit", top, -1.,
+        ),
+        PlayerBadge::Ai => content_badge(
+            "AI",
+            18.,
+            PRIMARY,
+            0x6366f166,
+            0x6366f126,
+            "AI generated",
+            top,
+            -1.,
+        ),
+    }
+}
+
+pub(crate) enum PlayerBadge {
+    Explicit,
+    Ai,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1417,6 +1444,7 @@ fn content_badge(
     bg: u32,
     tooltip: &'static str,
     top: f32,
+    label_top: f32,
 ) -> Stateful<Div> {
     div()
         .id(label)
@@ -1438,8 +1466,14 @@ fn content_badge(
         .text_color(rgb(color))
         .child(
             // The glyph advance leaves the ink sitting left of the visual
-            // center, so nudge the label half a pixel right.
-            div().relative().left(px(0.5)).child(label),
+            // center, so nudge the label half a pixel right. `label_top`
+            // lifts or drops the glyph inside the pill for the contexts
+            // whose baseline sits differently than the card rows.
+            div()
+                .relative()
+                .left(px(0.5))
+                .top(px(label_top))
+                .child(label),
         )
 }
 

@@ -239,10 +239,16 @@ pub(super) fn render_current(
                     }),
                 ))
                 .when(show_explicit, |this| {
-                    this.child(crate::music_ui::explicit_badge())
+                    this.child(crate::music_ui::player_badge(
+                        crate::music_ui::PlayerBadge::Explicit,
+                        2.,
+                    ))
                 })
                 .when(show_ai, |this| {
-                    this.child(crate::music_ui::ai_content_badge_with_top(2.))
+                    this.child(crate::music_ui::player_badge(
+                        crate::music_ui::PlayerBadge::Ai,
+                        2.,
+                    ))
                 }),
         )
         .child(overflow_tooltip(
