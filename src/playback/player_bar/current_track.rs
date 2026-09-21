@@ -160,12 +160,10 @@ pub(super) fn render_current(
     let subtitle = current_subtitle(track, status, loading_from_cache);
     let rendered_artist =
         rendered_current_artist_text(track, status, subtitle, artist_navigation.as_ref());
-    let playing_status = matches!(
-        status,
-        PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
-    );
-    let show_ai = track.is_some_and(|track| track.ai_generated) && playing_status;
-    let show_explicit = track.is_some_and(|track| track.explicit) && playing_status;
+    // The track's flags are known from the moment it is queued, so the badges
+    // appear together with the title instead of popping in after loading.
+    let show_ai = track.is_some_and(|track| track.ai_generated);
+    let show_explicit = track.is_some_and(|track| track.explicit);
     // Fixed side widths only on desktop layouts; narrow rows stretch, so there
     // is no cheap width to compare against for overflow tooltips there. The
     // compact heart lives outside this row and does not reserve text width.

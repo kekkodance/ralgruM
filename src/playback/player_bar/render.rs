@@ -295,14 +295,10 @@ impl Render for PlaybackView {
             subtitle_for_motion,
             artist_navigation.as_ref(),
         );
-        let playing_status = matches!(
-            status,
-            PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
-        );
-        let show_explicit_badge =
-            current.as_ref().is_some_and(|track| track.explicit) && playing_status;
-        let show_ai_badge =
-            current.as_ref().is_some_and(|track| track.ai_generated) && playing_status;
+        // The track's flags are known from the moment it is queued, so the
+        // width math sees the badges during loading too.
+        let show_explicit_badge = current.as_ref().is_some_and(|track| track.explicit);
+        let show_ai_badge = current.as_ref().is_some_and(|track| track.ai_generated);
         let intrinsic_text_width = (!narrow && favorite_key.is_some()).then(|| {
             current_text_intrinsic_width(
                 window,
