@@ -8,7 +8,7 @@ pub(super) fn adjacent_track(enabled: bool, state: &PlaybackState) -> Option<&Pl
         .upcoming_indices()
         .first()
         .and_then(|index| state.queue.get(*index))
-        .filter(|track| !state.explicit_blocked(track))
+        .filter(|track| !state.content_blocked(track))
 }
 
 pub(super) const fn listen_history_changed_on_completion(

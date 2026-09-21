@@ -295,8 +295,18 @@ impl Render for PlaybackView {
             subtitle_for_motion,
             artist_navigation.as_ref(),
         );
+        let show_ai_badge = current.as_ref().is_some_and(|track| track.ai_generated)
+            && matches!(
+                status,
+                PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
+            );
         let intrinsic_text_width = (!narrow && favorite_key.is_some()).then(|| {
-            current_text_intrinsic_width(window, title_for_motion, &rendered_artist_for_motion)
+            current_text_intrinsic_width(
+                window,
+                title_for_motion,
+                &rendered_artist_for_motion,
+                show_ai_badge,
+            )
         });
         let text_width_visual = intrinsic_text_width.map(|intrinsic| {
             let target = current_text_width_for_layout(layout, compact, true, intrinsic);

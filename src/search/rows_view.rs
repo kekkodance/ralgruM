@@ -427,7 +427,7 @@ fn render_track_item(
             let Some(selected) = click_queue.get(index) else {
                 return;
             };
-            if !playback.state.explicit_blocked(selected) {
+            if !playback.state.content_blocked(selected) {
                 playback.replace_queue((*click_queue).clone(), index, cx);
                 playback.set_context(click_context.clone(), cx);
             }
@@ -440,7 +440,7 @@ fn render_track_item(
                 let Some(selected) = key_queue.get(index) else {
                     return;
                 };
-                if !playback.state.explicit_blocked(selected) {
+                if !playback.state.content_blocked(selected) {
                     playback.replace_queue((*key_queue).clone(), index, cx);
                     playback.set_context(key_context.clone(), cx);
                 }

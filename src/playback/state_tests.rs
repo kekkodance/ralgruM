@@ -438,13 +438,41 @@ fn duplicate_queue_rows_remain_distinct_in_shuffle_and_direct_selection() {
 }
 
 #[test]
-fn explicit_blocked_helper_is_pure_and_defaults_off() {
+fn content_blocked_covers_explicit_and_ai_independently() {
     let mut state = PlaybackState::default();
     let queue = explicit_tracks(&[1]);
-    assert!(!state.explicit_blocked(&queue[1]));
+    let mut ai_track = tracks()[0].clone();
+    ai_track.ai_generated = true;
+
+    assert!(!state.content_blocked(&queue[1]));
+    assert!(!state.content_blocked(&ai_track));
+
     state.skip_explicit = true;
-    assert!(state.explicit_blocked(&queue[1]));
-    assert!(!state.explicit_blocked(&queue[0]));
+    assert!(state.content_blocked(&queue[1]));
+    assert!(!state.content_blocked(&ai_track));
+
+    state.block_ai = true;
+    assert!(state.content_blocked(&queue[1]));
+    assert!(state.content_blocked(&ai_track));
+    assert!(!state.content_blocked(&tracks()[0]));
+
+    state.skip_explicit = false;
+    assert!(!state.content_blocked(&queue[1]));
+    assert!(state.content_blocked(&ai_track));
+}
+
+fn set_block_ai_reports_blocked_current_and_defaults_off() {
+    let mut state = PlaybackState::default();
+    let mut ai_track = tracks()[0].clone();
+    ai_track.ai_generated = true;
+    state.replace(vec![ai_track], 0);
+
+    assert!(!state.block_ai);
+    assert!(!state.set_block_ai(false));
+    assert!(state.set_block_ai(true));
+    assert!(state.block_ai);
+    assert!(state.set_block_ai(true));
+    assert!(!state.set_block_ai(false));
 }
 
 #[test]

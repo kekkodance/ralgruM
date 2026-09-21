@@ -33,6 +33,14 @@ impl PlaybackModel {
         }
     }
 
+    pub(crate) fn set_block_ai(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.state.set_block_ai(enabled) {
+            self.next(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
     pub(crate) fn set_cache_limit(&mut self, limit_mb: u64) {
         let cache = self.cache.clone();
         let task = self.runtime.spawn(async move {

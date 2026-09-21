@@ -387,6 +387,10 @@ impl DetailNavigation {
         }
     }
 
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(crate) fn view_id(&self) -> u64 {
         self.view_id
     }

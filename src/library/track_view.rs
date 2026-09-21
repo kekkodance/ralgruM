@@ -521,7 +521,7 @@ fn render_track_item(
     .cursor_pointer()
     .on_click(move |_, _, cx| {
         click_playback.update(cx, |playback, cx| {
-            if !playback.state.explicit_blocked(&click_queue[queue_index]) {
+            if !playback.state.content_blocked(&click_queue[queue_index]) {
                 playback.replace_queue((*click_queue).clone(), queue_index, cx);
                 playback.set_context(click_context.clone(), cx);
             }
@@ -531,7 +531,7 @@ fn render_track_item(
         if crate::tab_keyboard::is_activation_key(event.keystroke.key.as_str()) {
             window.prevent_default();
             key_playback.update(cx, |playback, cx| {
-                if !playback.state.explicit_blocked(&key_queue[queue_index]) {
+                if !playback.state.content_blocked(&key_queue[queue_index]) {
                     playback.replace_queue((*key_queue).clone(), queue_index, cx);
                     playback.set_context(key_context.clone(), cx);
                 }

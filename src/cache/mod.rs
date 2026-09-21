@@ -372,7 +372,7 @@ fn render_cache_row(
             return;
         };
         click_playback.update(cx, |playback, cx| {
-            if !playback.state.explicit_blocked(selected) {
+            if !playback.state.content_blocked(selected) {
                 playback.replace_queue((*click_tracks).clone(), index, cx);
                 playback.set_context(PlaybackContext::None, cx);
             }
@@ -387,7 +387,7 @@ fn render_cache_row(
             return;
         };
         key_playback.update(cx, |playback, cx| {
-            if !playback.state.explicit_blocked(selected) {
+            if !playback.state.content_blocked(selected) {
                 playback.replace_queue((*key_tracks).clone(), index, cx);
                 playback.set_context(PlaybackContext::None, cx);
             }

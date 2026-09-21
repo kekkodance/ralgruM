@@ -684,6 +684,7 @@ impl RalgrumApp {
                     saved.remember_playback_modes && saved.shuffle_enabled,
                 ),
                 saved.block_explicit_content,
+                saved.block_ai_content,
                 (
                     saved.right_sidebar_open,
                     match saved.right_sidebar_view {
@@ -1048,7 +1049,7 @@ impl RalgrumApp {
                 saved.background_audio_cache,
                 saved.seamless_playback,
                 saved.record_deezer_plays,
-                saved.block_explicit_content,
+                (saved.block_explicit_content, saved.block_ai_content),
                 saved.lyrics_source,
                 saved.soundcloud_search_suggestions,
                 saved.motion_preference.is_reduced(),
@@ -1065,7 +1066,7 @@ impl RalgrumApp {
                 saved.background_audio_cache,
                 saved.seamless_playback,
                 saved.record_deezer_plays,
-                saved.block_explicit_content,
+                (saved.block_explicit_content, saved.block_ai_content),
                 saved.lyrics_source,
                 saved.soundcloud_search_suggestions,
                 saved.motion_preference.is_reduced(),
@@ -1081,7 +1082,7 @@ impl RalgrumApp {
                     background_cache,
                     seamless_playback,
                     record_deezer_plays,
-                    block_explicit,
+                    (block_explicit, block_ai),
                     lyrics_source,
                     soundcloud_search_suggestions,
                     motion_reduced,
@@ -1097,6 +1098,7 @@ impl RalgrumApp {
                     playback.set_seamless_playback(seamless_playback);
                     playback.set_provider_play_reporting(record_deezer_plays);
                     playback.set_skip_explicit(block_explicit, cx);
+                    playback.set_block_ai(block_ai, cx);
                     playback.set_audio_output(asio_mode, output_device, asio_driver, cx);
                 });
                 match motion_transition(previous_motion_reduced, motion_reduced) {

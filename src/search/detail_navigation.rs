@@ -138,6 +138,7 @@ impl SearchView {
             Provider::SoundCloud => soundcloud_token.is_some(),
         };
         let valid_route = super::detail::DetailRoute::from_card(&card).is_some();
+        self.cancel_artist_page_ai_request();
         let previous_scroll = self.active_vertical_scroll_offset();
         self.scroll.set_offset(point(px(0.), px(0.)));
         let opened = self
@@ -172,6 +173,7 @@ impl SearchView {
     pub(crate) fn open_external_card(&mut self, card: Card, cx: &mut Context<Self>) {
         self.cancel_discover_channel_request();
         self.discover.close_channel();
+        self.cancel_artist_page_ai_request();
         self.pending_forward_detail_scroll_reset = None;
         self.reset_detail_scroll();
         self.library
@@ -267,6 +269,7 @@ impl SearchView {
                     }
                 });
             }
+            self.start_artist_page_ai_enrichment(cx);
             cx.notify();
         }
     }

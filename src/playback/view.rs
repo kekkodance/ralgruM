@@ -380,6 +380,7 @@ impl PlaybackModel {
         listen_history_changed: Arc<ListenHistorySignal>,
         playback_preferences: (f32, bool, super::state::RepeatMode, bool),
         skip_explicit: bool,
+        block_ai: bool,
         sidebar_preferences: (bool, RightSidebar),
         media: MediaSession,
         cx: &mut Context<Self>,
@@ -389,6 +390,7 @@ impl PlaybackModel {
         state.set_repeat_mode(playback_preferences.2);
         state.set_shuffle_enabled(playback_preferences.3);
         let _ = state.set_skip_explicit(skip_explicit);
+        let _ = state.set_block_ai(block_ai);
         state.restore_sidebar(sidebar_preferences.0, sidebar_preferences.1);
         let seek_slider = cx.new(|_| {
             SliderState::new()

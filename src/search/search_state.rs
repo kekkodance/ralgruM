@@ -60,6 +60,7 @@ impl SearchView {
             }
         }
         self.cancel_deezer_ai_enrichment_request();
+        self.cancel_artist_page_ai_request();
     }
 
     fn cancel_deezer_ai_enrichment_request(&mut self) {
@@ -75,6 +76,22 @@ impl SearchView {
             .is_some_and(|request| request.generation == generation && request.id == id)
         {
             self.deezer_ai_enrichment_request = None;
+        }
+    }
+
+    pub(super) fn cancel_artist_page_ai_request(&mut self) {
+        if let Some(request) = self.artist_page_ai_request.take() {
+            request.abort.abort();
+        }
+    }
+
+    fn clear_artist_page_ai_request(&mut self, generation: u64, id: u64) {
+        if self
+            .artist_page_ai_request
+            .as_ref()
+            .is_some_and(|request| request.generation == generation && request.id == id)
+        {
+            self.artist_page_ai_request = None;
         }
     }
 
@@ -734,6 +751,84 @@ impl SearchView {
                     if search_changed {
                         cx.notify();
                     }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Artist pages batch their Deezer discography through the same AI
+    /// content lookup the search results use, then flag the stored cards so
+    /// the badge renders like everywhere else.
+    pub(super) fn start_artist_page_ai_enrichment(&mut self, cx: &mut Context<Self>) {
+        self.cancel_artist_page_ai_request();
+        let Some(arl) = self.search_credentials(cx).0 else {
+            return;
+        };
+        let Ok(client) = self.client.clone() else {
+            return;
+        };
+        let album_ids = match &self.detail.state {
+            super::detail::DetailState::Results(page) | super::detail::DetailState::Empty(page) => {
+                page.artist.as_ref().map(|artist| {
+                    artist
+                        .albums
+                        .iter()
+                        .chain(artist.featured.iter())
+                        .filter(|card| card.source == Provider::Deezer)
+                        .map(|card| card.id.clone())
+                        .collect::<Vec<_>>()
+                })
+            }
+            _ => None,
+        }
+        .unwrap_or_default();
+        if album_ids.is_empty() {
+            return;
+        }
+        let generation = self.detail.generation();
+        let account_scope = self.account_scope.clone();
+        let task = self
+            .runtime
+            .spawn(async move { client.deezer_ai_content(album_ids, arl).await });
+        let request_id = self.next_request_id();
+        self.artist_page_ai_request = Some(ActiveRequest {
+            generation,
+            id: request_id,
+            abort: task.abort_handle(),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.clear_artist_page_ai_request(generation, request_id);
+                let Ok(Ok(albums)) = result else {
+                    return;
+                };
+                if this.account_scope != account_scope
+                    || this.detail.generation() != generation
+                    || albums.is_empty()
+                {
+                    return;
+                }
+                let Some(artist) = (match &mut this.detail.state {
+                    super::detail::DetailState::Results(page)
+                    | super::detail::DetailState::Empty(page) => page.artist.as_mut(),
+                    _ => None,
+                }) else {
+                    return;
+                };
+                let mut changed = false;
+                for card in artist.albums.iter_mut().chain(artist.featured.iter_mut()) {
+                    if let Some(ai_generated) = albums.get(&card.id).copied() {
+                        if card.ai_generated != ai_generated {
+                            card.ai_generated = ai_generated;
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    cx.notify();
                 }
             })
             .ok();

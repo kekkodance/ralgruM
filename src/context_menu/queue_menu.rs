@@ -30,7 +30,7 @@ pub(crate) fn queue_menu<E, N>(
     host: Entity<N>,
     open_album: NavigationOpener,
     open_artist: NavigationOpener,
-    explicit_blocked: bool,
+    content_blocked: bool,
 ) -> gpui::AnyElement
 where
     E: gpui::InteractiveElement + gpui::ParentElement + gpui::Styled + gpui::IntoElement + 'static,
@@ -40,7 +40,7 @@ where
         .context_menu(move |menu, window, cx| {
             let menu = super::style_entity_menu(menu);
             let entity = queue_track_entity(&track);
-            let available = queue_action_availability(&track, ordinal, count, explicit_blocked);
+            let available = queue_action_availability(&track, ordinal, count, content_blocked);
             let link = playback_link(&track);
             let album_target = album_target_for_track(
                 entity.provider,
@@ -52,7 +52,7 @@ where
                 None,
             );
             let artist_routes = artist_routes_for_track(entity.provider, &track.artists);
-            let blocked = playback.read(cx).state.explicit_blocked(&track);
+            let blocked = playback.read(cx).state.content_blocked(&track);
             let entity_actions = action_availability(&entity, blocked);
             // Warm the playlist catalog while the menu is open so the Add to
             // playlist picker opens instantly. The guarded load is a no-op

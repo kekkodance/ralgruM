@@ -167,12 +167,12 @@ pub(crate) fn queue_action_availability(
     track: &PlaybackTrack,
     ordinal: usize,
     count: usize,
-    explicit_blocked: bool,
+    content_blocked: bool,
 ) -> QueueActionAvailability {
     QueueActionAvailability {
-        play_now: !explicit_blocked,
-        play_next: !explicit_blocked,
-        play_last: !explicit_blocked,
+        play_now: !content_blocked,
+        play_next: !content_blocked,
+        play_last: !content_blocked,
         move_up: ordinal > 0,
         move_down: ordinal + 1 < count,
         remove: true,
@@ -182,7 +182,7 @@ pub(crate) fn queue_action_availability(
 
 pub(crate) fn action_availability(
     entity: &MenuEntity,
-    explicit_blocked: bool,
+    content_blocked: bool,
 ) -> ActionAvailability {
     let valid = valid_id(&entity.id).is_some();
     let track = entity.kind == EntityKind::Track;
@@ -190,8 +190,8 @@ pub(crate) fn action_availability(
     let deezer = entity.provider == Provider::Deezer && valid;
     let soundcloud = entity.provider == Provider::SoundCloud && valid;
     ActionAvailability {
-        play_next: (track || (collection && entity.has_tracks)) && !explicit_blocked,
-        play_last: (track || (collection && entity.has_tracks)) && !explicit_blocked,
+        play_next: (track || (collection && entity.has_tracks)) && !content_blocked,
+        play_last: (track || (collection && entity.has_tracks)) && !content_blocked,
         download: track,
         add_to_playlist: track && (deezer || soundcloud),
         favorite: deezer || soundcloud,

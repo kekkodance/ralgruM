@@ -50,6 +50,7 @@ pub(crate) struct PlayingSnapshot {
     queue: Vec<(PlaybackProvider, String)>,
     playing: bool,
     skip_explicit: bool,
+    block_ai: bool,
 }
 
 impl PlayingSnapshot {
@@ -66,6 +67,7 @@ impl PlayingSnapshot {
                 .collect(),
             playing: state.status == PlaybackStatus::Playing,
             skip_explicit: state.skip_explicit,
+            block_ai: state.block_ai,
         }
     }
 
@@ -89,11 +91,12 @@ impl PlayingSnapshot {
             current_index,
             playing: self.playing,
             skip_explicit: self.skip_explicit,
+            block_ai: self.block_ai,
         }
     }
 
     pub(crate) fn blocks(&self, track: &PlaybackTrack) -> bool {
-        self.skip_explicit && track.explicit
+        (self.skip_explicit && track.explicit) || (self.block_ai && track.ai_generated)
     }
 }
 
@@ -102,6 +105,7 @@ pub(crate) struct QueuePlayingSnapshot {
     current_index: Option<usize>,
     playing: bool,
     skip_explicit: bool,
+    block_ai: bool,
 }
 
 impl QueuePlayingSnapshot {
@@ -116,7 +120,7 @@ impl QueuePlayingSnapshot {
     }
 
     pub(crate) fn blocks(&self, track: &PlaybackTrack) -> bool {
-        self.skip_explicit && track.explicit
+        (self.skip_explicit && track.explicit) || (self.block_ai && track.ai_generated)
     }
 }
 
@@ -614,18 +618,29 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_blocking_follows_the_explicit_preference() {
+    fn snapshot_blocking_follows_explicit_and_ai_preferences() {
         let explicit = track(PlaybackProvider::Deezer, "42", true);
         let clean = track(PlaybackProvider::Deezer, "43", false);
+        let mut ai = track(PlaybackProvider::Deezer, "44", false);
+        ai.ai_generated = true;
         let mut state = PlaybackState::default();
-        state.replace(vec![explicit.clone(), clean.clone()], 0);
+        state.replace(vec![explicit.clone(), clean.clone(), ai.clone()], 0);
         let snapshot = PlayingSnapshot::from_playback(&state);
         assert!(!snapshot.blocks(&explicit));
+        assert!(!snapshot.blocks(&ai));
 
         state.skip_explicit = true;
         let snapshot = PlayingSnapshot::from_playback(&state);
         assert!(snapshot.blocks(&explicit));
         assert!(!snapshot.blocks(&clean));
+        assert!(!snapshot.blocks(&ai));
+
+        state.block_ai = true;
+        let snapshot = PlayingSnapshot::from_playback(&state);
+        assert!(snapshot.blocks(&explicit));
+        assert!(!snapshot.blocks(&clean));
+        assert!(snapshot.blocks(&ai));
+        assert!(snapshot.for_queue(&[ai.clone()]).blocks(&ai));
     }
 
     #[test]

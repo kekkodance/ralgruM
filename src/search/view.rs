@@ -107,6 +107,7 @@ pub(crate) struct SearchView {
     pub(super) discover: DiscoverState,
     pub(super) search_request: Option<ActiveSearchRequest>,
     pub(super) deezer_ai_enrichment_request: Option<ActiveRequest>,
+    pub(super) artist_page_ai_request: Option<ActiveRequest>,
     pub(super) suggestion_request: Option<ActiveRequest>,
     pub(super) discover_requests: HashMap<Provider, ActiveRequest>,
     pub(super) discover_channel_request: Option<ActiveRequest>,
@@ -125,6 +126,7 @@ impl Drop for SearchView {
         }
         self.cancel_discover_channel_request();
         self.cancel_smart_mix_enrichment_request();
+        self.cancel_artist_page_ai_request();
     }
 }
 
@@ -250,6 +252,7 @@ impl SearchView {
             discover: DiscoverState::new(account_scope.clone()),
             search_request: None,
             deezer_ai_enrichment_request: None,
+            artist_page_ai_request: None,
             suggestion_request: None,
             discover_requests: HashMap::new(),
             discover_channel_request: None,

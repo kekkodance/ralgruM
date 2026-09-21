@@ -314,6 +314,7 @@ pub(crate) struct PlaybackState {
     pub(crate) repeat_mode: RepeatMode,
     pub(crate) shuffle_enabled: bool,
     pub(crate) skip_explicit: bool,
+    pub(crate) block_ai: bool,
     pub(crate) error: Option<String>,
     pub(crate) generation: u64,
     pub(crate) right_sidebar: RightSidebar,
@@ -355,6 +356,7 @@ impl Default for PlaybackState {
             repeat_mode: RepeatMode::Off,
             shuffle_enabled: false,
             skip_explicit: false,
+            block_ai: false,
             error: None,
             generation: 0,
             right_sidebar: RightSidebar::Closed,
@@ -396,14 +398,28 @@ impl PlaybackState {
         self.current_index.and_then(|index| self.queue.get(index))
     }
 
+    pub(crate) fn content_blocked(&self, track: &PlaybackTrack) -> bool {
+        self.explicit_blocked(track) || self.ai_blocked(track)
+    }
+
     pub(crate) fn explicit_blocked(&self, track: &PlaybackTrack) -> bool {
         self.skip_explicit && track.explicit
+    }
+
+    pub(crate) fn ai_blocked(&self, track: &PlaybackTrack) -> bool {
+        self.block_ai && track.ai_generated
     }
 
     pub(crate) fn set_skip_explicit(&mut self, enabled: bool) -> bool {
         self.skip_explicit = enabled;
         self.current()
-            .is_some_and(|track| self.explicit_blocked(track))
+            .is_some_and(|track| self.content_blocked(track))
+    }
+
+    pub(crate) fn set_block_ai(&mut self, enabled: bool) -> bool {
+        self.block_ai = enabled;
+        self.current()
+            .is_some_and(|track| self.content_blocked(track))
     }
 
     #[cfg(test)]
@@ -417,8 +433,8 @@ impl PlaybackState {
             self.clear();
             return None;
         }
-        let index = if self.explicit_blocked(&queue[index]) {
-            match queue.iter().position(|track| !self.explicit_blocked(track)) {
+        let index = if self.content_blocked(&queue[index]) {
+            match queue.iter().position(|track| !self.content_blocked(track)) {
                 Some(first_playable) => first_playable,
                 None => {
                     self.clear();
@@ -456,7 +472,7 @@ impl PlaybackState {
     }
 
     fn select_with_history(&mut self, index: usize, record_current: bool) -> Option<u64> {
-        if index >= self.queue.len() || self.explicit_blocked(&self.queue[index]) {
+        if index >= self.queue.len() || self.content_blocked(&self.queue[index]) {
             return None;
         }
         if record_current
@@ -751,7 +767,7 @@ impl PlaybackState {
         if self.play_next.iter().any(|&index| {
             self.queue
                 .get(index)
-                .is_some_and(|track| !self.explicit_blocked(track))
+                .is_some_and(|track| !self.content_blocked(track))
         }) {
             return true;
         }
@@ -759,20 +775,20 @@ impl PlaybackState {
             return self.shuffle_order.iter().any(|&index| {
                 self.queue
                     .get(index)
-                    .is_some_and(|track| !self.explicit_blocked(track))
+                    .is_some_and(|track| !self.content_blocked(track))
             });
         }
         let Some(current) = self.current_index else {
             return false;
         };
-        (current + 1..self.queue.len()).any(|index| !self.explicit_blocked(&self.queue[index]))
+        (current + 1..self.queue.len()).any(|index| !self.content_blocked(&self.queue[index]))
     }
 
     pub(crate) fn next(&mut self) -> Option<u64> {
         if self.repeat_mode == RepeatMode::One
             && !self
                 .current()
-                .is_some_and(|track| self.explicit_blocked(track))
+                .is_some_and(|track| self.content_blocked(track))
         {
             return self.begin_selection();
         }
@@ -792,7 +808,7 @@ impl PlaybackState {
             if self
                 .queue
                 .get(index)
-                .is_some_and(|track| !self.explicit_blocked(track))
+                .is_some_and(|track| !self.content_blocked(track))
             {
                 return Some(index);
             }
@@ -813,14 +829,12 @@ impl PlaybackState {
         }
         let current = self.current_index?;
         for index in current + 1..self.queue.len() {
-            if !self.explicit_blocked(&self.queue[index]) {
+            if !self.content_blocked(&self.queue[index]) {
                 return Some(index);
             }
         }
         (self.repeat_mode == RepeatMode::All)
-            .then(|| {
-                (0..self.queue.len()).find(|index| !self.explicit_blocked(&self.queue[*index]))
-            })
+            .then(|| (0..self.queue.len()).find(|index| !self.content_blocked(&self.queue[*index])))
             .flatten()
     }
 
@@ -829,7 +843,7 @@ impl PlaybackState {
             if self
                 .queue
                 .get(index)
-                .is_some_and(|track| !self.explicit_blocked(track))
+                .is_some_and(|track| !self.content_blocked(track))
             {
                 return Some(index);
             }
@@ -846,7 +860,7 @@ impl PlaybackState {
             if self
                 .queue
                 .get(index)
-                .is_some_and(|track| !self.explicit_blocked(track))
+                .is_some_and(|track| !self.content_blocked(track))
             {
                 return PreviousAction::Load(
                     self.select_with_history(index, false)
@@ -869,7 +883,7 @@ impl PlaybackState {
                 self.position = Duration::ZERO;
                 return PreviousAction::Restart;
             };
-            if !self.explicit_blocked(&self.queue[previous]) {
+            if !self.content_blocked(&self.queue[previous]) {
                 return PreviousAction::Load(
                     self.select_with_history(previous, false)
                         .expect("previous index is valid"),
@@ -1108,7 +1122,7 @@ impl PlaybackState {
         .then(|| {
             exact_queue[ticket.expected_len..]
                 .iter()
-                .position(|track| !self.explicit_blocked(track))
+                .position(|track| !self.content_blocked(track))
                 .map(|offset| ticket.expected_len + offset)
         })
         .flatten();

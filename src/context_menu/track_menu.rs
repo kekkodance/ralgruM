@@ -140,7 +140,7 @@ where
                 navigation_context.as_ref(),
             );
             let artist_routes = artist_routes_for_track(entity.provider, &entity.artists);
-            let blocked = playback.read(cx).state.explicit_blocked(&track);
+            let blocked = playback.read(cx).state.content_blocked(&track);
             let available = action_availability(&entity, blocked);
             // Warm the playlist catalog while the menu is open so the Add to
             // playlist picker opens instantly. The guarded load is a no-op

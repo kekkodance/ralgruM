@@ -43,7 +43,7 @@ pub(crate) fn fresh_playable_tail(state: &PlaybackState) -> usize {
     };
     state.queue[current + 1..]
         .iter()
-        .filter(|track| !state.explicit_blocked(track))
+        .filter(|track| !state.content_blocked(track))
         .count()
 }
 

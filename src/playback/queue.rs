@@ -510,7 +510,7 @@ impl Render for QueuePanel {
                         index: *index,
                         count,
                         track: track.clone(),
-                        blocked: state.explicit_blocked(track),
+                        blocked: state.content_blocked(track),
                     })
                 })
                 .collect::<Vec<_>>()

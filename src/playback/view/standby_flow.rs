@@ -298,7 +298,7 @@ impl PlaybackModel {
         self.state
             .first_upcoming_index()
             .and_then(|index| self.state.queue.get(index))
-            .filter(|track| !self.state.explicit_blocked(track))
+            .filter(|track| !self.state.content_blocked(track))
             .cloned()
     }
 }

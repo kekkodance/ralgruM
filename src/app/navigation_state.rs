@@ -203,6 +203,7 @@ pub(crate) struct AppSettings {
     pub(crate) close_to_tray: bool,
     pub(crate) motion_preference: MotionPreference,
     pub(crate) block_explicit_content: bool,
+    pub(crate) block_ai_content: bool,
     pub(crate) seamless_playback: bool,
     pub(crate) output_device: Option<String>,
     pub(crate) asio_mode: bool,
@@ -374,6 +375,7 @@ impl Default for AppSettings {
             close_to_tray: true,
             motion_preference: MotionPreference::System,
             block_explicit_content: false,
+            block_ai_content: false,
             seamless_playback: true,
             output_device: None,
             asio_mode: false,
@@ -627,6 +629,7 @@ mod tests {
                 "closeToTray": true,
                 "motionPreference": "system",
                 "blockExplicitContent": false,
+                "blockAiContent": false,
                 "seamlessPlayback": true,
                 "rememberPlaybackModes": true,
                 "lyricsSource": "musixmatch",
@@ -903,6 +906,7 @@ mod tests {
         settings.restore_window = false;
         settings.motion_preference = MotionPreference::Reduced;
         settings.block_explicit_content = true;
+        settings.block_ai_content = true;
         settings.seamless_playback = false;
         settings.remember_playback_modes = true;
         settings.lyrics_source = LyricsSource::Genius;

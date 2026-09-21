@@ -1,8 +1,8 @@
 use gpui::{
     AnimationExt as _, AnyElement, App, Bounds, ClickEvent, CursorStyle, Div, ElementId,
     FontWeight, HighlightStyle, InteractiveText, Pixels, ScrollHandle, ScrollWheelEvent,
-    SharedString, StyledText, TextAlign, UnderlineStyle, Window, canvas, div, fill, point,
-    prelude::*, px, rgb, rgba, size, svg,
+    SharedString, Stateful, StyledText, TextAlign, UnderlineStyle, Window, canvas, div, fill,
+    point, prelude::*, px, rgb, rgba, size, svg,
 };
 use std::{
     cell::Cell,
@@ -1386,16 +1386,25 @@ fn track_content_labels(labels: TrackRowLabels) -> Div {
         .when(labels.ai_generated, |this| this.child(ai_content_badge()))
 }
 
-fn explicit_badge() -> Div {
-    content_badge("E", 14., DANGER, 0xef444466, 0xef444426)
+fn explicit_badge() -> Stateful<Div> {
+    content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit")
 }
 
-pub(crate) fn ai_content_badge() -> Div {
-    content_badge("AI", 18., PRIMARY, 0x6366f166, 0x6366f126)
+pub(crate) fn ai_content_badge() -> Stateful<Div> {
+    content_badge("AI", 18., PRIMARY, 0x6366f166, 0x6366f126, "AI generated")
 }
 
-fn content_badge(label: &'static str, width: f32, color: u32, border: u32, bg: u32) -> Div {
+fn content_badge(
+    label: &'static str,
+    width: f32,
+    color: u32,
+    border: u32,
+    bg: u32,
+    tooltip: &'static str,
+) -> Stateful<Div> {
     div()
+        .id(label)
+        .app_tooltip(tooltip)
         .relative()
         .top(px(2.))
         .w(px(width))

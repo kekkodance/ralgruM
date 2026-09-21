@@ -296,6 +296,21 @@ impl SettingsView {
                     )
                     .into_any_element(),
                 ),
+                control_row(
+                    "Disable AI generated content",
+                    "Keep AI generated tracks visible, but gray them out and skip them everywhere.",
+                    settings_switch(
+                        "block-ai-content",
+                        self.draft.block_ai_content,
+                        cx.listener(|this, checked: &bool, _, cx| {
+                            this.update_draft_and_persist(
+                                |draft| draft.block_ai_content = *checked,
+                                cx,
+                            );
+                        }),
+                    )
+                    .into_any_element(),
+                ),
             ]))
             .into_any_element()
     }

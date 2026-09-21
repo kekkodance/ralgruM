@@ -453,13 +453,21 @@ pub(super) fn current_text_available_width(
     (layout.side_width - 60. - 12. - favorite_reservation).max(0.)
 }
 
-pub(super) fn current_text_intrinsic_width(window: &Window, title: &str, artist: &str) -> f32 {
-    text_measure_width(window, title, 14., FontWeight::SEMIBOLD).max(text_measure_width(
-        window,
-        artist,
-        12.,
-        FontWeight::NORMAL,
-    ))
+pub(super) fn current_text_intrinsic_width(
+    window: &Window,
+    title: &str,
+    artist: &str,
+    show_ai: bool,
+) -> f32 {
+    let text_width = text_measure_width(window, title, 14., FontWeight::SEMIBOLD)
+        .max(text_measure_width(window, artist, 12., FontWeight::NORMAL));
+    // The AI badge reserves its own footprint (18px badge plus 5px gap) next
+    // to the title, so the block must be that much wider to fit both.
+    if show_ai {
+        text_width + 23.
+    } else {
+        text_width
+    }
 }
 
 pub(super) fn current_text_width_for_layout(
