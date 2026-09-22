@@ -24,8 +24,8 @@ const SUFFIX_STARTUP_CHUNK: u64 = 256 * 1024;
 /// Later ranges use the backend's normal transfer size to avoid throttling
 /// the remaining buffer with many sequential requests.
 const SUFFIX_STREAM_CHUNK: u64 = 1024 * 1024;
-/// The suffix downloads a small lead for its decoder, then yields bandwidth
-/// to the front download until playback actually approaches that lead.
+/// Keep an idle suffix near its decoder's startup region. Once that reader
+/// starts consuming, let the active suffix finish without throttling playback.
 const SUFFIX_PREFETCH_BYTES: u64 = 1024 * 1024;
 /// First probe size for the FLAC file header (fLaC marker plus metadata).
 const FLAC_HEADER_PROBE_BYTES: u64 = 64 * 1024;
@@ -563,6 +563,7 @@ impl TimelineSeekSession for RangeTimelineSession {
                     flac_scanner: None,
                     published: false,
                     pause_guard: Some(pause_guard),
+                    startup_read_frontier: 0,
                 };
                 match format {
                     RangeSeekFormat::Mp3 => suffix.write_mp3(start).await,
@@ -623,6 +624,9 @@ struct SuffixWriter<'a> {
     /// Gate holding the front download back. Dropped at the startup
     /// handoff so the front download resumes while the tail streams.
     pause_guard: Option<DownloadPauseGuard>,
+    /// Reader position when the decoder became available. Movement beyond
+    /// this point means the seek decoder is consuming the suffix.
+    startup_read_frontier: u64,
 }
 
 impl SuffixWriter<'_> {
@@ -696,13 +700,18 @@ impl SuffixWriter<'_> {
             if self.cancellation.is_cancelled() {
                 return Err("Playback request cancelled".into());
             }
-            if self.startup.is_none() {
+            if self.startup.is_none()
+                && self.completion.read_frontier() <= self.startup_read_frontier
+            {
                 while self.written
                     > self
                         .completion
                         .read_frontier()
                         .saturating_add(SUFFIX_PREFETCH_BYTES)
                 {
+                    if self.completion.read_frontier() > self.startup_read_frontier {
+                        break;
+                    }
                     tokio::select! {
                         () = self.cancellation.cancelled() => return Err("Playback request cancelled".into()),
                         () = tokio::time::sleep(Duration::from_millis(50)) => {}
@@ -781,6 +790,7 @@ impl SuffixWriter<'_> {
             self.publish_landed();
             self.published = true;
         }
+        self.startup_read_frontier = self.completion.read_frontier();
         // The startup range requests are done and the decoder can land,
         // so the front download may stream again while the tail continues.
         self.pause_guard = None;
@@ -2714,8 +2724,25 @@ mod tests {
         assert!(session.landed_suffix(Duration::ZERO).is_some());
         assert!(session.landed_suffix(Duration::from_secs(50)).is_none());
 
+        let mut reader = startup.reader;
+        let mut initial_audio = [0; 4096];
+        reader.read_exact(&mut initial_audio).unwrap();
+        let mut completed = None;
+        for _ in 0..100 {
+            let state = TimelineSeekSession::suffix_state(&session).unwrap();
+            if state.written == state.total {
+                completed = Some(state);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(
+            completed.map(|state| state.written),
+            Some(total),
+            "once the active reader starts, the suffix must finish without staying one MiB ahead"
+        );
+
         let read = tokio::task::spawn_blocking(move || {
-            let mut reader = startup.reader;
             let mut output = Vec::new();
             reader.read_to_end(&mut output).unwrap();
             drop(startup.file);
@@ -2725,7 +2752,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(len as u64, total);
+        assert_eq!(len as u64 + initial_audio.len() as u64, total);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
