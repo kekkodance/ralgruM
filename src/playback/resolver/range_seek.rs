@@ -10,9 +10,9 @@ use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 
 use super::super::progressive::{
-    DownloadPauseGate, LandedSuffixSource, ProgressiveCompletion, ProgressiveFile,
-    ProgressiveReader, ProgressiveWriter, TimelineSeekRequest, TimelineSeekSession,
-    TimelineSeekStartup, TimelineSuffixState,
+    DownloadPauseGate, DownloadPauseGuard, LandedSuffixSource, ProgressiveCompletion,
+    ProgressiveFile, ProgressiveReader, ProgressiveWriter, TimelineSeekRequest,
+    TimelineSeekSession, TimelineSeekStartup, TimelineSuffixState,
 };
 use super::AudioFormat;
 
@@ -110,13 +110,19 @@ struct FrontBufferCoverage {
     map: FrontBufferMap,
 }
 
-/// A suffix this session fetched to the end. Its buffer file remains a
-/// local seek source for any position it spans, so later seeks inside it
-/// neither fetch again nor park the front download.
+/// A suffix this session fetched far enough to serve local seeks. Its
+/// buffer file remains a local seek source for any position it spans, so
+/// later seeks inside it neither fetch again nor park the front download.
+/// The record is published as soon as the startup handoff happens, then
+/// refreshed as the fetch keeps landing more bytes.
 struct LandedSuffix {
     base: Duration,
     path: PathBuf,
     completion: ProgressiveCompletion,
+    /// Byte offset on the source file where this suffix's frames start.
+    base_bytes: u64,
+    /// Bytes of staged header written before the frames.
+    header_len: u64,
 }
 
 impl FrontBufferCoverage {
@@ -308,13 +314,39 @@ async fn fetch_reusing_front_buffer(
 }
 
 impl RangeTimelineSession {
-    /// Whether a landed suffix already covers the position with all its
-    /// bytes. Only a fully fetched suffix proves the whole span from its
-    /// base to the position is on disk, so a local rebuild never blocks.
+    /// A landed suffix serves a local seek when the position sits inside its
+    /// span and its flushed frontier already covers the target's bytes. The
+    /// fetch keeps writing after the record is published, so a growing
+    /// suffix serves anything up to what has actually landed on disk.
     fn landed_suffix_source(&self, position: Duration) -> Option<LandedSuffixSource> {
         let landed = self.landed.lock().ok()?;
         let landed = landed.as_ref()?;
-        if position < landed.base || !landed.completion.is_complete() {
+        if position < landed.base {
+            return None;
+        }
+        let seconds = self.duration.as_secs_f64();
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return None;
+        }
+        // Linear estimate over the suffix's remaining span: the same class
+        // of map the MP3 front coverage uses. The startup margin absorbs
+        // variable-bitrate drift and guarantees the decoder's frame probe
+        // and refine reads stay inside flushed bytes.
+        let remaining_bytes = self.total.saturating_sub(landed.base_bytes).max(1);
+        let remaining_time = self.duration.saturating_sub(landed.base).as_secs_f64();
+        let into = position
+            .saturating_sub(landed.base)
+            .as_secs_f64()
+            .min(remaining_time);
+        let needed_source =
+            landed.base_bytes + (into / remaining_time * remaining_bytes as f64) as u64;
+        let needed_in_suffix =
+            landed.header_len + (needed_source.saturating_sub(landed.base_bytes));
+        let covered = landed
+            .completion
+            .written()
+            .saturating_add(SUFFIX_STARTUP_BYTES);
+        if needed_in_suffix > covered || needed_source >= self.total {
             return None;
         }
         Some(LandedSuffixSource {
@@ -377,11 +409,14 @@ impl TimelineSeekSession for RangeTimelineSession {
         let total = self.total;
         let duration = self.duration;
         let landed = self.landed.clone();
-        // Hold the front download's pause gate for the whole suffix fetch,
-        // startup through the tail, so the range requests the seek needs
-        // never compete with the stream they are about to replace.
+        // The front download's pause gate is shared with the writer through
+        // the SuffixWriter's startup handoff: the gate protects the small
+        // startup range requests from competing with the front stream, and
+        // the release happens as soon as the handoff lands the decoder. The
+        // remaining tail keeps fetching without parking the front download.
         let pause_guard = self.pause.hold();
-        self.runtime.spawn(async move {
+        let runtime = self.runtime.clone();
+        runtime.spawn(async move {
             let error_sender = startup_sender.clone();
             let result = {
                 let suffix = SuffixWriter {
@@ -398,13 +433,16 @@ impl TimelineSeekSession for RangeTimelineSession {
                     base: position,
                     completion,
                     path,
+                    frame_base: start,
+                    header_len: 0,
+                    published: false,
+                    pause_guard: Some(pause_guard),
                 };
                 match format {
                     RangeSeekFormat::Mp3 => suffix.write_mp3(start).await,
                     RangeSeekFormat::Flac => suffix.write_flac(start, duration, position).await,
                 }
             };
-            drop(pause_guard);
             if let Err(error) = result {
                 let _ = error_sender.send(Err(error));
             }
@@ -445,6 +483,17 @@ struct SuffixWriter<'a> {
     base: Duration,
     completion: ProgressiveCompletion,
     path: PathBuf,
+    /// Source byte offset where this suffix's fetched frames start. The
+    /// suffix file is header bytes then this stream, so positions inside the
+    /// suffix map to (offset minus base) plus the header length.
+    frame_base: u64,
+    /// Staged header bytes written before the frame stream.
+    header_len: u64,
+    /// Whether the startup handoff published the landed record already.
+    published: bool,
+    /// Gate holding the front download back. Dropped at the startup
+    /// handoff so the front download resumes while the tail streams.
+    pause_guard: Option<DownloadPauseGuard>,
 }
 
 impl SuffixWriter<'_> {
@@ -480,6 +529,8 @@ impl SuffixWriter<'_> {
             }
         };
         self.written = header_len;
+        self.header_len = header_len as u64;
+        self.frame_base = frame.offset;
         self.intra_segment_offset = Some(target.saturating_sub(frame.position));
         // The playable suffix is the frame range, not the staged header, so
         // the indicator's denominator switches to it once it is known.
@@ -543,17 +594,27 @@ impl SuffixWriter<'_> {
             .finish()
             .await
             .map_err(|_| "The seek buffer could not be finalized".to_string())?;
-        // The whole suffix landed, so its buffer stays a local seek source
-        // for any position it spans. Only a fetch that ran to the end
-        // reaches this point; superseded ones return an error above.
-        if let Some(landed) = self.landed.take() {
-            *landed.lock().unwrap_or_else(|error| error.into_inner()) = Some(LandedSuffix {
-                base: self.base,
-                path: self.path.clone(),
-                completion: self.completion.clone(),
-            });
-        }
+        // The suffix is complete: its buffer is a local seek source for
+        // every position it spans.
+        self.publish_landed();
         Ok(())
+    }
+
+    /// Publishes or refreshes the session's landed record. The buffer
+    /// serves local seeks from the startup handoff onward, growing as the
+    /// fetch keeps landing bytes.
+    fn publish_landed(&mut self) {
+        let Some(landed) = self.landed.clone() else {
+            return;
+        };
+        let mut landed = landed.lock().unwrap_or_else(|error| error.into_inner());
+        *landed = Some(LandedSuffix {
+            base: self.base,
+            path: self.path.clone(),
+            completion: self.completion.clone(),
+            base_bytes: self.frame_base,
+            header_len: self.header_len,
+        });
     }
 
     fn release_startup(&mut self) -> Result<(), String> {
@@ -561,6 +622,15 @@ impl SuffixWriter<'_> {
             return Ok(());
         };
         self.writer.mark_startup_ready();
+        // The engine can rebuild a decoder from this buffer as soon as the
+        // handoff happens, so the landed record must exist before it.
+        if !self.published {
+            self.publish_landed();
+            self.published = true;
+        }
+        // The startup range requests are done and the decoder can land,
+        // so the front download may stream again while the tail continues.
+        self.pause_guard = None;
         if self
             .startup_sender
             .send(Ok(TimelineSeekStartup {
@@ -575,7 +645,6 @@ impl SuffixWriter<'_> {
         Ok(())
     }
 }
-
 /// Fetches the FLAC file header and locates the frame the suffix starts at.
 async fn flac_suffix_start(
     fetch: RangeFetch,
