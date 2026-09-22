@@ -452,12 +452,18 @@ impl RodioEngine {
             .open_reader(path)
             .map_err(|error| format!("The playback buffer could not be opened: {error}"))?;
         let total = reader.total();
+        // The local seek's binary search must stay inside the flushed frontier.
+        // Telling symphonia the full file size makes its seek probes read past
+        // the frontier, where the progressive reader blocks on its wait and
+        // races the ongoing front download with fallback range fetches.
+        let available = completion.written();
         let mut builder = Decoder::builder()
             .with_data(reader)
             .with_hint(format.extension())
             .with_mime_type(format.mime_type());
-        if let Some(total) = total {
-            builder = builder.with_byte_len(total);
+        let byte_len = total.map(|total| total.min(available));
+        if let Some(byte_len) = byte_len {
+            builder = builder.with_byte_len(byte_len);
         }
         let mut decoder = builder
             .build()

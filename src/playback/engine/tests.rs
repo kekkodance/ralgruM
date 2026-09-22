@@ -378,6 +378,78 @@ async fn progressive_reload_seeks_inside_the_existing_growing_file() {
     assert_eq!(completion.written(), frontier);
 }
 
+#[tokio::test]
+async fn progressive_local_seek_never_reads_past_the_flushed_frontier() {
+    let Some(file) = make_flac_tone_fixture() else {
+        eprintln!("ffmpeg is unavailable; skipping frontier local seek test");
+        return;
+    };
+    let bytes = std::fs::read(file.path()).unwrap();
+    let total = bytes.len() as u64;
+    let frontier = total.saturating_mul(40) / 100;
+    let buffer =
+        super::super::progressive::ProgressiveFile::new(AudioFormat::Flac, Some(total)).unwrap();
+    let path = buffer.path().to_path_buf();
+    let reader = buffer.reader().unwrap();
+    let completion = reader.completion();
+    let mut writer = buffer.writer().unwrap();
+    use tokio::io::AsyncWriteExt as _;
+    writer.write_all(&bytes[..frontier as usize]).await.unwrap();
+    writer.flush().await.unwrap();
+    // Drop the writer without finishing so no further bytes ever arrive; any
+    // read past the frontier would block forever.
+    drop(writer);
+    drop(reader);
+    assert!(!completion.is_complete());
+
+    let cancellation = AtomicBool::new(false);
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(1),
+        tokio::task::spawn_blocking(move || {
+            let mut seeked = RodioEngine::progressive_decoder_at_with_cancellation(
+                &path,
+                AudioFormat::Flac,
+                Duration::from_secs(1),
+                &completion,
+                &cancellation,
+            )?;
+            let samples = seeked.by_ref().take(4_096).collect::<Vec<_>>();
+            Ok::<_, String>(sample_rms(&samples))
+        }),
+    )
+    .await
+    .expect("the local seek must not wait for bytes past the frontier")
+    .expect("the seek worker must not panic")
+    .expect("the local progressive reload must succeed");
+    assert!(
+        outcome > 0.2,
+        "the local progressive reload must land in the tone region, RMS was {outcome}"
+    );
+}
+
+fn make_flac_tone_fixture() -> Option<tempfile::NamedTempFile> {
+    let file = tempfile::Builder::new().suffix(".flac").tempfile().ok()?;
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=0.7*sin(2*PI*880*t):s=44100:d=4",
+            "-c:a",
+            "flac",
+            "-f",
+            "flac",
+            "-y",
+        ])
+        .arg(file.path())
+        .status()
+        .ok()?;
+    status.success().then_some(file)
+}
+
 #[test]
 fn hls_suffix_decodes_the_target_segment_without_prefix_media() {
     let Some((directory, init, segments)) = make_hls_fmp4_fixture() else {
