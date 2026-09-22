@@ -26,7 +26,8 @@ use crate::diagnostics;
 use super::asio_drivers::find_asio_driver;
 use super::output_devices::find_output_device;
 use super::progressive::{
-    ProgressiveCompletion, ProgressiveReader, TimelineSeekSession, TimelineSuffixState,
+    LandedSuffixSource, ProgressiveCompletion, ProgressiveReader, TimelineSeekSession,
+    TimelineSuffixState,
 };
 use super::ramped_gain::RampedGain;
 use super::resolver::{AudioFormat, ResolvedAudio, ResolvedProgressiveAudio};
@@ -180,6 +181,9 @@ pub(crate) struct RodioEngine {
     /// Timeline position of the landed suffix the sink is playing, when a
     /// timeline seek superseded the front buffer.
     active_suffix: Option<Duration>,
+    /// The most recently landed suffix buffer. Seeks inside its span rebuild
+    /// a decoder from it locally instead of fetching the range again.
+    landed_suffix: Option<LandedSuffixSource>,
     playback_intent: Arc<AtomicBool>,
     transport_gain: Arc<RampedGain>,
     automation_gain: Arc<RampedGain>,
@@ -204,6 +208,7 @@ impl RodioEngine {
             pending_position: None,
             active_timeline_cancellation: None,
             active_suffix: None,
+            landed_suffix: None,
             playback_intent: Arc::new(AtomicBool::new(false)),
             transport_gain: Arc::new(RampedGain::default()),
             automation_gain: Arc::new(RampedGain::default()),
@@ -641,7 +646,7 @@ impl RodioEngine {
     /// buffer seeks and M4A reloads reopen these paths to build a fresh
     /// decoder, so dropping the owning temp file would make every later
     /// seek fail with an unopenable playback buffer.
-    fn live_seek_paths(&self) -> [Option<&Path>; 4] {
+    fn live_seek_paths(&self) -> [Option<&Path>; 5] {
         [
             self.progressive_seek
                 .as_ref()
@@ -651,16 +656,12 @@ impl RodioEngine {
                 .map(|seek| seek.path.as_path()),
             self.front_reopen.as_ref().map(|(path, _)| path.as_path()),
             self.standby_reopen.as_ref().map(|(path, _)| path.as_path()),
+            self.landed_suffix
+                .as_ref()
+                .map(|suffix| suffix.path.as_path()),
         ]
     }
 
-    /// Retains a playback buffer file, evicting the oldest superseded one.
-    ///
-    /// Rapid mid-download seeks land one suffix buffer per request, so a
-    /// plain FIFO trim would evict the current track's buffer after two
-    /// landed seeks even though the engine still opens it by path. Only
-    /// files no live seek path names and that are not the newest buffer
-    /// feeding the sink are ever dropped.
     fn retain_playback_file(&mut self, file: tempfile::NamedTempFile) {
         self.retained_files.push(file);
         while self.retained_files.len() > 2 {
@@ -693,7 +694,7 @@ impl RodioEngine {
     }
 
     fn schedule_progressive_reload(&mut self, position: Duration) -> Result<(), String> {
-        let (path, format, completion, timeline_seek_session, complete) = {
+        let (mut path, format, completion, timeline_seek_session, complete) = {
             let progressive_seek = self
                 .progressive_seek
                 .as_ref()
@@ -707,9 +708,37 @@ impl RodioEngine {
             )
         };
         self.cancel_pending_progressive_reload();
-        if let Some(timeline_seek_session) = timeline_seek_session
+        // A landed suffix is a complete local copy of the range it spans, so
+        // a seek inside it rebuilds from that buffer instead of fetching
+        // the same bytes over the network again.
+        let landed = timeline_seek_session
+            .as_ref()
+            .and_then(|session| session.landed_suffix(position))
+            .filter(|_| !complete);
+        let mut completion = completion;
+        let mut seek_target = position;
+        let suffix_path = if let Some(landed) = landed {
+            // The suffix buffer keeps its own completion and byte frontier.
+            // An MP3 suffix is a raw frame stream whose decoder timeline
+            // restarts at zero, so its target is relative to the suffix
+            // base; FLAC frames keep their original numbers, so the
+            // rebased seek table already lands the absolute target.
+            completion = landed.completion.clone();
+            if format == AudioFormat::Mp3 {
+                seek_target = position.saturating_sub(landed.base);
+            }
+            path = landed.path.clone();
+            self.landed_suffix = Some(landed);
+            true
+        } else {
+            false
+        };
+        if !suffix_path
+            && !timeline_seek_session
+                .as_ref()
+                .is_some_and(|session| session.can_seek_from_front(position))
             && !complete
-            && !timeline_seek_session.can_seek_from_front(position)
+            && let Some(timeline_seek_session) = timeline_seek_session
         {
             return self.schedule_timeline_reload(timeline_seek_session, position);
         }
@@ -732,7 +761,7 @@ impl RodioEngine {
                     Self::progressive_decoder_at_with_cancellation(
                         &path,
                         format,
-                        position,
+                        seek_target,
                         &completion,
                         &worker_cancellation,
                     )
@@ -841,6 +870,17 @@ impl RodioEngine {
                     .expect("pending progressive reload disappeared");
                 self.pending_position = None;
                 self.pending_seek_completion.take();
+                // A timeline reload that landed a suffix leaves a complete
+                // local copy of its range behind; later seeks inside it
+                // take the local rebuild instead of a fresh fetch.
+                if pending.timeline_cancellation.is_some()
+                    && let Some(session) = self
+                        .progressive_seek
+                        .as_ref()
+                        .and_then(|seek| seek.timeline_seek_session.clone())
+                {
+                    self.landed_suffix = session.landed_suffix(pending.position);
+                }
                 Ok(Some(ProgressiveReloadResult {
                     source: source.0,
                     position: pending.position,
@@ -862,6 +902,7 @@ impl RodioEngine {
                 // The failed fetch superseded any landed suffix, so the
                 // indicator can no longer trust the session's counters.
                 self.active_suffix = None;
+                self.landed_suffix = None;
                 Err(error)
             }
             Err(mpsc::TryRecvError::Empty) => Ok(None),
@@ -877,6 +918,7 @@ impl RodioEngine {
                 }
                 self.pending_position = None;
                 self.active_suffix = None;
+                self.landed_suffix = None;
                 Err("The playback seek worker stopped unexpectedly".into())
             }
         }
@@ -1112,6 +1154,7 @@ impl AudioEngine for RodioEngine {
         self.set_playback_intent(false);
         self.cancel_pending_progressive_reload();
         self.active_suffix = None;
+        self.landed_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
         discard_progressive_seek(&mut self.standby_progressive_seek);
         self.sink.stop();
@@ -1150,6 +1193,7 @@ impl AudioEngine for RodioEngine {
         crate::plugins::minimeters::tap::clear();
         self.cancel_pending_progressive_reload();
         self.active_suffix = None;
+        self.landed_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
         discard_progressive_seek(&mut self.standby_progressive_seek);
         self.front_reopen = None;
@@ -1379,11 +1423,13 @@ impl AudioEngine for RodioEngine {
     fn skip_to_standby(&mut self) {
         self.cancel_pending_progressive_reload();
         self.active_suffix = None;
+        self.landed_suffix = None;
         self.sink.skip_one();
     }
     fn activate_standby(&mut self) {
         self.cancel_pending_progressive_reload();
         self.active_suffix = None;
+        self.landed_suffix = None;
         discard_progressive_seek(&mut self.progressive_seek);
         self.progressive_seek = self.standby_progressive_seek.take();
         self.front_reopen = self.standby_reopen.take();

@@ -10,9 +10,9 @@ use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 
 use super::super::progressive::{
-    DownloadPauseGate, ProgressiveCompletion, ProgressiveFile, ProgressiveReader,
-    ProgressiveWriter, TimelineSeekRequest, TimelineSeekSession, TimelineSeekStartup,
-    TimelineSuffixState,
+    DownloadPauseGate, LandedSuffixSource, ProgressiveCompletion, ProgressiveFile,
+    ProgressiveReader, ProgressiveWriter, TimelineSeekRequest, TimelineSeekSession,
+    TimelineSeekStartup, TimelineSuffixState,
 };
 use super::AudioFormat;
 
@@ -92,6 +92,15 @@ pub(crate) struct RangeTimelineSession {
     pause: DownloadPauseGate,
     suffix: Arc<std::sync::Mutex<Option<SuffixTracker>>>,
     front_coverage: Option<FrontBufferCoverage>,
+    landed: Arc<std::sync::Mutex<Option<LandedSuffix>>>,
+}
+
+enum FrontBufferMap {
+    Mp3,
+    Flac {
+        audio_start: u64,
+        stream_info: FlacStreamInfo,
+    },
 }
 
 struct FrontBufferCoverage {
@@ -101,12 +110,13 @@ struct FrontBufferCoverage {
     map: FrontBufferMap,
 }
 
-enum FrontBufferMap {
-    Mp3,
-    Flac {
-        audio_start: u64,
-        stream_info: FlacStreamInfo,
-    },
+/// A suffix this session fetched to the end. Its buffer file remains a
+/// local seek source for any position it spans, so later seeks inside it
+/// neither fetch again nor park the front download.
+struct LandedSuffix {
+    base: Duration,
+    path: PathBuf,
+    completion: ProgressiveCompletion,
 }
 
 impl FrontBufferCoverage {
@@ -167,11 +177,20 @@ impl FrontBufferCoverage {
                 audio_start,
                 stream_info,
             } => {
-                let Some(ready_through) =
-                    stream_info.byte_at_or_after(position, *audio_start, self.total)
-                else {
+                let Some(target_offset) = stream_info.interpolated_target_offset(
+                    position,
+                    *audio_start,
+                    self.total,
+                    self.duration,
+                ) else {
                     return false;
                 };
+                // The decoder lands on the target through the seek point
+                // at or before it, so the flushed prefix must prove that
+                // point's frame and the target's own share of the bracket.
+                let ready_through = target_offset
+                    .saturating_add(stream_info.max_frame_bytes())
+                    .min(self.total);
                 return self.completion.written() >= ready_through;
             }
         };
@@ -213,6 +232,7 @@ impl RangeTimelineSession {
             pause,
             suffix: Arc::new(std::sync::Mutex::new(None)),
             front_coverage: None,
+            landed: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -287,11 +307,33 @@ async fn fetch_reusing_front_buffer(
     Ok(bytes)
 }
 
+impl RangeTimelineSession {
+    /// Whether a landed suffix already covers the position with all its
+    /// bytes. Only a fully fetched suffix proves the whole span from its
+    /// base to the position is on disk, so a local rebuild never blocks.
+    fn landed_suffix_source(&self, position: Duration) -> Option<LandedSuffixSource> {
+        let landed = self.landed.lock().ok()?;
+        let landed = landed.as_ref()?;
+        if position < landed.base || !landed.completion.is_complete() {
+            return None;
+        }
+        Some(LandedSuffixSource {
+            path: landed.path.clone(),
+            completion: landed.completion.clone(),
+            base: landed.base,
+        })
+    }
+}
+
 impl TimelineSeekSession for RangeTimelineSession {
     fn can_seek_from_front(&self, position: Duration) -> bool {
         self.front_coverage
             .as_ref()
             .is_some_and(|front| front.contains(position))
+    }
+
+    fn landed_suffix(&self, position: Duration) -> Option<LandedSuffixSource> {
+        self.landed_suffix_source(position)
     }
 
     fn request(&self, position: Duration) -> Result<TimelineSeekRequest, String> {
@@ -300,7 +342,7 @@ impl TimelineSeekSession for RangeTimelineSession {
             return Err("The track duration is unknown".into());
         }
         if self.total == 0 {
-            return Err("The track size is unknown".into());
+            return Err("The track size is unknown".to_string());
         }
         let format = self.format;
         let fraction = (position.as_secs_f64() / seconds).clamp(0.0, 0.99);
@@ -325,6 +367,8 @@ impl TimelineSeekSession for RangeTimelineSession {
         let writer = buffer
             .writer()
             .map_err(|_| "The seek buffer could not be opened".to_string())?;
+        let path = buffer.path().to_path_buf();
+        let completion = reader.completion();
         let file = buffer.into_file();
         let cancellation = self.track_cancellation.child_token();
         let worker_cancellation = cancellation.clone();
@@ -332,6 +376,7 @@ impl TimelineSeekSession for RangeTimelineSession {
         let fetch = self.fetch.clone();
         let total = self.total;
         let duration = self.duration;
+        let landed = self.landed.clone();
         // Hold the front download's pause gate for the whole suffix fetch,
         // startup through the tail, so the range requests the seek needs
         // never compete with the stream they are about to replace.
@@ -349,6 +394,10 @@ impl TimelineSeekSession for RangeTimelineSession {
                     intra_segment_offset: None,
                     written: 0,
                     progress: progress.clone(),
+                    landed: Some(landed),
+                    base: position,
+                    completion,
+                    path,
                 };
                 match format {
                     RangeSeekFormat::Mp3 => suffix.write_mp3(start).await,
@@ -392,6 +441,10 @@ struct SuffixWriter<'a> {
     intra_segment_offset: Option<Duration>,
     written: u64,
     progress: Arc<SuffixProgress>,
+    landed: Option<Arc<std::sync::Mutex<Option<LandedSuffix>>>>,
+    base: Duration,
+    completion: ProgressiveCompletion,
+    path: PathBuf,
 }
 
 impl SuffixWriter<'_> {
@@ -490,6 +543,16 @@ impl SuffixWriter<'_> {
             .finish()
             .await
             .map_err(|_| "The seek buffer could not be finalized".to_string())?;
+        // The whole suffix landed, so its buffer stays a local seek source
+        // for any position it spans. Only a fetch that ran to the end
+        // reaches this point; superseded ones return an error above.
+        if let Some(landed) = self.landed.take() {
+            *landed.lock().unwrap_or_else(|error| error.into_inner()) = Some(LandedSuffix {
+                base: self.base,
+                path: self.path.clone(),
+                completion: self.completion.clone(),
+            });
+        }
         Ok(())
     }
 
@@ -541,6 +604,14 @@ async fn flac_suffix_start(
             .await?
         }
     };
+    let mut header = header;
+    // The suffix file re-bases its frame bytes at the frame the seek
+    // picked, so the seek table must follow: its offsets are shifted by
+    // the same distance and points that fall before the frame become
+    // placeholders. A later local seek on the suffix buffer then lands
+    // through the table exactly like it would on the original file.
+    let skip = frame.offset.saturating_sub(header.len() as u64);
+    rebase_flac_seek_table(&mut header, skip);
     writer
         .write_all(&header)
         .await
@@ -550,6 +621,43 @@ async fn flac_suffix_start(
         .await
         .map_err(|_| "The seek buffer could not be finalized".to_string())?;
     Ok((header.len() as u64, frame))
+}
+
+/// Shifts every SEEKTABLE offset in a FLAC header by `skip` bytes, marking
+/// the points that land before the suffix start as placeholders.
+fn rebase_flac_seek_table(header: &mut [u8], skip: u64) {
+    let mut cursor = 4;
+    while let Some(prefix) = header.get(cursor..cursor + 4) {
+        let last = prefix[0] & 0x80 != 0;
+        let block_type = prefix[0] & 0x7f;
+        let length = (u32::from(prefix[1]) << 16 | u32::from(prefix[2]) << 8 | u32::from(prefix[3]))
+            as usize;
+        let payload_start = cursor + 4;
+        let Some(payload_end) = payload_start.checked_add(length) else {
+            return;
+        };
+        if !header
+            .get(..payload_end)
+            .is_some_and(|payload| payload.len() == payload_end)
+        {
+            return;
+        }
+        if block_type == 3 {
+            for point in header[payload_start..payload_end].chunks_exact_mut(18) {
+                let offset = u64::from_be_bytes(point[8..16].try_into().unwrap());
+                if offset >= skip {
+                    point[8..16].copy_from_slice(&(offset - skip).to_be_bytes());
+                } else {
+                    point[..8].fill(0xff);
+                }
+            }
+            return;
+        }
+        cursor = payload_end;
+        if last {
+            return;
+        }
+    }
 }
 
 /// Fetches the `fLaC` marker and metadata blocks from the start of the file.
@@ -765,10 +873,17 @@ impl FlacStreamInfo {
         })
     }
 
-    /// First byte boundary that proves the requested position is inside the
-    /// flushed prefix. A later seek point bounds all frames before it; an
-    /// exact seek point also needs one complete frame available.
-    fn byte_at_or_after(&self, target: Duration, audio_start: u64, total: u64) -> Option<u64> {
+    /// Byte offset of the seek target itself, interpolated inside the
+    /// bracket of seek points around it. The decoder's search for the
+    /// target frame reads up to this offset, so the flushed prefix must
+    /// cover it before a local seek may run.
+    fn interpolated_target_offset(
+        &self,
+        target: Duration,
+        audio_start: u64,
+        total: u64,
+        duration: Duration,
+    ) -> Option<u64> {
         if self.sample_rate == 0 {
             return None;
         }
@@ -776,20 +891,67 @@ impl FlacStreamInfo {
             .as_nanos()
             .saturating_mul(u128::from(self.sample_rate))
             / 1_000_000_000;
-        let point = self
+        let lower = self
             .seek_points
             .iter()
-            .filter(|point| u128::from(point.sample) >= target_sample)
-            .min_by_key(|point| point.sample)?;
-        let offset = audio_start.checked_add(point.offset)?;
-        if offset >= total {
-            return None;
-        }
-        if u128::from(point.sample) == target_sample {
-            Some(offset.saturating_add(self.max_frame_bytes()).min(total))
-        } else {
-            Some(offset)
-        }
+            .filter(|point| u128::from(point.sample) <= target_sample)
+            .max_by_key(|point| point.sample);
+        let upper = self
+            .seek_points
+            .iter()
+            .filter(|point| u128::from(point.sample) > target_sample)
+            .min_by_key(|point| point.sample);
+        let offset = match (lower, upper) {
+            (Some(lower), Some(upper)) => {
+                let span = upper.sample.saturating_sub(lower.sample).max(1);
+                let into =
+                    u64::try_from(target_sample.saturating_sub(u128::from(lower.sample))).ok()?;
+                let fraction = (into.min(span)) as f64 / span as f64;
+                let span_bytes = upper.offset.saturating_sub(lower.offset);
+                lower
+                    .offset
+                    .saturating_add((fraction * span_bytes as f64) as u64)
+            }
+            (Some(lower), None) => {
+                // Past the last point the tail is stretched by the file
+                // average, the only estimate a seek table offers.
+                let point_end = samples_to_duration(lower.sample, self.sample_rate);
+                let tail = duration.saturating_sub(point_end);
+                let bytes_left = total.saturating_sub(audio_start.saturating_add(lower.offset));
+                if tail.is_zero() {
+                    lower.offset
+                } else {
+                    let fraction = (target.saturating_sub(point_end).as_secs_f64()
+                        / tail.as_secs_f64())
+                    .clamp(0.0, 1.0);
+                    lower
+                        .offset
+                        .saturating_add((fraction * bytes_left as f64) as u64)
+                }
+            }
+            (None, Some(upper)) => {
+                let point_start = samples_to_duration(upper.sample, self.sample_rate);
+                let fraction = if point_start.is_zero() {
+                    1.0
+                } else {
+                    (target.as_secs_f64() / point_start.as_secs_f64()).clamp(0.0, 1.0)
+                };
+                (fraction * upper.offset as f64) as u64
+            }
+            (None, None) => {
+                let seconds = duration.as_secs_f64();
+                if !seconds.is_finite() || seconds <= 0.0 {
+                    return None;
+                }
+                let fraction = (target.as_secs_f64() / seconds).clamp(0.0, 1.0);
+                (fraction * total.saturating_sub(audio_start) as f64) as u64
+            }
+        };
+        Some(
+            audio_start
+                .saturating_add(offset)
+                .min(total.saturating_sub(1)),
+        )
     }
 }
 
@@ -1142,15 +1304,22 @@ mod tests {
             },
         };
 
-        writer.write_all(&vec![0; 2_099]).await.unwrap();
+        // The target sits inside the bracket between the 10s and 20s seek
+        // points, so coverage needs only the target's own share of the
+        // bracket instead of the whole next point.
+        writer.write_all(&vec![0; 1_264]).await.unwrap();
         writer.flush().await.unwrap();
         assert!(
             !coverage.contains(Duration::from_secs(11)),
-            "the next seek point still sits beyond the flushed prefix"
+            "the target's own region still sits beyond the flushed prefix"
         );
         writer.write_all(&[0]).await.unwrap();
         writer.flush().await.unwrap();
         assert!(coverage.contains(Duration::from_secs(11)));
+        // The 5s target interpolates inside the first bracket, which is
+        // fully flushed, so it must report covered.
+        assert!(coverage.contains(Duration::from_secs(5)));
+        assert!(coverage.contains(Duration::ZERO));
     }
 
     fn make_mp3_tone_fixture() -> Option<tempfile::NamedTempFile> {
@@ -1963,7 +2132,10 @@ mod tests {
         // but every fetch that did start must have reached a terminal state.
         tokio::time::sleep(Duration::from_millis(150)).await;
         let log = log.lock().unwrap();
-        assert_eq!(log.completed, 5, "only landed seeks may complete: {log:?}");
+        assert_eq!(
+            log.completed, 2,
+            "only landed fetches may complete: {log:?}"
+        );
         assert_eq!(
             log.started,
             log.cancelled + log.completed,

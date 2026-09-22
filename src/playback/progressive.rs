@@ -48,10 +48,16 @@ pub(crate) trait TimelineSeekSession: Send + Sync {
         false
     }
 
+    /// A fully fetched suffix this session landed earlier that covers the
+    /// position. A local seek can rebuild its decoder from that buffer
+    /// instead of fetching the range again.
+    fn landed_suffix(&self, _position: Duration) -> Option<LandedSuffixSource> {
+        None
+    }
+
     /// Live state of the latest suffix this session fetched, so the
     /// buffering indicator can track what will actually play while a seek
     /// is landing. Sessions whose suffix cannot be tracked report nothing
-    /// and the indicator falls back to the front download.
     fn suffix_state(&self) -> Option<TimelineSuffixState> {
         None
     }
@@ -69,6 +75,18 @@ pub(crate) struct TimelineSuffixState {
     pub(crate) written: u64,
     /// Total bytes the suffix will span.
     pub(crate) total: u64,
+}
+
+/// A suffix a session already fetched and finished, offered to the engine
+/// as a local seek source for any position it spans.
+#[derive(Clone)]
+pub(crate) struct LandedSuffixSource {
+    /// Path of the suffix buffer file.
+    pub(crate) path: std::path::PathBuf,
+    /// Completion of the suffix buffer; complete once every byte landed.
+    pub(crate) completion: ProgressiveCompletion,
+    /// Timeline position the suffix starts at.
+    pub(crate) base: Duration,
 }
 
 /// Pauses a track's front download while a timeline seek suffix is fetched.
