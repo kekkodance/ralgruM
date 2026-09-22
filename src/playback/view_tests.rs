@@ -394,7 +394,10 @@ fn cached_initial_progress_marks_the_buffer_full_without_regressing() {
         fully_buffered: true,
     });
     assert!(progress.fully_buffered);
-    assert_eq!(progress.fraction(), Some(1.0));
+    assert_eq!(
+        progress.buffered_duration(Duration::from_secs(10)),
+        Some(Duration::from_secs(10))
+    );
 
     progress.adopt_initial(DownloadProgress {
         generation: 7,

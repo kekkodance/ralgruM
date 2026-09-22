@@ -673,9 +673,16 @@ impl PlaybackState {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn set_buffered_fraction(&mut self, fraction: f32) {
         if !self.duration.is_zero() {
-            self.buffered = self.duration.mul_f32(fraction.clamp(0.0, 1.0));
+            self.set_buffered_duration(self.duration.mul_f32(fraction.clamp(0.0, 1.0)));
+        }
+    }
+
+    pub(crate) fn set_buffered_duration(&mut self, buffered: Duration) {
+        if !self.duration.is_zero() {
+            self.buffered = buffered.min(self.duration);
         }
     }
 

@@ -872,7 +872,7 @@ fn rebase_flac_seek_table(header: &mut [u8], skip: u64) {
             return;
         }
         if block_type == 3 {
-            for point in header[payload_start..payload_end].chunks_exact_mut(18) {
+            for point in header[payload_start..payload_end].as_chunks_mut::<18>().0 {
                 let offset = u64::from_be_bytes(point[8..16].try_into().unwrap());
                 if offset >= skip {
                     point[8..16].copy_from_slice(&(offset - skip).to_be_bytes());
@@ -1190,7 +1190,7 @@ fn parse_flac_header(bytes: &[u8]) -> Result<(Vec<u8>, FlacStreamInfo), FlacHead
             if payload.len() % 18 != 0 {
                 return Err(FlacHeaderError::Invalid);
             }
-            for point in payload.chunks_exact(18) {
+            for point in payload.as_chunks::<18>().0 {
                 let sample = u64::from_be_bytes(point[0..8].try_into().unwrap());
                 let offset = u64::from_be_bytes(point[8..16].try_into().unwrap());
                 if sample != u64::MAX {

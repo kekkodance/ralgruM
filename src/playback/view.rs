@@ -217,12 +217,18 @@ impl DownloadProgress {
         };
     }
 
-    fn fraction(&self) -> Option<f32> {
+    fn buffered_duration(&self, duration: Duration) -> Option<Duration> {
         if let Some(fraction) = self.buffered_fraction {
-            return fraction.is_finite().then_some(fraction.clamp(0.0, 1.0));
+            return fraction
+                .is_finite()
+                .then(|| duration.mul_f32(fraction.clamp(0.0, 1.0)));
         }
         let total = self.total.filter(|total| *total > 0)?;
-        Some((self.downloaded as f32 / total as f32).clamp(0.0, 1.0))
+        Some(scale_duration_by_ratio(
+            duration,
+            self.downloaded.min(total),
+            total,
+        ))
     }
 }
 
@@ -230,19 +236,32 @@ fn apply_download_progress(state: &mut PlaybackState, progress: DownloadProgress
     if progress.generation != state.generation {
         return false;
     }
-    let Some(fraction) = progress.fraction() else {
-        return false;
-    };
     if state.duration.is_zero() {
         return false;
     }
-    let next_buffered = state.duration.mul_f32(fraction);
+    let Some(next_buffered) = progress.buffered_duration(state.duration) else {
+        return false;
+    };
     if next_buffered <= state.buffered {
         return false;
     }
     let buffered = state.buffered;
-    state.set_buffered_fraction(fraction);
+    state.set_buffered_duration(next_buffered);
     state.buffered != buffered
+}
+
+fn scale_duration_by_ratio(duration: Duration, numerator: u64, denominator: u64) -> Duration {
+    debug_assert!(denominator > 0);
+    let numerator = u128::from(numerator.min(denominator));
+    let denominator = u128::from(denominator);
+    let duration_nanos = duration.as_nanos();
+    let scaled_nanos = (duration_nanos / denominator) * numerator
+        + ((duration_nanos % denominator) * numerator) / denominator;
+
+    Duration::new(
+        (scaled_nanos / 1_000_000_000) as u64,
+        (scaled_nanos % 1_000_000_000) as u32,
+    )
 }
 
 fn apply_buffered_progress(
