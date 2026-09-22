@@ -148,6 +148,37 @@ fn active_timeline_cancellation_transfers_from_pending_and_cancels_replaced_work
 }
 
 #[test]
+fn local_reseek_keeps_the_suffix_writer_token() {
+    let path = PathBuf::from("growing-suffix.flac");
+    let completion = ProgressiveCompletion::for_completed_buffer(AudioFormat::Flac);
+    let landed = LandedSuffixSource {
+        path: path.clone(),
+        completion,
+        base: Duration::from_secs(10),
+    };
+    let writer = CancellationToken::new();
+    let mut active = Some(writer.clone());
+    let transferred = take_reused_suffix_cancellation(&path, Some(&landed), &mut active, None);
+    assert!(active.is_none());
+    assert!(!writer.is_cancelled());
+
+    let (_sender, receiver) = mpsc::sync_channel(1);
+    let mut pending = PendingProgressiveReload {
+        position: Duration::from_secs(11),
+        cancellation: Arc::new(AtomicBool::new(false)),
+        timeline_cancellation: transferred,
+        suffix_path: Some(path.clone()),
+        suffix_base: Some(Duration::from_secs(10)),
+        receiver,
+    };
+    let transferred_again =
+        take_reused_suffix_cancellation(&path, Some(&landed), &mut active, Some(&mut pending));
+    assert!(pending.timeline_cancellation.is_none());
+    assert!(!transferred_again.unwrap().is_cancelled());
+    assert!(!writer.is_cancelled());
+}
+
+#[test]
 fn standby_activation_discards_the_previous_progressive_seek() {
     let file = super::super::progressive::ProgressiveFile::new(AudioFormat::M4a, None).unwrap();
     let reader = file.reader().unwrap();

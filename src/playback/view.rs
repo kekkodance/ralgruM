@@ -257,44 +257,37 @@ fn apply_buffered_progress(
         return false;
     }
     let mut changed = false;
-    // A pending timeline seek replaced the front download as the thing that
-    // plays next, so reporting the front's progress would claim buffering
-    // the player cannot use yet.
-    let front_visible = !suffix.is_some_and(|suffix| suffix.pending);
-    if front_visible && progress.is_some_and(|update| apply_download_progress(state, update)) {
+    if progress.is_some_and(|update| apply_download_progress(state, update)) {
         changed = true;
     }
-    if let Some(suffix) = suffix
-        && matches!(
-            state.status,
-            PlaybackStatus::Playing | PlaybackStatus::Paused
-        )
-        && apply_timeline_suffix_progress(state, &suffix)
-    {
+    let suffix_changed = match suffix {
+        Some(suffix) => apply_timeline_suffix_progress(state, &suffix),
+        None => state.suffix_buffered.take().is_some(),
+    };
+    if suffix_changed {
         changed = true;
     }
     changed
 }
 
-/// Maps a timeline seek suffix onto the buffering indicator. The suffix is
-/// what will actually play, so its bytes advance the indicator from the
-/// seek target toward the end of the track.
+/// Keep the suffix as a separate range so a missing middle section is never
+/// painted as downloaded by the single contiguous front-buffer indicator.
 fn apply_timeline_suffix_progress(state: &mut PlaybackState, suffix: &TimelineSuffixState) -> bool {
-    if state.duration.is_zero() || suffix.total == 0 {
+    let next = if state.duration.is_zero() || suffix.total == 0 || suffix.written == 0 {
+        None
+    } else {
+        let fraction = (suffix.written as f32 / suffix.total as f32).clamp(0.0, 1.0);
+        let remaining = state.duration.saturating_sub(suffix.base);
+        Some((
+            suffix.base,
+            (suffix.base + remaining.mul_f32(fraction)).min(state.duration),
+        ))
+    };
+    if state.suffix_buffered == next {
         return false;
     }
-    let fraction = (suffix.written as f32 / suffix.total as f32).clamp(0.0, 1.0);
-    let remaining = state.duration.saturating_sub(suffix.base);
-    let buffered = suffix.base + remaining.mul_f32(fraction);
-    // The original progressive prefix remains available for local seeks even
-    // while a suffix is landing, so the visible downloaded frontier must
-    // never move backward.
-    if buffered <= state.buffered {
-        return false;
-    }
-    let previous = state.buffered;
-    state.buffered = buffered.min(state.duration);
-    state.buffered != previous
+    state.suffix_buffered = next;
+    true
 }
 
 fn completed_download_size(progress: DownloadProgress) -> Option<u64> {
@@ -1373,9 +1366,8 @@ impl PlaybackModel {
     fn poll(&mut self, cx: &mut Context<Self>) {
         let progress = self.download_progress.lock().ok().map(|progress| *progress);
         let completed_audio_info = self.adopt_completed_audio_size(progress);
-        // While a timeline seek is landing, the front download is paused by
-        // the engine's seek gate and no longer what plays next, so the
-        // indicator must track the suffix instead of it.
+        // Keep the independently advancing front and suffix ranges visible
+        // without painting the unfetched gap between them.
         let timeline_suffix = match self.state.status {
             PlaybackStatus::Playing | PlaybackStatus::Paused => self
                 .engine

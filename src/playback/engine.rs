@@ -39,6 +39,8 @@ struct PendingProgressiveReload {
     position: Duration,
     cancellation: Arc<AtomicBool>,
     timeline_cancellation: Option<CancellationToken>,
+    suffix_path: Option<PathBuf>,
+    suffix_base: Option<Duration>,
     receiver: mpsc::Receiver<Result<(DecodedSource, Option<tempfile::NamedTempFile>), String>>,
 }
 
@@ -47,6 +49,7 @@ struct ProgressiveReloadResult {
     position: Duration,
     file: Option<tempfile::NamedTempFile>,
     timeline_cancellation: Option<CancellationToken>,
+    suffix_base: Option<Duration>,
 }
 
 pub(crate) struct SeekCompletion {
@@ -707,16 +710,32 @@ impl RodioEngine {
                 progressive_seek.completion.is_complete(),
             )
         };
-        self.cancel_pending_progressive_reload();
-        // A landed suffix is a complete local copy of the range it spans, so
-        // a seek inside it rebuilds from that buffer instead of fetching
-        // the same bytes over the network again.
+        // Only reuse a suffix whose owning file has reached the engine. A
+        // pending timeline worker still owns its temp file and cancelling
+        // that worker could delete the path before the local decoder opens.
         let landed = timeline_seek_session
             .as_ref()
             .and_then(|session| session.landed_suffix(position))
-            .filter(|_| !complete);
+            .filter(|suffix| {
+                !complete
+                    && suffix.completion.is_usable()
+                    && self
+                        .retained_files
+                        .iter()
+                        .any(|file| file.path() == suffix.path)
+            });
+        let retained_timeline = landed.as_ref().and_then(|suffix| {
+            take_reused_suffix_cancellation(
+                &suffix.path,
+                self.landed_suffix.as_ref(),
+                &mut self.active_timeline_cancellation,
+                self.pending_progressive_reload.as_mut(),
+            )
+        });
+        self.cancel_pending_progressive_reload();
         let mut completion = completion;
         let mut seek_target = position;
+        let suffix_base = landed.as_ref().map(|suffix| suffix.base);
         let suffix_path = if let Some(landed) = landed {
             // The suffix buffer keeps its own completion and byte frontier.
             // An MP3 suffix is a raw frame stream whose decoder timeline
@@ -731,6 +750,7 @@ impl RodioEngine {
             self.landed_suffix = Some(landed);
             true
         } else {
+            self.landed_suffix = None;
             false
         };
         if !suffix_path
@@ -744,6 +764,7 @@ impl RodioEngine {
         }
         let cancellation = Arc::new(AtomicBool::new(false));
         let worker_cancellation = cancellation.clone();
+        let suffix_source_path = suffix_path.then_some(path.clone());
         let (sender, receiver) = mpsc::sync_channel(1);
         let (completion_sender, completion_receiver) = oneshot::channel();
         self.sink.pause();
@@ -770,6 +791,9 @@ impl RodioEngine {
                 let _ = completion_sender.send(());
             });
         if spawn_result.is_err() {
+            if let Some(cancellation) = retained_timeline {
+                cancellation.cancel();
+            }
             if self.playback_intent.load(Ordering::Acquire) {
                 self.sink.play();
             }
@@ -782,7 +806,9 @@ impl RodioEngine {
         self.pending_progressive_reload = Some(PendingProgressiveReload {
             position,
             cancellation,
-            timeline_cancellation: None,
+            timeline_cancellation: retained_timeline,
+            suffix_path: suffix_source_path,
+            suffix_base,
             receiver,
         });
         Ok(())
@@ -850,6 +876,8 @@ impl RodioEngine {
             position,
             cancellation,
             timeline_cancellation: Some(timeline_cancellation),
+            suffix_path: None,
+            suffix_base: None,
             receiver,
         });
         Ok(())
@@ -870,10 +898,10 @@ impl RodioEngine {
                     .expect("pending progressive reload disappeared");
                 self.pending_position = None;
                 self.pending_seek_completion.take();
-                // A timeline reload that landed a suffix leaves a complete
-                // local copy of its range behind; later seeks inside it
-                // take the local rebuild instead of a fresh fetch.
-                if pending.timeline_cancellation.is_some()
+                // Keep the landed suffix for local rebuilds as its writer
+                // continues to extend the flushed range.
+                if pending.suffix_path.is_none()
+                    && pending.timeline_cancellation.is_some()
                     && let Some(session) = self
                         .progressive_seek
                         .as_ref()
@@ -886,6 +914,7 @@ impl RodioEngine {
                     position: pending.position,
                     file: source.1,
                     timeline_cancellation: pending.timeline_cancellation,
+                    suffix_base: pending.suffix_base,
                 }))
             }
             Ok(Err(error)) => {
@@ -961,6 +990,23 @@ fn replace_active_timeline_cancellation(
 ) {
     cancel_active_timeline_cancellation(active);
     *active = replacement;
+}
+
+fn take_reused_suffix_cancellation(
+    path: &Path,
+    landed: Option<&LandedSuffixSource>,
+    active: &mut Option<CancellationToken>,
+    pending: Option<&mut PendingProgressiveReload>,
+) -> Option<CancellationToken> {
+    if let Some(pending) = pending
+        && pending.suffix_path.as_deref() == Some(path)
+    {
+        return pending.timeline_cancellation.take();
+    }
+    if landed.is_some_and(|suffix| suffix.path == path) {
+        return active.take();
+    }
+    None
 }
 
 fn reported_position(base: Duration, sink_position: Duration) -> Duration {
@@ -1264,8 +1310,9 @@ impl AudioEngine for RodioEngine {
             .as_ref()?;
         let mut state = session.suffix_state()?;
         if let Some(pending) = self.pending_progressive_reload.as_ref() {
+            pending.timeline_cancellation.as_ref()?;
             state.pending = true;
-            state.base = pending.position;
+            state.base = pending.suffix_base.unwrap_or(pending.position);
         } else {
             // Only report a landed suffix; without one the session's
             // counters describe a fetch the engine no longer plays.
@@ -1286,6 +1333,9 @@ impl AudioEngine for RodioEngine {
                 Some(resume_after),
                 result.timeline_cancellation,
             );
+            if let Some(base) = result.suffix_base {
+                self.active_suffix = Some(base);
+            }
             return Ok(if standby_dropped {
                 SeekOutcome::AppliedStandbyDropped
             } else {

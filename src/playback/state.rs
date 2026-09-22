@@ -315,6 +315,7 @@ pub(crate) struct PlaybackState {
     pub(crate) position: Duration,
     pub(crate) duration: Duration,
     pub(crate) buffered: Duration,
+    pub(crate) suffix_buffered: Option<(Duration, Duration)>,
     pub(crate) volume: f32,
     pub(crate) muted: bool,
     pub(crate) repeat_mode: RepeatMode,
@@ -357,6 +358,7 @@ impl Default for PlaybackState {
             position: Duration::ZERO,
             duration: Duration::ZERO,
             buffered: Duration::ZERO,
+            suffix_buffered: None,
             volume: 0.8,
             muted: false,
             repeat_mode: RepeatMode::Off,
@@ -587,6 +589,7 @@ impl PlaybackState {
         self.status = PlaybackStatus::Loading;
         self.position = Duration::ZERO;
         self.buffered = Duration::ZERO;
+        self.suffix_buffered = None;
         self.duration = self
             .current()
             .map_or(Duration::ZERO, |track| track.duration);
@@ -663,6 +666,9 @@ impl PlaybackState {
         } else {
             self.duration.mul_f32(buffered_fraction)
         };
+        if fully_buffered {
+            self.suffix_buffered = None;
+        }
         self.status = PlaybackStatus::Playing;
         true
     }
@@ -678,6 +684,7 @@ impl PlaybackState {
             return false;
         }
         self.status = PlaybackStatus::Failed;
+        self.suffix_buffered = None;
         self.error = Some(error);
         true
     }
@@ -690,6 +697,7 @@ impl PlaybackState {
         self.status = PlaybackStatus::Ended;
         self.position = Duration::ZERO;
         self.buffered = Duration::ZERO;
+        self.suffix_buffered = None;
         self.error = None;
         true
     }
@@ -804,6 +812,7 @@ impl PlaybackState {
         let Some(index) = next_index else {
             self.status = PlaybackStatus::Ended;
             self.position = self.duration;
+            self.suffix_buffered = None;
             return None;
         };
         self.select(index)
@@ -987,6 +996,7 @@ impl PlaybackState {
         self.position = Duration::ZERO;
         self.duration = Duration::ZERO;
         self.buffered = Duration::ZERO;
+        self.suffix_buffered = None;
         self.error = None;
         // Like closePlayer's setRightSidebarOpen(false, { persist: false }) in
         // the original app, clearing playback only collapses the sidebar for

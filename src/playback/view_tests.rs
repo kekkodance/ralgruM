@@ -453,11 +453,9 @@ fn explicit_buffered_fraction_updates_without_a_byte_total() {
     assert_eq!(state.buffered, Duration::from_secs(5));
 }
 
-/// While a timeline seek is landing, the front download no longer feeds
-/// the buffering indicator: a fully downloaded front must not claim the
-/// track is buffered when the suffix that will play is still fetching.
+/// Front and suffix ranges must stay separate when a seek leaves a gap.
 #[test]
-fn pending_timeline_seek_hides_front_progress_from_the_indicator() {
+fn pending_timeline_seek_keeps_front_and_suffix_ranges_separate() {
     let mut state = PlaybackState::default();
     let track = PlaybackTrack {
         downloadable: false,
@@ -489,7 +487,7 @@ fn pending_timeline_seek_hides_front_progress_from_the_indicator() {
         &mut state,
         Some(DownloadProgress {
             generation,
-            downloaded: 100,
+            downloaded: 30,
             total: Some(100),
             buffered_fraction: None,
             fully_buffered: false,
@@ -498,8 +496,12 @@ fn pending_timeline_seek_hides_front_progress_from_the_indicator() {
     ));
     assert_eq!(
         state.buffered,
-        Duration::from_millis(9_500),
-        "a pending seek must report the suffix frontier, not the finished front"
+        Duration::from_secs(3),
+        "the front indicator must stop at the actual front frontier"
+    );
+    assert_eq!(
+        state.suffix_buffered,
+        Some((Duration::from_secs(9), Duration::from_millis(9_500)))
     );
 
     assert!(apply_timeline_suffix_progress(
@@ -512,9 +514,9 @@ fn pending_timeline_seek_hides_front_progress_from_the_indicator() {
         },
     ));
     assert_eq!(
-        state.buffered,
-        Duration::from_secs(10),
-        "a completed suffix buffers the rest of the track"
+        state.suffix_buffered,
+        Some((Duration::from_secs(9), Duration::from_secs(10))),
+        "the completed suffix is a distinct downloaded range"
     );
 }
 
@@ -535,10 +537,10 @@ fn pending_backward_seek_preserves_the_downloaded_frontier() {
         },
     ));
     assert_eq!(state.buffered, Duration::from_secs(10));
+    assert_eq!(state.suffix_buffered, None);
 }
 
-/// Once a suffix has landed, both the front download and the suffix can
-/// advance the indicator, and neither can pull it backwards.
+/// The suffix may advance independently without filling the gap in front.
 #[test]
 fn landed_suffix_and_front_progress_keep_the_indicator_honest() {
     let mut state = PlaybackState::default();
@@ -581,8 +583,12 @@ fn landed_suffix_and_front_progress_keep_the_indicator_honest() {
     ));
     assert_eq!(
         state.buffered,
-        Duration::from_millis(9_500),
-        "the landed suffix must outrank the still downloading front"
+        Duration::from_secs(8),
+        "the front indicator must not span the missing middle section"
+    );
+    assert_eq!(
+        state.suffix_buffered,
+        Some((Duration::from_secs(9), Duration::from_millis(9_500)))
     );
 
     assert!(apply_buffered_progress(
@@ -602,7 +608,7 @@ fn landed_suffix_and_front_progress_keep_the_indicator_honest() {
         "a completed front download buffers the whole track"
     );
 
-    assert!(!apply_timeline_suffix_progress(
+    assert!(apply_timeline_suffix_progress(
         &mut state,
         &TimelineSuffixState {
             pending: false,
@@ -612,6 +618,7 @@ fn landed_suffix_and_front_progress_keep_the_indicator_honest() {
         },
     ));
     assert_eq!(state.buffered, Duration::from_secs(10));
+    assert_eq!(state.suffix_buffered, None);
 }
 
 #[test]

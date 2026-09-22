@@ -13,6 +13,7 @@ impl Render for PlaybackView {
             position,
             duration,
             buffered,
+            suffix_buffered,
             volume,
             generation,
             seek_commit_epoch,
@@ -31,6 +32,7 @@ impl Render for PlaybackView {
                 state.position,
                 state.duration,
                 state.buffered,
+                state.suffix_buffered,
                 state.volume,
                 state.generation,
                 model.seek_commit_epoch(),
@@ -156,6 +158,14 @@ impl Render for PlaybackView {
         let buffered_visual =
             self.buffered_motion
                 .prepare(generation, buffered_fraction, now, cx.reduce_motion());
+        let suffix_fraction = suffix_buffered.and_then(|(start, end)| {
+            (!duration.is_zero()).then(|| {
+                (
+                    (start.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0),
+                    (end.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0),
+                )
+            })
+        });
         if self.seek_slider.read(cx).value() != SliderValue::Single(display_progress) {
             self.seek_slider.update(cx, |slider, cx| {
                 slider.set_value(display_progress, window, cx);
@@ -594,6 +604,7 @@ impl Render for PlaybackView {
                         self.model.clone(),
                         self.seek_pointer_state.clone(),
                         buffered_visual,
+                        suffix_fraction,
                         seek_fill_visual,
                         seek_bar_enabled,
                         cx,

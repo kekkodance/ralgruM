@@ -2,7 +2,11 @@ use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     pin::Pin,
-    sync::{Arc, Condvar, Mutex, mpsc},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     task::{Context, Poll, Waker},
     time::Duration,
 };
@@ -48,9 +52,8 @@ pub(crate) trait TimelineSeekSession: Send + Sync {
         false
     }
 
-    /// A fully fetched suffix this session landed earlier that covers the
-    /// position. A local seek can rebuild its decoder from that buffer
-    /// instead of fetching the range again.
+    /// A landed suffix whose flushed bytes cover the position. A local seek
+    /// can rebuild from it while its writer continues appending bytes.
     fn landed_suffix(&self, _position: Duration) -> Option<LandedSuffixSource> {
         None
     }
@@ -77,13 +80,12 @@ pub(crate) struct TimelineSuffixState {
     pub(crate) total: u64,
 }
 
-/// A suffix a session already fetched and finished, offered to the engine
-/// as a local seek source for any position it spans.
+/// A suffix offered as a local seek source for its flushed span.
 #[derive(Clone)]
 pub(crate) struct LandedSuffixSource {
     /// Path of the suffix buffer file.
     pub(crate) path: std::path::PathBuf,
-    /// Completion of the suffix buffer; complete once every byte landed.
+    /// Completion of the growing suffix buffer.
     pub(crate) completion: ProgressiveCompletion,
     /// Timeline position the suffix starts at.
     pub(crate) base: Duration,
@@ -209,6 +211,7 @@ struct Shared {
     state: Mutex<SharedState>,
     metadata: Mutex<ProgressiveMetadata>,
     wake: Condvar,
+    read_frontier: AtomicU64,
 }
 
 impl Shared {
@@ -226,10 +229,12 @@ impl Shared {
                 declared_bitrate: None,
             }),
             wake: Condvar::new(),
+            read_frontier: AtomicU64::new(0),
         })
     }
 
     fn reset(&self, total: Option<u64>) {
+        self.read_frontier.store(0, Ordering::Release);
         if let Ok(mut state) = self.state.lock() {
             state.written = 0;
             state.total = total;
@@ -312,12 +317,22 @@ pub(crate) struct ProgressiveCompletion {
 }
 
 impl ProgressiveCompletion {
+    pub(crate) fn read_frontier(&self) -> u64 {
+        self.shared.read_frontier.load(Ordering::Acquire)
+    }
     pub(crate) fn is_complete(&self) -> bool {
         self.shared
             .state
             .lock()
             .ok()
             .is_some_and(|state| matches!(state.terminal.as_ref(), Some(TerminalState::Complete)))
+    }
+
+    /// A failed or cancelled writer cannot extend a partially landed buffer.
+    pub(crate) fn is_usable(&self) -> bool {
+        self.shared.state.lock().ok().is_some_and(|state| {
+            state.terminal.is_none() || matches!(state.terminal, Some(TerminalState::Complete))
+        })
     }
 
     /// Number of bytes that have been flushed into the progressive file.
@@ -667,6 +682,10 @@ impl Read for ProgressiveReader {
         if buffer.is_empty() {
             return Ok(0);
         }
+        self.shared.read_frontier.fetch_max(
+            self.cursor.saturating_add(buffer.len() as u64),
+            Ordering::AcqRel,
+        );
         loop {
             let state = self
                 .shared
