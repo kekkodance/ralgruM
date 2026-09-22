@@ -519,13 +519,13 @@ fn pending_timeline_seek_hides_front_progress_from_the_indicator() {
 }
 
 #[test]
-fn pending_backward_seek_replaces_stale_frontier() {
+fn pending_backward_seek_preserves_the_downloaded_frontier() {
     let mut state = PlaybackState::default();
     state.status = PlaybackStatus::Playing;
     state.duration = Duration::from_secs(10);
     state.buffered = Duration::from_secs(10);
 
-    assert!(apply_timeline_suffix_progress(
+    assert!(!apply_timeline_suffix_progress(
         &mut state,
         &TimelineSuffixState {
             pending: true,
@@ -534,7 +534,7 @@ fn pending_backward_seek_replaces_stale_frontier() {
             total: 100,
         },
     ));
-    assert_eq!(state.buffered, Duration::from_secs(2));
+    assert_eq!(state.buffered, Duration::from_secs(10));
 }
 
 /// Once a suffix has landed, both the front download and the suffix can

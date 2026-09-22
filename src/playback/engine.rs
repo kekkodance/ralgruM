@@ -438,6 +438,39 @@ impl RodioEngine {
         Ok(Box::new(decoder))
     }
 
+    fn progressive_decoder_at_with_cancellation(
+        path: &Path,
+        format: AudioFormat,
+        position: Duration,
+        completion: &ProgressiveCompletion,
+        cancellation: &AtomicBool,
+    ) -> Result<DecodedSource, String> {
+        if cancellation.load(Ordering::Acquire) {
+            return Err("Playback request cancelled".into());
+        }
+        let reader = completion
+            .open_reader(path)
+            .map_err(|error| format!("The playback buffer could not be opened: {error}"))?;
+        let total = reader.total();
+        let mut builder = Decoder::builder()
+            .with_data(reader)
+            .with_hint(format.extension())
+            .with_mime_type(format.mime_type());
+        if let Some(total) = total {
+            builder = builder.with_byte_len(total);
+        }
+        let mut decoder = builder
+            .build()
+            .map_err(|error| format!("Could not decode {} audio: {error}", format.label()))?;
+        if cancellation.load(Ordering::Acquire) {
+            return Err("Playback request cancelled".into());
+        }
+        decoder
+            .try_seek(position)
+            .map_err(|error| format!("This stream could not seek to that position: {error}"))?;
+        Ok(Box::new(decoder))
+    }
+
     fn opus(path: &Path) -> Result<SamplesBuffer, String> {
         let file = File::open(path)
             .map_err(|error| format!("The playback buffer could not be opened: {error}"))?;
@@ -654,7 +687,7 @@ impl RodioEngine {
     }
 
     fn schedule_progressive_reload(&mut self, position: Duration) -> Result<(), String> {
-        let (path, format, timeline_seek_session, complete) = {
+        let (path, format, completion, timeline_seek_session, complete) = {
             let progressive_seek = self
                 .progressive_seek
                 .as_ref()
@@ -662,6 +695,7 @@ impl RodioEngine {
             (
                 progressive_seek.path.clone(),
                 progressive_seek.format,
+                progressive_seek.completion.clone(),
                 progressive_seek.timeline_seek_session.clone(),
                 progressive_seek.completion.is_complete(),
             )
@@ -669,6 +703,7 @@ impl RodioEngine {
         self.cancel_pending_progressive_reload();
         if let Some(timeline_seek_session) = timeline_seek_session
             && !complete
+            && !timeline_seek_session.can_seek_from_front(position)
         {
             return self.schedule_timeline_reload(timeline_seek_session, position);
         }
@@ -678,14 +713,24 @@ impl RodioEngine {
         let (completion_sender, completion_receiver) = oneshot::channel();
         self.sink.pause();
         let spawn_result = thread::Builder::new()
-            .name("ralgrum-aac-seek".into())
+            .name("ralgrum-progressive-seek".into())
             .spawn(move || {
-                let result = Self::decoder_at_with_cancellation(
-                    &path,
-                    format,
-                    position,
-                    &worker_cancellation,
-                );
+                let result = if complete {
+                    Self::decoder_at_with_cancellation(
+                        &path,
+                        format,
+                        position,
+                        &worker_cancellation,
+                    )
+                } else {
+                    Self::progressive_decoder_at_with_cancellation(
+                        &path,
+                        format,
+                        position,
+                        &completion,
+                        &worker_cancellation,
+                    )
+                };
                 let _ = sender.send(result.map(|source| (source, None)));
                 let _ = completion_sender.send(());
             });
@@ -1110,12 +1155,11 @@ impl AudioEngine for RodioEngine {
         if let Some(progressive_seek) = self.progressive_seek.as_ref() {
             if !progressive_seek.completion.is_complete() {
                 // While the buffer is still downloading, a timeline session
-                // can land the seek right away by fetching a suffix that
-                // starts at the target; sources without one queue the target
-                // until the download completes.
-                if let Some(timeline_seek_session) = progressive_seek.timeline_seek_session.clone()
-                {
-                    self.schedule_timeline_reload(timeline_seek_session, position)?;
+                // can land inside its existing prefix or fetch a suffix at
+                // the target. Sources without one queue the target until the
+                // download completes.
+                if progressive_seek.timeline_seek_session.is_some() {
+                    self.schedule_progressive_reload(position)?;
                     return Ok(SeekOutcome::Deferred);
                 }
                 progressive_seek.completion.request_seek(position);

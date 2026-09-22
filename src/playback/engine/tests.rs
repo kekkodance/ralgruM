@@ -340,6 +340,44 @@ async fn mp3_progressive_source_seeks_through_the_deferred_reload() {
     );
 }
 
+#[tokio::test]
+async fn progressive_reload_seeks_inside_the_existing_growing_file() {
+    let Some(file) = make_mp3_tone_fixture() else {
+        eprintln!("ffmpeg is unavailable; skipping local progressive seek test");
+        return;
+    };
+    let bytes = std::fs::read(file.path()).unwrap();
+    let total = bytes.len() as u64;
+    let frontier = total.saturating_mul(98) / 100;
+    let buffer =
+        super::super::progressive::ProgressiveFile::new(AudioFormat::Mp3, Some(total)).unwrap();
+    let path = buffer.path().to_path_buf();
+    let reader = buffer.reader().unwrap();
+    let completion = reader.completion();
+    let mut writer = buffer.writer().unwrap();
+    use tokio::io::AsyncWriteExt as _;
+    writer.write_all(&bytes[..frontier as usize]).await.unwrap();
+    writer.flush().await.unwrap();
+    assert!(!completion.is_complete());
+
+    let cancellation = AtomicBool::new(false);
+    let mut seeked = RodioEngine::progressive_decoder_at_with_cancellation(
+        &path,
+        AudioFormat::Mp3,
+        Duration::from_millis(3_500),
+        &completion,
+        &cancellation,
+    )
+    .unwrap();
+    let samples = seeked.by_ref().take(4_096).collect::<Vec<_>>();
+    let rms = sample_rms(&samples);
+    assert!(
+        rms > 0.2,
+        "the local progressive reload must land in the tone region, RMS was {rms}"
+    );
+    assert_eq!(completion.written(), frontier);
+}
+
 #[test]
 fn hls_suffix_decodes_the_target_segment_without_prefix_media() {
     let Some((directory, init, segments)) = make_hls_fmp4_fixture() else {

@@ -42,6 +42,12 @@ pub(crate) struct TimelineSeekRequest {
 pub(crate) trait TimelineSeekSession: Send + Sync {
     fn request(&self, position: Duration) -> Result<TimelineSeekRequest, String>;
 
+    /// Whether the active progressive prefix already contains enough data
+    /// to rebuild a decoder at this position without fetching a suffix.
+    fn can_seek_from_front(&self, _position: Duration) -> bool {
+        false
+    }
+
     /// Live state of the latest suffix this session fetched, so the
     /// buffering indicator can track what will actually play while a seek
     /// is landing. Sessions whose suffix cannot be tracked report nothing
@@ -305,6 +311,17 @@ impl ProgressiveCompletion {
             .lock()
             .ok()
             .map_or(0, |state| state.written)
+    }
+
+    /// Opens another reader over the same growing progressive file. The new
+    /// reader shares the writer's completion state, so reaching the current
+    /// frontier waits for more bytes instead of treating it as end of file.
+    pub(crate) fn open_reader(&self, path: &std::path::Path) -> io::Result<ProgressiveReader> {
+        Ok(ProgressiveReader {
+            file: File::open(path)?,
+            shared: self.shared.clone(),
+            cursor: 0,
+        })
     }
 
     /// Completion state for a buffer that finished downloading before the
@@ -875,6 +892,33 @@ mod tests {
         block_on(writer.write_all(b"efgh")).unwrap();
         block_on(writer.finish()).unwrap();
         assert_eq!(result_rx.recv().unwrap(), *b"gh");
+        read.join().unwrap();
+    }
+
+    #[test]
+    fn completion_opens_an_independent_reader_on_the_same_growing_file() {
+        let (file, mut writer) = buffer(Some(8));
+        let original = file.reader().unwrap();
+        let completion = original.completion();
+        block_on(writer.write_all(b"abcd")).unwrap();
+        block_on(writer.flush()).unwrap();
+
+        let mut reopened = completion.open_reader(file.path()).unwrap();
+        reopened.seek(SeekFrom::Start(2)).unwrap();
+        let mut prefix = [0; 2];
+        reopened.read_exact(&mut prefix).unwrap();
+        assert_eq!(&prefix, b"cd");
+
+        let (result_tx, result_rx) = mpsc::channel();
+        let read = thread::spawn(move || {
+            let mut tail = [0; 4];
+            reopened.read_exact(&mut tail).unwrap();
+            result_tx.send(tail).unwrap();
+        });
+        assert!(result_rx.try_recv().is_err());
+        block_on(writer.write_all(b"efgh")).unwrap();
+        block_on(writer.finish()).unwrap();
+        assert_eq!(result_rx.recv().unwrap(), *b"efgh");
         read.join().unwrap();
     }
 

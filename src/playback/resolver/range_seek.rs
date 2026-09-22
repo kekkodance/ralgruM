@@ -78,10 +78,10 @@ impl RangeSeekFormat {
 /// starting there. Deezer FLAC is variable bitrate: the session fetches the
 /// file header, parses frame headers around the estimated offset to learn
 /// the exact timeline position of the suffix, and reports the remaining
-/// discard so the engine lands on the target. Each request fetches into a
-/// fresh progressive buffer, which lets the engine land the seek while the
-/// download is still running instead of queueing it until the buffer
-/// completes.
+/// discard so the engine lands on the target. Targets already covered by
+/// the active progressive prefix stay on that growing file. Other targets
+/// fetch into a fresh progressive buffer so they can land before the front
+/// download completes.
 pub(crate) struct RangeTimelineSession {
     format: RangeSeekFormat,
     fetch: RangeFetch,
@@ -91,6 +91,93 @@ pub(crate) struct RangeTimelineSession {
     track_cancellation: CancellationToken,
     pause: DownloadPauseGate,
     suffix: Arc<std::sync::Mutex<Option<SuffixTracker>>>,
+    front_coverage: Option<FrontBufferCoverage>,
+}
+
+struct FrontBufferCoverage {
+    completion: ProgressiveCompletion,
+    total: u64,
+    duration: Duration,
+    map: FrontBufferMap,
+}
+
+enum FrontBufferMap {
+    Mp3,
+    Flac {
+        audio_start: u64,
+        stream_info: FlacStreamInfo,
+    },
+}
+
+impl FrontBufferCoverage {
+    fn from_file(
+        format: RangeSeekFormat,
+        path: &std::path::Path,
+        completion: ProgressiveCompletion,
+        total: u64,
+        duration: Duration,
+    ) -> Option<Self> {
+        let map = match format {
+            RangeSeekFormat::Mp3 => FrontBufferMap::Mp3,
+            RangeSeekFormat::Flac => {
+                use std::io::Read as _;
+
+                let available = completion.written().min(FLAC_HEADER_PROBE_LIMIT);
+                if available == 0 {
+                    return None;
+                }
+                let mut bytes = Vec::with_capacity(usize::try_from(available).ok()?);
+                std::fs::File::open(path)
+                    .ok()?
+                    .take(available)
+                    .read_to_end(&mut bytes)
+                    .ok()?;
+                let (header, stream_info) = parse_flac_header(&bytes).ok()?;
+                if stream_info.seek_points.is_empty() {
+                    return None;
+                }
+                FrontBufferMap::Flac {
+                    audio_start: header.len() as u64,
+                    stream_info,
+                }
+            }
+        };
+        Some(Self {
+            completion,
+            total,
+            duration,
+            map,
+        })
+    }
+
+    fn contains(&self, position: Duration) -> bool {
+        if self.completion.is_complete() {
+            return true;
+        }
+        let start = match &self.map {
+            FrontBufferMap::Mp3 => {
+                let seconds = self.duration.as_secs_f64();
+                if !seconds.is_finite() || seconds <= 0.0 {
+                    return false;
+                }
+                let fraction = (position.as_secs_f64() / seconds).clamp(0.0, 0.99);
+                (fraction * self.total as f64) as u64
+            }
+            FrontBufferMap::Flac {
+                audio_start,
+                stream_info,
+            } => {
+                let Some(ready_through) =
+                    stream_info.byte_at_or_after(position, *audio_start, self.total)
+                else {
+                    return false;
+                };
+                return self.completion.written() >= ready_through;
+            }
+        };
+        let ready_through = start.saturating_add(SUFFIX_STARTUP_BYTES).min(self.total);
+        self.completion.written() >= ready_through
+    }
 }
 
 /// Byte progress of the suffix a session is fetching. The seek worker
@@ -125,6 +212,7 @@ impl RangeTimelineSession {
             track_cancellation,
             pause,
             suffix: Arc::new(std::sync::Mutex::new(None)),
+            front_coverage: None,
         }
     }
 
@@ -136,6 +224,13 @@ impl RangeTimelineSession {
         path: PathBuf,
         completion: ProgressiveCompletion,
     ) -> Self {
+        self.front_coverage = FrontBufferCoverage::from_file(
+            self.format,
+            &path,
+            completion.clone(),
+            self.total,
+            self.duration,
+        );
         let remote = self.fetch;
         self.fetch = Arc::new(move |start, end, cancellation| {
             let remote = remote.clone();
@@ -193,6 +288,12 @@ async fn fetch_reusing_front_buffer(
 }
 
 impl TimelineSeekSession for RangeTimelineSession {
+    fn can_seek_from_front(&self, position: Duration) -> bool {
+        self.front_coverage
+            .as_ref()
+            .is_some_and(|front| front.contains(position))
+    }
+
     fn request(&self, position: Duration) -> Result<TimelineSeekRequest, String> {
         let seconds = self.duration.as_secs_f64();
         if !seconds.is_finite() || seconds <= 0.0 {
@@ -663,6 +764,33 @@ impl FlacStreamInfo {
             position: Duration::from_nanos(u64::try_from(nanos).ok()?),
         })
     }
+
+    /// First byte boundary that proves the requested position is inside the
+    /// flushed prefix. A later seek point bounds all frames before it; an
+    /// exact seek point also needs one complete frame available.
+    fn byte_at_or_after(&self, target: Duration, audio_start: u64, total: u64) -> Option<u64> {
+        if self.sample_rate == 0 {
+            return None;
+        }
+        let target_sample = target
+            .as_nanos()
+            .saturating_mul(u128::from(self.sample_rate))
+            / 1_000_000_000;
+        let point = self
+            .seek_points
+            .iter()
+            .filter(|point| u128::from(point.sample) >= target_sample)
+            .min_by_key(|point| point.sample)?;
+        let offset = audio_start.checked_add(point.offset)?;
+        if offset >= total {
+            return None;
+        }
+        if u128::from(point.sample) == target_sample {
+            Some(offset.saturating_add(self.max_frame_bytes()).min(total))
+        } else {
+            Some(offset)
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -974,6 +1102,55 @@ mod tests {
             .unwrap();
         assert_eq!(frame.offset, 9_736);
         assert_eq!(frame.position, Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn flac_front_coverage_requires_the_target_region_to_be_flushed() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let buffer = ProgressiveFile::new(AudioFormat::Flac, Some(20_000)).unwrap();
+        let reader = buffer.reader().unwrap();
+        let completion = reader.completion();
+        let mut writer = buffer.writer().unwrap();
+        let coverage = FrontBufferCoverage {
+            completion,
+            total: 20_000,
+            duration: Duration::from_secs(30),
+            map: FrontBufferMap::Flac {
+                audio_start: 100,
+                stream_info: FlacStreamInfo {
+                    sample_rate: 100,
+                    channels: 1,
+                    bits_per_sample: 8,
+                    block_len_min: 1,
+                    block_len_max: 1,
+                    seek_points: vec![
+                        FlacSeekPoint {
+                            sample: 0,
+                            offset: 0,
+                        },
+                        FlacSeekPoint {
+                            sample: 1_000,
+                            offset: 1_000,
+                        },
+                        FlacSeekPoint {
+                            sample: 2_000,
+                            offset: 2_000,
+                        },
+                    ],
+                },
+            },
+        };
+
+        writer.write_all(&vec![0; 2_099]).await.unwrap();
+        writer.flush().await.unwrap();
+        assert!(
+            !coverage.contains(Duration::from_secs(11)),
+            "the next seek point still sits beyond the flushed prefix"
+        );
+        writer.write_all(&[0]).await.unwrap();
+        writer.flush().await.unwrap();
+        assert!(coverage.contains(Duration::from_secs(11)));
     }
 
     fn make_mp3_tone_fixture() -> Option<tempfile::NamedTempFile> {
