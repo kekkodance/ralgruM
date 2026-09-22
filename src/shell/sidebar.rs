@@ -185,8 +185,6 @@ impl RalgrumApp {
             search.set_search_active(super::search_active_for_nav(nav));
             if should_reset_discover_home(nav, already_selected) {
                 search.return_to_discover_home(window, cx);
-            } else if nav != Nav::Discover {
-                search.close_detail_for_main_navigation(cx);
             }
         });
         if already_selected {

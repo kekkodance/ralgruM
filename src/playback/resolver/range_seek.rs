@@ -1,5 +1,6 @@
 use futures::future::BoxFuture;
 use std::{
+    path::PathBuf,
     sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
     sync::mpsc,
@@ -9,15 +10,19 @@ use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 
 use super::super::progressive::{
-    DownloadPauseGate, ProgressiveFile, ProgressiveReader, ProgressiveWriter, TimelineSeekRequest,
-    TimelineSeekSession, TimelineSeekStartup, TimelineSuffixState,
+    DownloadPauseGate, ProgressiveCompletion, ProgressiveFile, ProgressiveReader,
+    ProgressiveWriter, TimelineSeekRequest, TimelineSeekSession, TimelineSeekStartup,
+    TimelineSuffixState,
 };
 use super::AudioFormat;
 
 /// Enough suffix bytes for the decoder probe and a moment of playback.
 const SUFFIX_STARTUP_BYTES: u64 = 64 * 1024;
-/// Range requests stay small so the first one returns quickly.
-const SUFFIX_CHUNK: u64 = 256 * 1024;
+/// The first range stays small so playback resumes quickly.
+const SUFFIX_STARTUP_CHUNK: u64 = 256 * 1024;
+/// Later ranges use the backend's normal transfer size to avoid throttling
+/// the remaining buffer with many sequential requests.
+const SUFFIX_STREAM_CHUNK: u64 = 1024 * 1024;
 /// First probe size for the FLAC file header (fLaC marker plus metadata).
 const FLAC_HEADER_PROBE_BYTES: u64 = 64 * 1024;
 /// Upper bound for the FLAC header probe before the seek gives up.
@@ -122,6 +127,69 @@ impl RangeTimelineSession {
             suffix: Arc::new(std::sync::Mutex::new(None)),
         }
     }
+
+    /// Reuses the flushed prefix of the active progressive download before
+    /// asking the provider for a range. This keeps seeks inside the current
+    /// buffer local and avoids downloading the same bytes twice.
+    pub(super) fn with_front_buffer(
+        mut self,
+        path: PathBuf,
+        completion: ProgressiveCompletion,
+    ) -> Self {
+        let remote = self.fetch;
+        self.fetch = Arc::new(move |start, end, cancellation| {
+            let remote = remote.clone();
+            let path = path.clone();
+            let completion = completion.clone();
+            Box::pin(async move {
+                fetch_reusing_front_buffer(remote, path, completion, start, end, cancellation).await
+            })
+        });
+        self
+    }
+}
+
+async fn fetch_reusing_front_buffer(
+    remote: RangeFetch,
+    path: PathBuf,
+    completion: ProgressiveCompletion,
+    start: u64,
+    end: u64,
+    cancellation: CancellationToken,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+
+    if cancellation.is_cancelled() {
+        return Err("Playback request cancelled".into());
+    }
+    let written = completion.written();
+    if start >= written {
+        return remote(start, end, cancellation).await;
+    }
+    let local_end = end.min(written.saturating_sub(1));
+    let local_len = local_end
+        .checked_sub(start)
+        .and_then(|length| length.checked_add(1))
+        .and_then(|length| usize::try_from(length).ok())
+        .ok_or_else(|| "The buffered seek range was invalid".to_string())?;
+    let local = async {
+        let mut file = tokio::fs::File::open(path).await?;
+        file.seek(std::io::SeekFrom::Start(start)).await?;
+        let mut bytes = vec![0; local_len];
+        file.read_exact(&mut bytes).await?;
+        Ok::<_, std::io::Error>(bytes)
+    }
+    .await;
+    let Ok(mut bytes) = local else {
+        // The front buffer is only an optimization. If it disappears during
+        // teardown, the provider range remains a valid seek source.
+        return remote(start, end, cancellation).await;
+    };
+    if local_end < end {
+        let mut tail = remote(local_end + 1, end, cancellation).await?;
+        bytes.append(&mut tail);
+    }
+    Ok(bytes)
 }
 
 impl TimelineSeekSession for RangeTimelineSession {
@@ -290,7 +358,12 @@ impl SuffixWriter<'_> {
             if self.cancellation.is_cancelled() {
                 return Err("Playback request cancelled".into());
             }
-            let end = (start + SUFFIX_CHUNK - 1).min(self.total - 1);
+            let chunk = if fetched == 0 {
+                SUFFIX_STARTUP_CHUNK
+            } else {
+                SUFFIX_STREAM_CHUNK
+            };
+            let end = (start + chunk - 1).min(self.total - 1);
             let bytes = (self.fetch)(start, end, self.cancellation.clone())
                 .await
                 .map_err(|error| format!("The seek suffix could not be downloaded: {error}"))?;
@@ -352,16 +425,21 @@ async fn flac_suffix_start(
     use tokio::io::AsyncWriteExt as _;
 
     let (header, stream_info) = flac_file_header(fetch.clone(), total, cancellation).await?;
-    let frame = flac_frame_near(
-        fetch,
-        total,
-        duration,
-        &stream_info,
-        target,
-        start,
-        cancellation,
-    )
-    .await?;
+    let frame = match stream_info.seek_frame_at_or_before(target, header.len() as u64, total) {
+        Some(frame) => frame,
+        None => {
+            flac_frame_near(
+                fetch,
+                total,
+                duration,
+                &stream_info,
+                target,
+                start,
+                cancellation,
+            )
+            .await?
+        }
+    };
     writer
         .write_all(&header)
         .await
@@ -547,6 +625,7 @@ struct FlacStreamInfo {
     bits_per_sample: u32,
     block_len_min: u64,
     block_len_max: u64,
+    seek_points: Vec<FlacSeekPoint>,
 }
 
 impl FlacStreamInfo {
@@ -557,6 +636,39 @@ impl FlacStreamInfo {
             .saturating_mul(u64::from(self.bits_per_sample.div_ceil(8)))
             .saturating_add(64)
     }
+
+    fn seek_frame_at_or_before(
+        &self,
+        target: Duration,
+        audio_start: u64,
+        total: u64,
+    ) -> Option<FlacFrame> {
+        let target_sample = target
+            .as_nanos()
+            .saturating_mul(u128::from(self.sample_rate))
+            / 1_000_000_000;
+        let point = self
+            .seek_points
+            .iter()
+            .filter(|point| u128::from(point.sample) <= target_sample)
+            .max_by_key(|point| point.sample)?;
+        let offset = audio_start.checked_add(point.offset)?;
+        if offset >= total || self.sample_rate == 0 {
+            return None;
+        }
+        let nanos =
+            u128::from(point.sample).saturating_mul(1_000_000_000) / u128::from(self.sample_rate);
+        Some(FlacFrame {
+            offset,
+            position: Duration::from_nanos(u64::try_from(nanos).ok()?),
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FlacSeekPoint {
+    sample: u64,
+    offset: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -579,6 +691,7 @@ fn parse_flac_header(bytes: &[u8]) -> Result<(Vec<u8>, FlacStreamInfo), FlacHead
     }
     let mut cursor = 4;
     let mut info = None;
+    let mut seek_points = Vec::new();
     loop {
         let Some(prefix) = bytes.get(cursor..cursor + 4) else {
             return Err(FlacHeaderError::Incomplete);
@@ -602,10 +715,22 @@ fn parse_flac_header(bytes: &[u8]) -> Result<(Vec<u8>, FlacStreamInfo), FlacHead
                 return Err(FlacHeaderError::Invalid);
             }
             info = Some(parse_flac_stream_info(payload));
+        } else if block_type == 3 {
+            if payload.len() % 18 != 0 {
+                return Err(FlacHeaderError::Invalid);
+            }
+            for point in payload.chunks_exact(18) {
+                let sample = u64::from_be_bytes(point[0..8].try_into().unwrap());
+                let offset = u64::from_be_bytes(point[8..16].try_into().unwrap());
+                if sample != u64::MAX {
+                    seek_points.push(FlacSeekPoint { sample, offset });
+                }
+            }
         }
         cursor = payload_end;
         if last {
-            let info = info.expect("STREAMINFO is the first metadata block");
+            let mut info = info.expect("STREAMINFO is the first metadata block");
+            info.seek_points = seek_points;
             return Ok((bytes[..cursor].to_vec(), info));
         }
     }
@@ -625,6 +750,7 @@ fn parse_flac_stream_info(payload: &[u8]) -> FlacStreamInfo {
         bits_per_sample,
         block_len_min,
         block_len_max,
+        seek_points: Vec::new(),
     }
 }
 
@@ -808,6 +934,7 @@ mod tests {
             bits_per_sample: 16,
             block_len_min: 256,
             block_len_max: 4_096,
+            seek_points: Vec::new(),
         };
 
         for bytes in [
@@ -817,6 +944,36 @@ mod tests {
         ] {
             assert!(parse_first_flac_frame(bytes, &info, 0).is_none());
         }
+    }
+
+    #[test]
+    fn flac_seek_table_selects_the_closest_point_before_the_target() {
+        let info = FlacStreamInfo {
+            sample_rate: 44_100,
+            channels: 2,
+            bits_per_sample: 16,
+            block_len_min: 256,
+            block_len_max: 4_096,
+            seek_points: vec![
+                FlacSeekPoint {
+                    sample: 0,
+                    offset: 0,
+                },
+                FlacSeekPoint {
+                    sample: 441_000,
+                    offset: 1_000,
+                },
+                FlacSeekPoint {
+                    sample: 882_000,
+                    offset: 2_000,
+                },
+            ],
+        };
+        let frame = info
+            .seek_frame_at_or_before(Duration::from_secs(11), 8_736, 20_000)
+            .unwrap();
+        assert_eq!(frame.offset, 9_736);
+        assert_eq!(frame.position, Duration::from_secs(10));
     }
 
     fn make_mp3_tone_fixture() -> Option<tempfile::NamedTempFile> {
@@ -887,6 +1044,45 @@ mod tests {
             })
         });
         (fetch, ranges)
+    }
+
+    #[tokio::test]
+    async fn range_fetch_reuses_the_flushed_front_buffer_before_network() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let bytes = Arc::new(
+            (0..160)
+                .map(|index| u8::try_from(index).unwrap())
+                .collect::<Vec<_>>(),
+        );
+        let buffer = ProgressiveFile::new(AudioFormat::Mp3, Some(bytes.len() as u64)).unwrap();
+        let path = buffer.path().to_path_buf();
+        let reader = buffer.reader().unwrap();
+        let completion = reader.completion();
+        let mut writer = buffer.writer().unwrap();
+        writer.write_all(&bytes[..100]).await.unwrap();
+        writer.flush().await.unwrap();
+
+        let (remote, ranges) = memory_fetch(bytes.clone());
+        let local = fetch_reusing_front_buffer(
+            remote.clone(),
+            path.clone(),
+            completion.clone(),
+            20,
+            39,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(local, bytes[20..=39]);
+        assert!(ranges.lock().unwrap().is_empty());
+
+        let split =
+            fetch_reusing_front_buffer(remote, path, completion, 90, 119, CancellationToken::new())
+                .await
+                .unwrap();
+        assert_eq!(split, bytes[90..=119]);
+        assert_eq!(*ranges.lock().unwrap(), vec![(100, 119)]);
     }
 
     #[derive(Debug)]
@@ -1063,7 +1259,7 @@ mod tests {
             let ranges = ranges.lock().unwrap().clone();
             let suffix_start = ranges
                 .iter()
-                .find(|(start, end)| end - start + 1 == SUFFIX_CHUNK)
+                .find(|(start, end)| end - start + 1 == SUFFIX_STARTUP_CHUNK)
                 .map(|(start, _)| *start)
                 .expect("the suffix must be streamed in full chunks");
             let position = positions

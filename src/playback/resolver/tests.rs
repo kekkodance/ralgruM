@@ -7,6 +7,7 @@ use blowfish::cipher::BlockEncrypt;
 
 struct TestBackendSource {
     metadata: super::super::media_source::BackendSourceMetadata,
+    probed_size: Option<u64>,
 }
 
 impl super::super::media_source::BackendSourceOps for TestBackendSource {
@@ -34,7 +35,7 @@ impl super::super::media_source::BackendSourceOps for TestBackendSource {
         &'a self,
         _cancellation: &'a CancellationToken,
     ) -> super::super::media_source::BackendFuture<'a, Option<u64>> {
-        Box::pin(async { None })
+        Box::pin(async { self.probed_size })
     }
 
     fn download<'a>(
@@ -62,6 +63,7 @@ fn cache_test_backend_source(cache_identity: String) -> ResolvedSource {
             provenance: super::super::media_source::BackendProvenance::Deezer,
             cache_identity: super::super::media_source::BackendCacheIdentity::new(cache_identity),
         },
+        probed_size: None,
     }));
     let metadata = source.metadata();
     ResolvedSource {
@@ -1084,6 +1086,46 @@ async fn source_size_for_info_uses_inline_payload_length() {
             .await
             .unwrap(),
         4
+    );
+}
+
+#[tokio::test]
+async fn source_size_for_info_probes_an_unknown_backend_source() {
+    let resolver = StreamResolver::new().unwrap();
+    let backend = BackendSource::from_ops(Arc::new(TestBackendSource {
+        metadata: super::super::media_source::BackendSourceMetadata {
+            format: AudioFormat::Flac,
+            format_name: "FLAC".into(),
+            size: 0,
+            declared_bitrate: None,
+            duration: None,
+            timeline: false,
+            cacheable: true,
+            initial_buffered_fraction: None,
+            deezer_track_id: Some("42".into()),
+            provenance: super::super::media_source::BackendProvenance::Deezer,
+            cache_identity: super::super::media_source::BackendCacheIdentity::new(
+                "backend-size-probe",
+            ),
+        },
+        probed_size: Some(35_950_396),
+    }));
+    let source = ResolvedSource {
+        data: SourceData::Backend(backend),
+        size: 0,
+        deezer_track_id: Some("42".into()),
+        is_soundcloud: false,
+        cache_identity: Some("backend-size-probe".into()),
+        format: AudioFormat::Flac,
+        format_name: "FLAC".into(),
+        declared_bitrate: None,
+    };
+    assert_eq!(
+        resolver
+            .source_size_for_info(&source, &CancellationToken::new())
+            .await
+            .unwrap(),
+        35_950_396
     );
 }
 

@@ -296,6 +296,17 @@ impl ProgressiveCompletion {
             .is_some_and(|state| matches!(state.terminal.as_ref(), Some(TerminalState::Complete)))
     }
 
+    /// Number of bytes that have been flushed into the progressive file.
+    /// Range-seek sessions use this frontier to reuse bytes already fetched
+    /// by the front download.
+    pub(crate) fn written(&self) -> u64 {
+        self.shared
+            .state
+            .lock()
+            .ok()
+            .map_or(0, |state| state.written)
+    }
+
     /// Completion state for a buffer that finished downloading before the
     /// engine took ownership of it, such as a standby source resolved in
     /// the background. Seeks on it take the completed-buffer paths right

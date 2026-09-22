@@ -196,7 +196,7 @@ impl StreamResolver {
 
     /// Returns a useful total size for context-menu metadata without reading
     /// the media body. Provider metadata is preferred, then inline payload
-    /// length, followed by a HEAD and a one-byte range probe for remote URLs.
+    /// length, followed by a lightweight provider size probe.
     pub(crate) async fn source_size_for_info(
         &self,
         source: &ResolvedSource,
@@ -214,7 +214,31 @@ impl StreamResolver {
                 .probe_remote_size(url, cancellation, source.is_soundcloud)
                 .await
                 .unwrap_or(0)),
-            SourceData::Backend(_) | SourceData::Hls(_) => {
+            SourceData::Backend(backend) => {
+                if let Some(total) = backend.probe_size(cancellation).await
+                    && total > 0
+                {
+                    return Ok(total);
+                }
+                let Some(cache) = self.cache.as_ref() else {
+                    return Ok(0);
+                };
+                let Some(key) = cache_key(source) else {
+                    return Ok(0);
+                };
+                let Some(total) = cache.known_total(&key).await else {
+                    return Ok(0);
+                };
+                if cancellation.is_cancelled() {
+                    return Err("Playback request cancelled".into());
+                }
+                if cache.is_fully_cached(&key, total).await {
+                    Ok(total)
+                } else {
+                    Ok(0)
+                }
+            }
+            SourceData::Hls(_) => {
                 let Some(cache) = self.cache.as_ref() else {
                     return Ok(0);
                 };

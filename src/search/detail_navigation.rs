@@ -408,12 +408,6 @@ impl SearchView {
         cx.notify();
     }
 
-    pub(crate) fn close_detail_for_main_navigation(&mut self, cx: &mut Context<Self>) {
-        if self.detail_open() {
-            self.close_detail(cx);
-        }
-    }
-
     pub(crate) fn close_search_navigation(&mut self, cx: &mut Context<Self>) {
         match search_navigation_back_target(self.detail_open(), self.discover_channel_open()) {
             SearchNavigationBackTarget::Detail => self.close_detail(cx),

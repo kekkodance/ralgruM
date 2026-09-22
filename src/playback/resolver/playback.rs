@@ -81,7 +81,7 @@ impl StreamResolver {
                     soundcloud_token,
                     backend,
                     cancellation,
-                    false,
+                    true,
                 )
                 .await;
         };
@@ -165,7 +165,7 @@ impl StreamResolver {
                             soundcloud_token.clone(),
                             backend,
                             worker_cancellation,
-                            false,
+                            true,
                         )
                         .await?;
                     if let Some(cache_key) = StreamResolver::resolved_source_cache_key_for_source(
@@ -697,6 +697,7 @@ impl StreamResolver {
                 SourceData::Backend(source) => source.metadata().duration,
                 SourceData::Remote(_) | SourceData::Inline(_) => None,
             });
+        let front_buffer = (buffer.path().to_path_buf(), reader.completion());
         let timeline_seek_session: Option<Arc<dyn TimelineSeekSession>> = match &source.data {
             SourceData::Hls(descriptor) => Some(Arc::new(soundcloud_hls::HlsSeekSession::new(
                 self.client.clone(),
@@ -715,6 +716,7 @@ impl StreamResolver {
                         duration,
                         &cancellation,
                         pause_gate.clone(),
+                        Some(front_buffer.clone()),
                     )
                 }),
             SourceData::Remote(url) => self.progressive_range_seek_session(
@@ -724,6 +726,7 @@ impl StreamResolver {
                 duration,
                 &cancellation,
                 pause_gate.clone(),
+                Some(front_buffer),
             ),
             SourceData::Inline(_) => None,
         };
@@ -765,6 +768,7 @@ impl StreamResolver {
         duration: Option<Duration>,
         cancellation: &CancellationToken,
         pause: DownloadPauseGate,
+        front_buffer: Option<(std::path::PathBuf, ProgressiveCompletion)>,
     ) -> Option<Arc<dyn TimelineSeekSession>> {
         let format = range_seek::RangeSeekFormat::from_audio(source.format)?;
         let total = total.filter(|total| *total > 0)?;
@@ -792,7 +796,7 @@ impl StreamResolver {
                     .map_err(|error| error.message)
             })
         });
-        Some(Arc::new(range_seek::RangeTimelineSession::new(
+        let session = range_seek::RangeTimelineSession::new(
             format,
             fetch,
             total,
@@ -800,7 +804,12 @@ impl StreamResolver {
             tokio::runtime::Handle::current(),
             cancellation.clone(),
             pause,
-        )))
+        );
+        let session = match front_buffer {
+            Some((path, completion)) => session.with_front_buffer(path, completion),
+            None => session,
+        };
+        Some(Arc::new(session))
     }
 
     /// Builds a byte range seek session for a progressive backend source that
@@ -816,6 +825,7 @@ impl StreamResolver {
         duration: Option<Duration>,
         cancellation: &CancellationToken,
         pause: DownloadPauseGate,
+        front_buffer: Option<(std::path::PathBuf, ProgressiveCompletion)>,
     ) -> Option<Arc<dyn TimelineSeekSession>> {
         let metadata = source.metadata();
         if metadata.timeline {
@@ -834,7 +844,7 @@ impl StreamResolver {
                     .map_err(|error| error.message)
             })
         });
-        Some(Arc::new(range_seek::RangeTimelineSession::new(
+        let session = range_seek::RangeTimelineSession::new(
             format,
             fetch,
             total,
@@ -842,7 +852,12 @@ impl StreamResolver {
             tokio::runtime::Handle::current(),
             cancellation.clone(),
             pause,
-        )))
+        );
+        let session = match front_buffer {
+            Some((path, completion)) => session.with_front_buffer(path, completion),
+            None => session,
+        };
+        Some(Arc::new(session))
     }
 
     pub(super) fn spawn_progressive_download(

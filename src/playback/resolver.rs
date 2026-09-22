@@ -36,8 +36,8 @@ use super::cache::{AudioCache, BLOCK_SIZE, CacheTrackToken};
 use super::listen_history::SoundCloudListenReport;
 use super::media_source::{BackendProvider, BackendSource, MediaRequest, MediaResolveOutcome};
 use super::progressive::{
-    DownloadPauseGate, ProgressiveFile, ProgressiveReader, ProgressiveWriter, TimelineSeekSession,
-    startup_bytes,
+    DownloadPauseGate, ProgressiveCompletion, ProgressiveFile, ProgressiveReader,
+    ProgressiveWriter, TimelineSeekSession, startup_bytes,
 };
 use super::resolve_limiter::ResolveLimiter;
 use super::resolve_source_cache::{ResolvedSourceCache, SourceCacheValue, SourceResolveFlights};

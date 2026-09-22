@@ -930,7 +930,8 @@ async fn backend_range_sessions_skip_timelines_and_unknown_sizes() {
                 Some(1_000),
                 Some(Duration::from_secs(4)),
                 &cancellation,
-                DownloadPauseGate::new()
+                DownloadPauseGate::new(),
+                None,
             )
             .is_some()
     );
@@ -942,7 +943,8 @@ async fn backend_range_sessions_skip_timelines_and_unknown_sizes() {
                 None,
                 None,
                 &cancellation,
-                DownloadPauseGate::new()
+                DownloadPauseGate::new(),
+                None,
             )
             .is_none(),
         "timeline sources keep their own seek sessions"
@@ -955,7 +957,8 @@ async fn backend_range_sessions_skip_timelines_and_unknown_sizes() {
                 None,
                 Some(Duration::from_secs(4)),
                 &cancellation,
-                DownloadPauseGate::new()
+                DownloadPauseGate::new(),
+                None,
             )
             .is_none(),
         "unknown sizes stay on the deferred path"
@@ -985,6 +988,7 @@ async fn direct_deezer_progressive_sources_attach_range_seek_sessions() {
             Some(Duration::from_secs(4)),
             &cancellation,
             DownloadPauseGate::new(),
+            None,
         )
     };
     assert!(
