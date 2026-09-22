@@ -123,7 +123,6 @@ pub(super) fn progress_control(
     model: Entity<PlaybackModel>,
     state: Rc<Cell<SeekPointerState>>,
     buffered: BufferedVisual,
-    suffix: Option<(f32, f32)>,
     seek_fill: SeekFillVisual,
     enabled: bool,
     cx: &mut Context<PlaybackView>,
@@ -194,19 +193,6 @@ pub(super) fn progress_control(
                             },
                         );
                     this.child(buffered_bar)
-                })
-                .when_some(suffix, |this, (start, end)| {
-                    this.child(
-                        div()
-                            .id("playback-suffix-buffered")
-                            .absolute()
-                            .top_0()
-                            .bottom_0()
-                            .left(relative(start))
-                            .w(relative((end - start).max(0.0)))
-                            .rounded_full()
-                            .bg(rgba(0x94a3b261)),
-                    )
                 })
                 .when(seek_fill.target > 0.0 || seek_fill.active, move |this| {
                     let playback_fill = if seek_fill.active {

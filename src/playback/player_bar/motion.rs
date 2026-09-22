@@ -42,13 +42,19 @@ impl BufferedMotion {
         let changed = self.generation != Some(generation) || self.target != target;
 
         if changed {
+            let source_changed = self.generation != Some(generation);
+            let moved_back = target < self.target;
             let displayed = self.displayed_at(now);
             self.generation = Some(generation);
-            self.from = displayed;
+            self.from = if source_changed || moved_back {
+                target
+            } else {
+                displayed
+            };
             self.target = target;
             self.epoch = self.epoch.wrapping_add(1);
-            self.started_at = (!reduced_motion && displayed != target).then_some(now);
-            if reduced_motion || displayed == target {
+            self.started_at = (!reduced_motion && self.from != target).then_some(now);
+            if reduced_motion || self.from == target {
                 self.from = target;
                 self.started_at = None;
             }

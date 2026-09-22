@@ -273,7 +273,7 @@ fn apply_buffered_progress(
 /// Keep the suffix as a separate range so a missing middle section is never
 /// painted as downloaded by the single contiguous front-buffer indicator.
 fn apply_timeline_suffix_progress(state: &mut PlaybackState, suffix: &TimelineSuffixState) -> bool {
-    let next = if state.duration.is_zero() || suffix.total == 0 || suffix.written == 0 {
+    let next = if state.duration.is_zero() || suffix.total == 0 {
         None
     } else {
         let fraction = (suffix.written as f32 / suffix.total as f32).clamp(0.0, 1.0);

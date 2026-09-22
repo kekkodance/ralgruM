@@ -400,6 +400,7 @@ enum SourceData {
 }
 
 mod crypto;
+mod flac_coverage;
 mod format;
 mod playback;
 mod providers;

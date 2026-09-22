@@ -15,6 +15,7 @@ use super::super::progressive::{
     TimelineSeekSession, TimelineSeekStartup, TimelineSuffixState,
 };
 use super::AudioFormat;
+use super::flac_coverage::{FlacCoverage, FlacScanner};
 
 /// Enough suffix bytes for the decoder probe and a moment of playback.
 const SUFFIX_STARTUP_BYTES: u64 = 64 * 1024;
@@ -103,6 +104,7 @@ enum FrontBufferMap {
     Flac {
         audio_start: u64,
         stream_info: FlacStreamInfo,
+        coverage: FlacCoverage,
     },
 }
 
@@ -127,6 +129,7 @@ struct LandedSuffix {
     /// Bytes of staged header written before the frames.
     header_len: u64,
     flac_info: Option<FlacStreamInfo>,
+    flac_coverage: Option<FlacCoverage>,
     cancellation: CancellationToken,
 }
 
@@ -154,9 +157,15 @@ impl FrontBufferCoverage {
                     .read_to_end(&mut bytes)
                     .ok()?;
                 let (header, stream_info) = parse_flac_header(&bytes).ok()?;
+                let audio_start = header.len() as u64;
+                let coverage = FlacCoverage::new();
+                let mut scanner =
+                    FlacScanner::new(stream_info.clone(), audio_start, coverage.clone());
+                scanner.ingest(audio_start, &bytes[header.len()..]);
                 FrontBufferMap::Flac {
-                    audio_start: header.len() as u64,
+                    audio_start,
                     stream_info,
+                    coverage,
                 }
             }
         };
@@ -184,7 +193,11 @@ impl FrontBufferCoverage {
             FrontBufferMap::Flac {
                 audio_start,
                 stream_info,
+                coverage,
             } => {
+                if coverage.contains(position, self.completion.written()) {
+                    return true;
+                }
                 let Some(target_offset) =
                     stream_info.safe_target_end(position, *audio_start, self.total)
                 else {
@@ -267,43 +280,70 @@ impl RangeTimelineSession {
             let total = self.total;
             let duration = self.duration;
             self.runtime.spawn(async move {
-                let mut last_probe = probe_completion.written();
+                let mut last_probe = 0;
+                let mut scanner: Option<FlacScanner> = None;
                 loop {
-                    if coverage.lock().is_ok_and(|value| value.is_some())
-                        || track_cancellation.is_cancelled()
-                        || !probe_completion.is_usable()
-                        || probe_completion.is_complete()
-                    {
+                    if track_cancellation.is_cancelled() || !probe_completion.is_usable() {
+                        break;
+                    }
+                    let written = probe_completion.written();
+                    if scanner.is_none() {
+                        let parsed = coverage.lock().ok().and_then(|value| {
+                            let front = value.as_ref()?;
+                            let FrontBufferMap::Flac {
+                                audio_start,
+                                stream_info,
+                                coverage,
+                            } = &front.map
+                            else {
+                                return None;
+                            };
+                            Some((*audio_start, stream_info.clone(), coverage.clone()))
+                        });
+                        if let Some((audio_start, info, verified)) = parsed {
+                            scanner = Some(FlacScanner::new(info, audio_start, verified));
+                        } else if written != last_probe {
+                            last_probe = written;
+                            let path = probe_path.clone();
+                            let completion = probe_completion.clone();
+                            let parsed = tokio::task::spawn_blocking(move || {
+                                FrontBufferCoverage::from_file(
+                                    RangeSeekFormat::Flac,
+                                    &path,
+                                    completion,
+                                    total,
+                                    duration,
+                                )
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                            if let Some(parsed) = parsed
+                                && let Ok(mut value) = coverage.lock()
+                            {
+                                *value = Some(parsed);
+                            }
+                        }
+                    }
+                    if let Some(mut current) = scanner.take() {
+                        if written > current.next_offset() {
+                            let path = probe_path.clone();
+                            let scanned = tokio::task::spawn_blocking(move || {
+                                let _ = current.scan_file_to(&path, written);
+                                current
+                            })
+                            .await;
+                            scanner = scanned.ok();
+                        } else {
+                            scanner = Some(current);
+                        }
+                    }
+                    if probe_completion.is_complete() {
                         break;
                     }
                     tokio::select! {
                         () = track_cancellation.cancelled() => break,
-                        () = tokio::time::sleep(Duration::from_millis(100)) => {}
-                    }
-                    let written = probe_completion.written();
-                    if written == last_probe {
-                        continue;
-                    }
-                    last_probe = written;
-                    let path = probe_path.clone();
-                    let completion = probe_completion.clone();
-                    let parsed = tokio::task::spawn_blocking(move || {
-                        FrontBufferCoverage::from_file(
-                            RangeSeekFormat::Flac,
-                            &path,
-                            completion,
-                            total,
-                            duration,
-                        )
-                    })
-                    .await
-                    .ok()
-                    .flatten();
-                    if let Some(parsed) = parsed {
-                        if let Ok(mut value) = coverage.lock() {
-                            *value = Some(parsed);
-                        }
-                        break;
+                        () = tokio::time::sleep(Duration::from_millis(25)) => {}
                     }
                 }
             });
@@ -392,6 +432,18 @@ impl RangeTimelineSession {
             .saturating_sub(landed.base)
             .as_secs_f64()
             .min(remaining_time);
+        if landed
+            .flac_coverage
+            .as_ref()
+            .is_some_and(|coverage| coverage.contains(position, landed.completion.written()))
+            && landed.completion.is_usable()
+        {
+            return Some(LandedSuffixSource {
+                path: landed.path.clone(),
+                completion: landed.completion.clone(),
+                base: landed.base,
+            });
+        }
         let needed_source = if position == landed.base {
             landed.base_bytes
         } else if let Some(info) = landed.flac_info.as_ref() {
@@ -507,6 +559,8 @@ impl TimelineSeekSession for RangeTimelineSession {
                     frame_base: start,
                     header_len: 0,
                     flac_info: None,
+                    flac_coverage: None,
+                    flac_scanner: None,
                     published: false,
                     pause_guard: Some(pause_guard),
                 };
@@ -562,6 +616,8 @@ struct SuffixWriter<'a> {
     /// Staged header bytes written before the frame stream.
     header_len: u64,
     flac_info: Option<FlacStreamInfo>,
+    flac_coverage: Option<FlacCoverage>,
+    flac_scanner: Option<FlacScanner>,
     /// Whether the startup handoff published the landed record already.
     published: bool,
     /// Gate holding the front download back. Dropped at the startup
@@ -603,6 +659,9 @@ impl SuffixWriter<'_> {
         };
         self.written = header_len;
         self.header_len = header_len;
+        let coverage = FlacCoverage::new();
+        self.flac_scanner = Some(FlacScanner::new(info.clone(), header_len, coverage.clone()));
+        self.flac_coverage = Some(coverage);
         self.flac_info = Some(info);
         self.frame_base = frame.offset;
         self.intra_segment_offset = Some(target.saturating_sub(frame.position));
@@ -659,6 +718,7 @@ impl SuffixWriter<'_> {
             let bytes = (self.fetch)(start, end, self.cancellation.clone())
                 .await
                 .map_err(|error| format!("The seek suffix could not be downloaded: {error}"))?;
+            let file_offset = self.written;
             self.writer
                 .write_all(&bytes)
                 .await
@@ -668,6 +728,9 @@ impl SuffixWriter<'_> {
                 .await
                 .map_err(|_| "The seek buffer could not be finalized".to_string())?;
             self.written = self.written.saturating_add(bytes.len() as u64);
+            if let Some(scanner) = self.flac_scanner.as_mut() {
+                scanner.ingest(file_offset, &bytes);
+            }
             fetched = fetched.saturating_add(bytes.len() as u64);
             self.progress.written.store(fetched, Ordering::Relaxed);
             start = end.saturating_add(1);
@@ -702,6 +765,7 @@ impl SuffixWriter<'_> {
             base_bytes: self.frame_base,
             header_len: self.header_len,
             flac_info: self.flac_info.clone(),
+            flac_coverage: self.flac_coverage.clone(),
             cancellation: self.cancellation.clone(),
         });
     }
@@ -984,7 +1048,7 @@ fn interpolated_offset(lower: &FlacFrame, upper: &FlacFrame, target: Duration) -
 
 /// Stream parameters read from the FLAC STREAMINFO metadata block.
 #[derive(Clone)]
-struct FlacStreamInfo {
+pub(super) struct FlacStreamInfo {
     sample_rate: u32,
     channels: u32,
     bits_per_sample: u32,
@@ -1069,9 +1133,9 @@ struct FlacSeekPoint {
 }
 
 #[derive(Clone, Copy)]
-struct FlacFrame {
-    offset: u64,
-    position: Duration,
+pub(super) struct FlacFrame {
+    pub(super) offset: u64,
+    pub(super) position: Duration,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1155,7 +1219,11 @@ fn parse_flac_stream_info(payload: &[u8]) -> FlacStreamInfo {
 /// starts and when it plays. False sync matches inside frame data are weeded
 /// out with the same checks symphonia applies: reserved fields, the header
 /// CRC-8, and consistency with the stream parameters.
-fn parse_first_flac_frame(bytes: &[u8], info: &FlacStreamInfo, base: u64) -> Option<FlacFrame> {
+pub(super) fn parse_first_flac_frame(
+    bytes: &[u8],
+    info: &FlacStreamInfo,
+    base: u64,
+) -> Option<FlacFrame> {
     let mut index = 0;
     while index + 2 <= bytes.len() {
         if bytes[index] == 0xff
@@ -1387,6 +1455,7 @@ mod tests {
             duration: Duration::from_secs(30),
             map: FrontBufferMap::Flac {
                 audio_start: 100,
+                coverage: FlacCoverage::new(),
                 stream_info: FlacStreamInfo {
                     sample_rate: 100,
                     channels: 1,
@@ -1964,7 +2033,7 @@ mod tests {
         let mut writer = buffer.writer().unwrap();
         writer.write_all(&bytes[..frontier as usize]).await.unwrap();
         writer.flush().await.unwrap();
-        let (fetch, _ranges) = memory_fetch(Arc::new(bytes));
+        let (fetch, ranges) = memory_fetch(Arc::new(bytes));
         let session = Arc::new(RangeTimelineSession::new(
             RangeSeekFormat::Mp3,
             fetch,
@@ -2030,6 +2099,27 @@ mod tests {
             position >= Duration::from_millis(3_400),
             "the seek must land at the target, was {position:?}"
         );
+        let fetched_before_local_seek = ranges.lock().unwrap().len();
+        assert_eq!(
+            engine.seek(Duration::from_millis(3_700)).unwrap(),
+            SeekOutcome::Deferred
+        );
+        let mut landed_again = false;
+        for _ in 0..80 {
+            match engine.apply_deferred_seek().unwrap() {
+                SeekOutcome::Applied | SeekOutcome::AppliedStandbyDropped => {
+                    landed_again = true;
+                    break;
+                }
+                SeekOutcome::Deferred => tokio::time::sleep(Duration::from_millis(25)).await,
+            }
+        }
+        assert!(landed_again, "a buffered suffix reseek must apply");
+        assert_eq!(
+            ranges.lock().unwrap().len(),
+            fetched_before_local_seek,
+            "a buffered suffix reseek must not fetch another network range"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2060,7 +2150,7 @@ mod tests {
         let mut writer = buffer.writer().unwrap();
         writer.write_all(&bytes[..frontier as usize]).await.unwrap();
         writer.flush().await.unwrap();
-        let (fetch, _ranges) = memory_fetch(Arc::new(bytes));
+        let (fetch, ranges) = memory_fetch(Arc::new(bytes));
         let session = Arc::new(RangeTimelineSession::new(
             RangeSeekFormat::Flac,
             fetch,
@@ -2124,6 +2214,88 @@ mod tests {
             position >= Duration::from_millis(3_400),
             "the FLAC seek must land at the target, was {position:?}"
         );
+        let fetched_before_local_seek = ranges.lock().unwrap().len();
+        assert_eq!(
+            engine.seek(Duration::from_millis(3_700)).unwrap(),
+            SeekOutcome::Deferred
+        );
+        let mut landed_again = false;
+        for _ in 0..80 {
+            match engine.apply_deferred_seek().unwrap() {
+                SeekOutcome::Applied | SeekOutcome::AppliedStandbyDropped => {
+                    landed_again = true;
+                    break;
+                }
+                SeekOutcome::Deferred => tokio::time::sleep(Duration::from_millis(25)).await,
+            }
+        }
+        assert!(landed_again, "a buffered FLAC suffix reseek must apply");
+        assert_eq!(
+            ranges.lock().unwrap().len(),
+            fetched_before_local_seek,
+            "a buffered FLAC suffix reseek must not fetch another network range"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn buffered_flac_seek_uses_the_local_front_path() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let Some(file) = make_flac_tone_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping buffered FLAC seek test");
+            return;
+        };
+        let bytes = std::fs::read(file.path()).unwrap();
+        let frontier = bytes.len() * 3 / 4;
+        let buffer = ProgressiveFile::new(AudioFormat::Flac, Some(bytes.len() as u64)).unwrap();
+        let mut writer = buffer.writer().unwrap();
+        writer.write_all(&bytes[..frontier]).await.unwrap();
+        writer.flush().await.unwrap();
+        let completion = buffer.reader().unwrap().completion();
+        let remote: RangeFetch = Arc::new(|start, end, _| {
+            Box::pin(async move { Err(format!("unexpected remote request for {start}..={end}")) })
+        });
+        let session = RangeTimelineSession::new(
+            RangeSeekFormat::Flac,
+            remote,
+            bytes.len() as u64,
+            Duration::from_secs(4),
+            tokio::runtime::Handle::current(),
+            CancellationToken::new(),
+            DownloadPauseGate::new(),
+        )
+        .with_front_buffer(buffer.path().to_path_buf(), completion);
+        assert!(
+            session.can_seek_from_front(Duration::from_millis(500)),
+            "a verified FLAC frame in the front buffer must take the local path"
+        );
+        let mut decoder = rodio::Decoder::builder()
+            .with_data(buffer.reader().unwrap())
+            .with_hint("flac")
+            .with_byte_len(frontier as u64)
+            .build()
+            .unwrap();
+        decoder.try_seek(Duration::from_millis(500)).unwrap();
+        assert!(decoder.next().is_some());
+    }
+
+    #[test]
+    fn flac_frame_coverage_grows_with_flushed_suffix_chunks() {
+        let Some(file) = make_flac_tone_fixture() else {
+            eprintln!("ffmpeg is unavailable; skipping FLAC coverage test");
+            return;
+        };
+        let bytes = std::fs::read(file.path()).unwrap();
+        let (header, info) = parse_flac_header(&bytes).unwrap();
+        let start = header.len();
+        let split = start + (bytes.len() - start) / 2;
+        let coverage = FlacCoverage::new();
+        let mut scanner = FlacScanner::new(info, start as u64, coverage.clone());
+        scanner.ingest(start as u64, &bytes[start..split]);
+        assert!(coverage.contains(Duration::from_millis(500), split as u64));
+        assert!(!coverage.contains(Duration::from_millis(3_500), split as u64));
+        scanner.ingest(split as u64, &bytes[split..]);
+        assert!(coverage.contains(Duration::from_secs(3), bytes.len() as u64));
     }
 
     /// Rapid seeks on a session-bearing source must never destroy the

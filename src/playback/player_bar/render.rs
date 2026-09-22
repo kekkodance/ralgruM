@@ -1,5 +1,12 @@
 use super::*;
 
+fn visible_buffered_end(
+    front: std::time::Duration,
+    suffix: Option<(std::time::Duration, std::time::Duration)>,
+) -> std::time::Duration {
+    suffix.map_or(front, |(_, end)| end)
+}
+
 impl Render for PlaybackView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewport = window.viewport_size();
@@ -150,22 +157,15 @@ impl Render for PlaybackView {
         let display_position = seek_preview
             .map(|_| duration.mul_f32(display_progress))
             .unwrap_or(position);
+        let visible_buffered = visible_buffered_end(buffered, suffix_buffered);
         let buffered_fraction = if duration.is_zero() {
             0.0
         } else {
-            (buffered.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
+            (visible_buffered.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
         };
         let buffered_visual =
             self.buffered_motion
                 .prepare(generation, buffered_fraction, now, cx.reduce_motion());
-        let suffix_fraction = suffix_buffered.and_then(|(start, end)| {
-            (!duration.is_zero()).then(|| {
-                (
-                    (start.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0),
-                    (end.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0),
-                )
-            })
-        });
         if self.seek_slider.read(cx).value() != SliderValue::Single(display_progress) {
             self.seek_slider.update(cx, |slider, cx| {
                 slider.set_value(display_progress, window, cx);
@@ -604,7 +604,6 @@ impl Render for PlaybackView {
                         self.model.clone(),
                         self.seek_pointer_state.clone(),
                         buffered_visual,
-                        suffix_fraction,
                         seek_fill_visual,
                         seek_bar_enabled,
                         cx,
@@ -821,4 +820,30 @@ pub(super) fn render_player_bar_host(
         }));
     }
     host.opacity(if open { 1. } else { 0. }).into_any_element()
+}
+
+#[cfg(test)]
+mod buffer_tests {
+    use super::visible_buffered_end;
+    use std::time::Duration;
+
+    #[test]
+    fn seekbar_shows_only_the_active_download_frontier() {
+        let front = Duration::from_secs(90);
+        assert_eq!(visible_buffered_end(front, None), front);
+        assert_eq!(
+            visible_buffered_end(
+                front,
+                Some((Duration::from_secs(150), Duration::from_secs(150)))
+            ),
+            Duration::from_secs(150),
+        );
+        assert_eq!(
+            visible_buffered_end(
+                front,
+                Some((Duration::from_secs(150), Duration::from_secs(165)))
+            ),
+            Duration::from_secs(165),
+        );
+    }
 }

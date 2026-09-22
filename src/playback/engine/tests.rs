@@ -74,6 +74,74 @@ fn progressive_seek_keeps_only_the_latest_pending_target_and_can_cancel_it() {
     assert_eq!(completion.pending_seek(), None);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn buffered_local_seek_keeps_playing_as_the_file_grows() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let file = tempfile::Builder::new().suffix(".mp3").tempfile().unwrap();
+    let status = match Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=44100:duration=12",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            "-y",
+        ])
+        .arg(file.path())
+        .status()
+    {
+        Ok(status) => status,
+        Err(_) => return,
+    };
+    assert!(status.success());
+    let bytes = std::fs::read(file.path()).unwrap();
+    let frontier = 80 * 1024;
+    assert!(bytes.len() > frontier * 2);
+    let buffer =
+        super::super::progressive::ProgressiveFile::new(AudioFormat::Mp3, Some(bytes.len() as u64))
+            .unwrap();
+    let path = buffer.path().to_path_buf();
+    let completion = buffer.reader().unwrap().completion();
+    let mut writer = buffer.writer().unwrap();
+    writer.write_all(&bytes[..frontier]).await.unwrap();
+    writer.flush().await.unwrap();
+
+    let local = tokio::task::spawn_blocking(move || {
+        RodioEngine::progressive_decoder_at_with_cancellation(
+            &path,
+            AudioFormat::Mp3,
+            Duration::from_millis(500),
+            &completion,
+            &AtomicBool::new(false),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    writer.write_all(&bytes[frontier..]).await.unwrap();
+    writer.flush().await.unwrap();
+    writer.finish().await.unwrap();
+
+    let sample_rate = u64::from(local.sample_rate());
+    let channels = u64::from(local.channels());
+    let expected = (sample_rate * channels * 8) as usize;
+    let decoded = tokio::task::spawn_blocking(move || local.take(expected).count())
+        .await
+        .unwrap();
+    assert_eq!(
+        decoded, expected,
+        "a local seek must continue past its initial frontier"
+    );
+    drop(buffer);
+}
+
 #[test]
 fn reported_position_preserves_the_preseeked_reload_offset() {
     assert_eq!(

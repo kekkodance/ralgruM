@@ -527,7 +527,7 @@ fn pending_backward_seek_preserves_the_downloaded_frontier() {
     state.duration = Duration::from_secs(10);
     state.buffered = Duration::from_secs(10);
 
-    assert!(!apply_timeline_suffix_progress(
+    assert!(apply_timeline_suffix_progress(
         &mut state,
         &TimelineSuffixState {
             pending: true,
@@ -537,7 +537,10 @@ fn pending_backward_seek_preserves_the_downloaded_frontier() {
         },
     ));
     assert_eq!(state.buffered, Duration::from_secs(10));
-    assert_eq!(state.suffix_buffered, None);
+    assert_eq!(
+        state.suffix_buffered,
+        Some((Duration::from_secs(2), Duration::from_secs(2)))
+    );
 }
 
 /// The suffix may advance independently without filling the gap in front.
@@ -618,7 +621,10 @@ fn landed_suffix_and_front_progress_keep_the_indicator_honest() {
         },
     ));
     assert_eq!(state.buffered, Duration::from_secs(10));
-    assert_eq!(state.suffix_buffered, None);
+    assert_eq!(
+        state.suffix_buffered,
+        Some((Duration::from_secs(9), Duration::from_secs(9)))
+    );
 }
 
 #[test]
