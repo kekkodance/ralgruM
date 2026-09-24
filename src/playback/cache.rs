@@ -738,6 +738,18 @@ impl AudioCache {
     /// Return only catalog records whose cache key has a known size and whose
     /// blocks are all present with their exact expected lengths.
     pub(crate) async fn cached_tracks(&self) -> Vec<PlaybackTrack> {
+        let mut tracks = Vec::new();
+        for attempt in 0..2 {
+            let revision = self.revision();
+            tracks = self.cached_tracks_snapshot().await;
+            if self.revision() == revision || attempt == 1 {
+                break;
+            }
+        }
+        tracks
+    }
+
+    async fn cached_tracks_snapshot(&self) -> Vec<PlaybackTrack> {
         let path = self.catalog_path();
         let bytes = {
             let _guard = self.maintenance.lock().await;
@@ -787,6 +799,7 @@ impl AudioCache {
         match tokio::fs::read(path).await {
             Ok(bytes) if bytes.len() == expected => Some(bytes),
             Ok(_) => {
+                let _guard = self.maintenance.lock().await;
                 if tokio::fs::remove_file(path).await.is_ok() {
                     self.bump_revision();
                 }
@@ -1015,6 +1028,20 @@ impl AudioCache {
     }
 
     pub(crate) async fn overview(&self) -> Result<Overview, String> {
+        // Do not hold the maintenance lock while enumerating a potentially
+        // large cache. If an in-process mutation overlaps the scan, retry once
+        // so the settings meter does not retain a partial/zero snapshot.
+        for attempt in 0..2 {
+            let revision = self.revision();
+            let overview = self.scan_overview().await?;
+            if self.revision() == revision || attempt == 1 {
+                return Ok(overview);
+            }
+        }
+        unreachable!("the bounded overview scan always returns")
+    }
+
+    async fn scan_overview(&self) -> Result<Overview, String> {
         tokio::fs::create_dir_all(&self.directory)
             .await
             .map_err(|e| e.to_string())?;
@@ -1152,6 +1179,7 @@ impl AudioCache {
         if let Ok(mut complete) = self.complete_tracks.write() {
             complete.clear();
         }
+        drop(_guard);
         self.overview().await
     }
 
@@ -1453,6 +1481,29 @@ mod tests {
 
         tokio::fs::write(&path, [1, 2, 3]).await.unwrap();
         assert!(cache.cached_tracks().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_tracks_and_usage_survive_reopening_the_cache() {
+        let temp = TempDir::new().unwrap();
+        let cache = AudioCache::new(temp.path().into(), 256);
+        let track = test_track("track-id", "Persisted track");
+        let key = "soundcloud:track-id:standard:mp3:MP3_128";
+        cache.remember_track(&track, key, Some(4)).await;
+        cache
+            .write(
+                &cache.block_path(key, 4, 0, 3),
+                &[1, 2, 3, 4],
+                cache.generation(),
+            )
+            .await;
+        assert_eq!(cache.cached_tracks().await, vec![track.clone()]);
+        assert_eq!(cache.overview().await.unwrap().used_bytes, 4);
+
+        drop(cache);
+        let reopened = AudioCache::new(temp.path().into(), 256);
+        assert_eq!(reopened.cached_tracks().await, vec![track]);
+        assert_eq!(reopened.overview().await.unwrap().used_bytes, 4);
     }
 
     #[tokio::test]

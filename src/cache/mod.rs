@@ -118,6 +118,10 @@ impl CacheView {
         }
     }
 
+    pub(crate) fn refresh_from_disk(&mut self, cx: &mut Context<Self>) {
+        self.refresh(cx);
+    }
+
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.load_generation = self.load_generation.wrapping_add(1);
         let generation = self.load_generation;

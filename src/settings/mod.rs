@@ -634,11 +634,15 @@ impl SettingsView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.category != category {
+        let category_changed = self.category != category;
+        if category_changed {
             self.browser_scroll.reset();
             self.scroll.set_offset(point(px(0.), px(0.)));
         }
         self.category = category;
+        if category_changed && category == Category::General {
+            self.refresh_cache_overview(cx);
+        }
         if category == Category::Murglar {
             let should_fetch = {
                 let account = self.account.read(cx);

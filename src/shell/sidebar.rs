@@ -178,6 +178,10 @@ fn sidebar_pass_value(sidebar_pass: SidebarPass) -> (String, u32) {
 impl RalgrumApp {
     fn select_nav(&mut self, nav: Nav, window: &mut Window, cx: &mut Context<Self>) {
         let already_selected = self.nav == nav;
+        if nav == Nav::Cache {
+            self.cache_view
+                .update(cx, |cache, cx| cache.refresh_from_disk(cx));
+        }
         if already_selected && nav != Nav::Discover {
             return;
         }
