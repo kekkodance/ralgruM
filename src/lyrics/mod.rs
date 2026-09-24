@@ -38,7 +38,7 @@ use crate::{
     navigation_state::LyricsSource,
     playback::{PlaybackModel, PlaybackStatus, PlaybackTrack, RightSidebar},
     playing_indicator::playing_bars,
-    theme::{BACKGROUND, BORDER, DANGER, FOREGROUND, MUTED, PRIMARY, SURFACE_RAISED},
+    theme::{BACKGROUND, BORDER, FOREGROUND, MUTED, PRIMARY, SURFACE_RAISED},
 };
 
 // GPUI's stock scrollbar considers itself visible for 3s after scrolling.
@@ -844,15 +844,6 @@ fn automatic_fallback_selection(
         }
         (_, alternate) => (alternate_provider(primary_provider), alternate),
     }
-}
-
-fn late_primary_selection(
-    primary_provider: LyricsProvider,
-    completed_provider: LyricsProvider,
-    response: LyricsResponse,
-) -> Option<(LyricsProvider, LyricsResponse)> {
-    (completed_provider == primary_provider && !matches!(&response, LyricsResponse::Empty { .. }))
-        .then_some((primary_provider, response))
 }
 
 fn track_changed(current: Option<&LyricsTrack>, next: Option<&LyricsTrack>) -> bool {

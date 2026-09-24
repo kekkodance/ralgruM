@@ -3,7 +3,6 @@ use gpui::{
 };
 
 use crate::{
-    assets::LocalIcon,
     lyrics::LyricsPanel,
     playback::{PlaybackModel, QueuePanel, RightSidebar},
     theme::BACKGROUND,
