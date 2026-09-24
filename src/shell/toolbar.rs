@@ -34,10 +34,10 @@ const SELECTOR_PADDING: f32 = 3.;
 const SOURCE_ALL_WIDTH: f32 = 70.;
 const PLATFORM_SERVICE_FULL_WIDTH: f32 = 214.;
 const PLATFORM_SERVICE_COMPACT_WIDTH: f32 = 70.;
-const LIBRARY_PLATFORM_SERVICE_FULL_WIDTH: f32 = 286.;
-const LIBRARY_PLATFORM_SERVICE_COMPACT_WIDTH: f32 = 106.;
-const PLATFORM_SOURCE_RESERVE_FULL_WIDTH: f32 = 78.;
-const PLATFORM_SOURCE_RESERVE_COMPACT_WIDTH: f32 = 6.;
+const LIBRARY_LOCAL_FULL_WIDTH: f32 = 70.;
+const LIBRARY_LOCAL_COMPACT_WIDTH: f32 = 34.;
+const SOURCE_SELECTOR_FULL_WIDTH: f32 = 292.;
+const SOURCE_SELECTOR_COMPACT_WIDTH: f32 = 148.;
 const SEARCH_INPUT_ACTION_PADDING_PX: f32 = 44.;
 const SEARCH_INPUT_CLEAR_PADDING_PX: f32 = 72.;
 /// The text inset of the search field: its left padding, plus the 1px
@@ -425,31 +425,18 @@ fn toolbar_selector_width(source_width: f32, library_width: f32, fraction: f32) 
 }
 
 fn platform_service_width(visual: ToolbarGeometryVisual, delta: f32) -> f32 {
-    let route_fraction = visual.route_fraction_at(delta);
-    let selector_width = toolbar_selector_width(
-        visual.source_width_at(delta),
-        visual.library_width_at(delta),
-        route_fraction,
-    );
-    let source_reserve = crate::motion::lerp(
-        PLATFORM_SOURCE_RESERVE_FULL_WIDTH,
-        PLATFORM_SOURCE_RESERVE_COMPACT_WIDTH,
-        route_fraction,
-    );
-    selector_width - source_reserve
+    crate::motion::lerp(
+        PLATFORM_SERVICE_FULL_WIDTH,
+        PLATFORM_SERVICE_COMPACT_WIDTH,
+        platform_selector_compactness(visual, delta),
+    )
 }
 
 fn platform_service_responsive_visual(
     visual: ToolbarGeometryVisual,
 ) -> crate::motion::ResponsiveModeVisual {
-    let from = platform_service_compactness(
-        platform_service_width(visual, 0.),
-        visual.route_fraction_at(0.),
-    );
-    let target = platform_service_compactness(
-        platform_service_width(visual, 1.),
-        visual.route_fraction_at(1.),
-    );
+    let from = platform_selector_compactness(visual, 0.);
+    let target = platform_selector_compactness(visual, 1.);
     crate::motion::ResponsiveModeVisual {
         from,
         target,
@@ -458,26 +445,26 @@ fn platform_service_responsive_visual(
     }
 }
 
-fn platform_service_compactness(width: f32, route_fraction: f32) -> f32 {
-    let full_width = crate::motion::lerp(
-        PLATFORM_SERVICE_FULL_WIDTH,
-        LIBRARY_PLATFORM_SERVICE_FULL_WIDTH,
-        route_fraction,
-    );
-    let compact_width = crate::motion::lerp(
-        PLATFORM_SERVICE_COMPACT_WIDTH,
-        LIBRARY_PLATFORM_SERVICE_COMPACT_WIDTH,
-        route_fraction,
-    );
-    crate::motion::clamp_unit((full_width - width) / (full_width - compact_width))
+fn platform_selector_compactness(visual: ToolbarGeometryVisual, delta: f32) -> f32 {
+    let width = visual.source_width_at(delta);
+    crate::motion::clamp_unit(
+        (SOURCE_SELECTOR_FULL_WIDTH - width)
+            / (SOURCE_SELECTOR_FULL_WIDTH - SOURCE_SELECTOR_COMPACT_WIDTH),
+    )
 }
 
 fn platform_all_width(visual: ToolbarGeometryVisual, delta: f32) -> f32 {
-    crate::motion::lerp(
-        PLATFORM_SOURCE_RESERVE_FULL_WIDTH - PLATFORM_SOURCE_RESERVE_COMPACT_WIDTH,
-        0.,
-        visual.route_fraction_at(delta),
-    )
+    (SOURCE_ALL_WIDTH + SELECTOR_ITEM_GAP) * (1. - visual.route_fraction_at(delta))
+}
+
+fn platform_local_width(visual: ToolbarGeometryVisual, delta: f32) -> f32 {
+    let compactness = platform_selector_compactness(visual, delta);
+    let local_width = crate::motion::lerp(
+        LIBRARY_LOCAL_FULL_WIDTH,
+        LIBRARY_LOCAL_COMPACT_WIDTH,
+        compactness,
+    );
+    (local_width + SELECTOR_ITEM_GAP) * visual.route_fraction_at(delta)
 }
 
 fn source_selector_geometry(
@@ -926,12 +913,13 @@ pub(super) fn render_top_toolbar(
         app.playback.read(cx).state.right_sidebar != crate::playback::RightSidebar::Closed;
     let toolbar_width =
         toolbar_available_width(viewport_width, &metrics, right_sidebar_open, toolbar_inset);
-    let search_source_labels = metrics.toolbar_stacked
-        || toolbar_shows_full_labels(toolbar_width, SEARCH_SOURCE_SELECTOR_WIDTH);
-    let library_service_labels = metrics.toolbar_stacked
-        || toolbar_shows_full_labels(toolbar_width, LIBRARY_SERVICE_SELECTOR_WIDTH);
-    let source_compact = !search_source_labels;
-    let library_compact = !library_service_labels;
+    let platform_labels = metrics.toolbar_stacked
+        || toolbar_shows_full_labels(
+            toolbar_width,
+            SEARCH_SOURCE_SELECTOR_WIDTH.max(LIBRARY_SERVICE_SELECTOR_WIDTH),
+        );
+    let source_compact = !platform_labels;
+    let library_compact = source_compact;
     let source_selector_target_width = source_selector_width(&source_items, source_compact);
     let library_selector_target_width = library_selector_width(&library_items, library_compact);
     let route_target_fraction = if app.nav == Nav::Library { 1. } else { 0. };
@@ -982,7 +970,9 @@ pub(super) fn render_top_toolbar(
     let platform_service_responsive = platform_service_responsive_visual(toolbar_geometry_visual);
     let platform_service_target_width = platform_service_width(toolbar_geometry_visual, 1.);
     let platform_all_target_width = platform_all_width(toolbar_geometry_visual, 1.);
+    let platform_local_target_width = platform_local_width(toolbar_geometry_visual, 1.);
     let platform_all_target_opacity = toolbar_route_opacities(selector_fraction).0;
+    let platform_local_target_opacity = toolbar_route_opacities(selector_fraction).1;
     let platform_all = div()
         .absolute()
         .left(px(SELECTOR_PADDING))
@@ -1007,9 +997,34 @@ pub(super) fn render_top_toolbar(
             show_search_source,
             cx,
         ));
+    let platform_local = div()
+        .absolute()
+        .left(px(SELECTOR_PADDING))
+        .top(px(SELECTOR_PADDING))
+        .h(px(30.))
+        .w(px(platform_local_target_width))
+        .overflow_hidden()
+        .opacity(platform_local_target_opacity)
+        .with_animation(
+            ("toolbar-selector-local", toolbar_geometry_visual.epoch),
+            crate::motion::content(),
+            move |this, delta| {
+                this.w(px(platform_local_width(toolbar_geometry_visual, delta)))
+                    .opacity(
+                        toolbar_route_opacities(toolbar_geometry_visual.route_fraction_at(delta)).1,
+                    )
+            },
+        )
+        .child(app.platform_item(
+            PlatformItem::Library(library_items[0]),
+            platform_service_responsive,
+            show_library_service,
+            cx,
+        ));
     let platform_service_items: Vec<PlatformItem> = if show_library_service {
-        library_items
-            .into_iter()
+        library_items[1..]
+            .iter()
+            .copied()
             .map(PlatformItem::Library)
             .collect()
     } else {
@@ -1054,6 +1069,7 @@ pub(super) fn render_top_toolbar(
             platform_indicator,
         ))
         .child(platform_all)
+        .child(platform_local)
         .child(platform_services);
     let (source_route_opacity, library_route_opacity) =
         toolbar_search_layer_opacities(toolbar_geometry_visual);
@@ -1291,8 +1307,8 @@ mod tests {
         DetailToolbarMotion, LIBRARY_SERVICE_SELECTOR_WIDTH, SEARCH_MAX_WIDTH,
         SEARCH_SOURCE_SELECTOR_WIDTH, SelectorItemGeometry, TOOLBAR_GAP, TOOLBAR_HORIZONTAL_INSET,
         TOOLBAR_MIN_SEARCH_WIDTH, ToolbarGeometryMotion, ToolbarGeometryVisual,
-        detail_toolbar_phases, library_selector_width, platform_all_width,
-        platform_service_compactness, platform_service_responsive_visual, platform_service_width,
+        detail_toolbar_phases, library_selector_width, platform_all_width, platform_local_width,
+        platform_selector_compactness, platform_service_responsive_visual, platform_service_width,
         selector_item_geometry, selector_shell_width, source_selector_width,
         toolbar_available_width, toolbar_route_identity, toolbar_route_opacities,
         toolbar_search_layer_opacities, toolbar_selector_width, toolbar_shows_full_labels,
@@ -1313,6 +1329,10 @@ mod tests {
             visual.library_width_at(delta),
             visual.route_fraction_at(delta),
         )
+    }
+
+    fn shared_services_left(visual: ToolbarGeometryVisual, delta: f32) -> f32 {
+        geometry_host_width(visual, delta) - 3. - platform_service_width(visual, delta)
     }
 
     #[test]
@@ -1516,10 +1536,12 @@ mod tests {
         };
 
         assert_close(platform_service_width(visual, 0.), 70.);
-        assert_close(platform_service_width(visual, 0.5), 88.);
-        assert_close(platform_service_width(visual, 1.), 106.);
+        assert_close(platform_service_width(visual, 0.5), 70.);
+        assert_close(platform_service_width(visual, 1.), 70.);
         assert_close(platform_all_width(visual, 0.), 72.);
         assert_close(platform_all_width(visual, 1.), 0.);
+        assert_close(platform_local_width(visual, 0.), 0.);
+        assert_close(platform_local_width(visual, 1.), 36.);
     }
 
     #[test]
@@ -1527,8 +1549,8 @@ mod tests {
         for (source_width, library_width, route_fraction, expected) in [
             (292., 292., 0., 214.),
             (148., 112., 0., 70.),
-            (292., 292., 1., 286.),
-            (148., 112., 1., 106.),
+            (292., 292., 1., 214.),
+            (148., 112., 1., 70.),
         ] {
             let visual = ToolbarGeometryVisual {
                 from_source_width: source_width,
@@ -1541,6 +1563,35 @@ mod tests {
             };
             assert_close(platform_service_width(visual, 0.), expected);
         }
+    }
+
+    #[test]
+    fn shared_provider_tabs_do_not_reflow_when_the_all_slot_becomes_local() {
+        let full_width = ToolbarGeometryVisual {
+            from_source_width: 292.,
+            target_source_width: 292.,
+            from_library_width: 292.,
+            target_library_width: 292.,
+            from_route_fraction: 0.,
+            target_route_fraction: 1.,
+            epoch: 0,
+        };
+        for delta in [0., 0.5, 1.] {
+            assert_close(shared_services_left(full_width, delta), 75.);
+        }
+
+        let compact = ToolbarGeometryVisual {
+            from_source_width: 148.,
+            target_source_width: 148.,
+            from_library_width: 112.,
+            target_library_width: 112.,
+            from_route_fraction: 0.,
+            target_route_fraction: 1.,
+            epoch: 0,
+        };
+        assert_close(shared_services_left(compact, 0.), 75.);
+        assert_close(shared_services_left(compact, 0.5), 57.);
+        assert_close(shared_services_left(compact, 1.), 39.);
     }
 
     #[test]
@@ -1621,10 +1672,7 @@ mod tests {
         let mut motion = ToolbarGeometryMotion::default();
         motion.prepare(292., 292., 0., now, false);
         let forward = motion.prepare(148., 112., 1., now, false);
-        let live_service_compactness = platform_service_compactness(
-            platform_service_width(forward, halfway_delta),
-            forward.route_fraction_at(halfway_delta),
-        );
+        let live_service_compactness = platform_selector_compactness(forward, halfway_delta);
 
         let interrupted = motion.prepare(148., 112., 0., halfway, false);
         let service = platform_service_responsive_visual(interrupted);
