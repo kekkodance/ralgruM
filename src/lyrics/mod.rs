@@ -755,7 +755,11 @@ impl LyricsPanel {
         };
         self.timed_line = timed_line_index(&self.lines, self.position);
         self.active_line = active_line_index(&self.lines, self.position);
-        self.center_pending = self.timed_line.is_some();
+        // A provider swap for the same track keeps the synced follow running
+        // so switching back to timed lyrics is seamless: only arm the
+        // re-center when the track actually changed (which reset the scroll).
+        let track_changed = self.timed_line.is_some() && self.scroll.offset().y > px(0.);
+        self.center_pending = track_changed && self.timed_line.is_some();
         self.center_wait_for_layout = self.center_pending;
         self.center_retry_remaining = CENTER_RETRY_ATTEMPTS;
         self.status = if matches!(response, LyricsResponse::Empty { .. }) {
@@ -1268,14 +1272,12 @@ impl Render for LyricsPanel {
                     .pb(px(20.))
                     .mb(px(16.))
                     .border_b_1()
+                    .border_color(rgb(BORDER))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .when(self.detached(cx), |this| {
-                                this.window_control_area(gpui::WindowControlArea::Drag)
-                            })
                             .child(local_icon(LocalIcon::QuoteRight, FOREGROUND).size(px(14.)))
                             .child(
                                 div()
@@ -1304,15 +1306,19 @@ impl Render for LyricsPanel {
                             })
                             .child(crate::music_ui::ghost_close_button("lyrics-close", {
                                 let playback = self.playback.clone();
-                                move |_, _, cx| {
-                                    playback.update(cx, |playback, cx| {
-                                        if playback.state.right_sidebar_popped().is_some() {
-                                            playback.state.dock_sidebar();
-                                        } else {
+                                move |_, window, cx| {
+                                    if playback.read(cx).state.right_sidebar_popped().is_some() {
+                                        // Closing the popout docks the view
+                                        // back into the app. Route through the
+                                        // platform close so the should-close
+                                        // callback runs the dock path.
+                                        window.remove_window();
+                                    } else {
+                                        playback.update(cx, |playback, cx| {
                                             playback.state.close_sidebar();
-                                        }
-                                        cx.notify();
-                                    });
+                                            cx.notify();
+                                        });
+                                    }
                                 }
                             })),
                     )

@@ -1,4 +1,4 @@
-use std::sync::{LazyLock, Mutex};
+use std::{sync::LazyLock, sync::Mutex, time::Duration};
 
 use gpui::{
     App, AppContext, Bounds, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
@@ -80,6 +80,11 @@ pub(super) fn open_or_focus_popout(
             focus: true,
             show: true,
             is_resizable: true,
+            is_minimizable: false,
+            is_maximizable: false,
+            // Animations in the popout must run at the monitor rate even
+            // while the main window holds focus.
+            inactive_frame_interval: Some(Duration::ZERO),
             window_min_size: Some(size(px(POPOUT_MIN_WIDTH), px(POPOUT_MIN_HEIGHT))),
             ..Default::default()
         },

@@ -110,12 +110,30 @@ impl Render for SidebarPopoutRoot {
             .flex()
             .flex_col()
             .bg(rgb(BACKGROUND))
-            // Match the in-app right sidebar inner wrapper: 24px padding,
-            // with the panels managing their own bottom spacing.
-            .pt(px(24.))
-            .px(px(24.))
-            .pb(px(0.))
-            .child(content)
+            .child(
+                // Drag strip spanning the window top so the whole upper
+                // edge moves the window, not just the panel header below
+                // the padding. The app owns the titlebar, so this is the
+                // only drag region the popout needs.
+                div()
+                    .id("sidebar-popout-drag-strip")
+                    .flex_none()
+                    .h(px(24.))
+                    .window_control_area(gpui::WindowControlArea::Drag),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    // Match the in-app right sidebar inner wrapper: 24px
+                    // padding, with the panels managing their own bottom
+                    // spacing. The top padding moved into the drag strip.
+                    .px(px(24.))
+                    .pb(px(0.))
+                    .child(content),
+            )
             .when_some(global_tooltip_overlay(cx), |this, overlay| {
                 this.child(overlay)
             })

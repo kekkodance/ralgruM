@@ -102,6 +102,7 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) is_movable: bool,
     pub(crate) is_resizable: bool,
     pub(crate) is_minimizable: bool,
+    pub(crate) is_maximizable: bool,
     pub(crate) executor: ForegroundExecutor,
     pub(crate) validation_number: usize,
     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
@@ -278,6 +279,7 @@ impl WindowsWindowInner {
             is_movable: context.is_movable,
             is_resizable: context.is_resizable,
             is_minimizable: context.is_minimizable,
+            is_maximizable: context.is_maximizable,
             executor: context.executor.clone(),
             validation_number: context.validation_number,
             main_receiver: context.main_receiver.clone(),
@@ -402,6 +404,7 @@ struct WindowCreateContext {
     is_movable: bool,
     is_resizable: bool,
     is_minimizable: bool,
+    is_maximizable: bool,
     min_size: Option<Size<Pixels>>,
     executor: ForegroundExecutor,
     current_cursor: Option<HCURSOR>,
@@ -480,7 +483,11 @@ impl WindowsWindow {
             let mut dwstyle = WS_SYSMENU;
 
             if params.is_resizable {
-                dwstyle |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+                dwstyle |= WS_THICKFRAME;
+            }
+
+            if params.is_maximizable {
+                dwstyle |= WS_MAXIMIZEBOX;
             }
 
             if params.is_minimizable {
@@ -516,6 +523,7 @@ impl WindowsWindow {
             is_movable: params.is_movable,
             is_resizable: params.is_resizable,
             is_minimizable: params.is_minimizable,
+            is_maximizable: params.is_maximizable,
             min_size: params.window_min_size,
             executor,
             current_cursor,

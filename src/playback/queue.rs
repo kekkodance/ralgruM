@@ -672,9 +672,6 @@ impl Render for QueuePanel {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .when(self.detached(cx), |this| {
-                                this.window_control_area(gpui::WindowControlArea::Drag)
-                            })
                             .child(local_icon(LocalIcon::ListUl, FOREGROUND).size(px(14.)))
                             .child(
                                 div()
@@ -707,15 +704,19 @@ impl Render for QueuePanel {
                                 crate::music_ui::PANEL_CLOSE_ICON_SIZE_PX,
                                 {
                                     let playback = self.playback.clone();
-                                    move |_, _, cx| {
-                                        playback.update(cx, |playback, cx| {
-                                            if playback.state.right_sidebar_popped().is_some() {
-                                                playback.state.dock_sidebar();
-                                            } else {
+                                    move |_, window, cx| {
+                                        if playback.read(cx).state.right_sidebar_popped().is_some()
+                                        {
+                                            // Closing the popout docks the view
+                                            // back into the app through the
+                                            // platform close path.
+                                            window.remove_window();
+                                        } else {
+                                            playback.update(cx, |playback, cx| {
                                                 playback.state.close_sidebar();
-                                            }
-                                            cx.notify();
-                                        })
+                                                cx.notify();
+                                            });
+                                        }
                                     }
                                 },
                             )),

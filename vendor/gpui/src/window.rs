@@ -1150,6 +1150,7 @@ pub struct Window {
     display_id: Option<DisplayId>,
     is_resizable: bool,
     is_minimizable: bool,
+    is_maximizable: bool,
     sprite_atlas: Arc<dyn PlatformAtlas>,
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
@@ -1512,6 +1513,7 @@ impl Window {
             inactive_frame_interval,
             is_resizable,
             is_minimizable,
+            is_maximizable,
             display_id,
             window_background,
             app_id,
@@ -1541,6 +1543,7 @@ impl Window {
                 app_owns_titlebar_drag,
                 is_resizable,
                 is_minimizable,
+                is_maximizable,
                 focus,
                 show,
                 display_id,
@@ -1982,6 +1985,7 @@ impl Window {
             display_id,
             is_resizable,
             is_minimizable,
+            is_maximizable,
             sprite_atlas,
             text_system,
             text_rendering_mode: cx.text_rendering_mode.clone(),
@@ -2722,6 +2726,11 @@ impl Window {
     /// Returns whether this window is minimizable.
     pub fn is_minimizable(&self) -> bool {
         self.is_minimizable
+    }
+
+    /// Returns whether this window is maximizable.
+    pub fn is_maximizable(&self) -> bool {
+        self.is_maximizable
     }
 
     /// Returns the controls supported by the platform.

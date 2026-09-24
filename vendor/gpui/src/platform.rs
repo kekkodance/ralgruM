@@ -1992,6 +1992,9 @@ pub struct WindowOptions {
     /// Whether the window should be minimized by the user
     pub is_minimizable: bool,
 
+    /// Whether the window should be maximizable by the user
+    pub is_maximizable: bool,
+
     /// The display to create the window on, if this is None,
     /// the window will be created on the main display
     pub display_id: Option<DisplayId>,
@@ -2055,6 +2058,10 @@ pub struct WindowParams {
     /// Whether the window should be minimized by the user
     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
     pub is_minimizable: bool,
+
+    /// Whether the window should be maximizable by the user
+    #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
+    pub is_maximizable: bool,
 
     #[cfg_attr(
         any(target_os = "linux", target_os = "freebsd", target_os = "windows"),
@@ -2133,6 +2140,7 @@ impl Default for WindowOptions {
             inactive_frame_interval: Some(Duration::from_micros(33_333)),
             is_resizable: true,
             is_minimizable: true,
+            is_maximizable: true,
             display_id: None,
             window_background: WindowBackgroundAppearance::default(),
             icon: None,
