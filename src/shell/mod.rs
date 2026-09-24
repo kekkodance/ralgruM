@@ -851,7 +851,8 @@ impl RalgrumApp {
         cx.observe(&playback, move |this, playback, cx| {
             let (sync_args, current) = {
                 let state = &playback.read(cx).state;
-                let is_lyrics = state.right_sidebar == RightSidebar::Lyrics;
+                let is_lyrics = state.right_sidebar == RightSidebar::Lyrics
+                    || state.right_sidebar_popped() == Some(RightSidebar::Lyrics);
                 let lyrics_track = if is_lyrics {
                     state
                         .lyrics_display_track()
@@ -1408,9 +1409,14 @@ impl Render for RalgrumApp {
             now,
             cx.reduce_motion(),
         );
-        let (right_sidebar, position, player_bar_open) = {
+        let (right_sidebar, position, player_bar_open, right_sidebar_popped) = {
             let state = &self.playback.read(cx).state;
-            (state.right_sidebar, state.position, state.player_bar_open())
+            (
+                state.right_sidebar,
+                state.position,
+                state.player_bar_open(),
+                state.right_sidebar_popped(),
+            )
         };
         let player_bar_visual = self.player_bar_motion.prepare(
             player_bar_open,
@@ -1423,7 +1429,9 @@ impl Render for RalgrumApp {
         // synced highlighting stays parked at the top.
         let (lyrics_track, lyrics_follows_playback) = {
             let state = &self.playback.read(cx).state;
-            if right_sidebar == RightSidebar::Lyrics {
+            if right_sidebar == RightSidebar::Lyrics
+                || right_sidebar_popped == Some(RightSidebar::Lyrics)
+            {
                 (
                     state.lyrics_display_track().cloned(),
                     state.lyrics_follows_playback(),
@@ -1434,11 +1442,13 @@ impl Render for RalgrumApp {
         };
         let lyrics_track_identity = lyrics_track.as_ref().map(|t| (t.provider, t.id.clone()));
         let lyrics_track_changed = self.last_lyrics_track_identity != lyrics_track_identity;
-        if right_sidebar == RightSidebar::Lyrics || lyrics_track_changed {
+        let lyrics_visible = right_sidebar == RightSidebar::Lyrics
+            || right_sidebar_popped == Some(RightSidebar::Lyrics);
+        if lyrics_visible || lyrics_track_changed {
             self.last_lyrics_track_identity = lyrics_track_identity;
             self.lyrics.update(cx, |lyrics, cx| {
                 lyrics.sync_track(
-                    right_sidebar == RightSidebar::Lyrics,
+                    lyrics_visible,
                     lyrics_track.as_ref().map(LyricsTrackInput::from_playback),
                     if lyrics_follows_playback {
                         position.as_secs_f64()

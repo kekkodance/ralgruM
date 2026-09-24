@@ -1,9 +1,11 @@
-use gpui::{App, Context, ParentElement, Render, Styled, Window, div, prelude::*, rgb};
+use gpui::{
+    AnimationExt, App, Context, ParentElement, Render, Styled, Window, div, prelude::*, px, rgb,
+};
 
 use crate::{
     lyrics::LyricsPanel,
     playback::{PlaybackModel, QueuePanel, RightSidebar},
-    theme::{BACKGROUND, BORDER},
+    theme::BACKGROUND,
     ui::app_tooltip::global_tooltip_overlay,
 };
 
@@ -64,6 +66,11 @@ impl Render for SidebarPopoutRoot {
             self.window_handle = window.window_handle().downcast::<gpui_component::Root>();
         }
         let view = self.current_view(cx);
+        let content_key = match view {
+            Some(RightSidebar::Lyrics) => "lyrics",
+            Some(RightSidebar::Queue) => "queue",
+            Some(RightSidebar::Closed) | None => "closed",
+        };
 
         let content = match view {
             Some(RightSidebar::Lyrics) => self.lyrics.clone().into_any_element(),
@@ -83,13 +90,31 @@ impl Render for SidebarPopoutRoot {
             }
         };
 
+        let content = div()
+            .id("sidebar-popout-content")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(content)
+            .with_animation(
+                format!("sidebar-popout-content-{content_key}"),
+                crate::motion::content(),
+                |this, delta| {
+                    this.opacity(crate::motion::lerp(0.0, 1.0, delta))
+                        .left(px(crate::motion::lerp(8.0, 0.0, delta)))
+                },
+            );
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(rgb(BACKGROUND))
-            .border_1()
-            .border_color(rgb(BORDER))
+            // Match the in-app right sidebar inner wrapper: 24px padding,
+            // with the panels managing their own bottom spacing.
+            .pt(px(24.))
+            .px(px(24.))
+            .pb(px(0.))
             .child(content)
             .when_some(global_tooltip_overlay(cx), |this, overlay| {
                 this.child(overlay)
