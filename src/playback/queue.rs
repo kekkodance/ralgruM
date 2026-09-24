@@ -687,11 +687,12 @@ impl Render for QueuePanel {
                             .when_some(flow_mode_selector, |this, selector| this.child(selector))
                             .child(div().flex_1())
                             .when(!self.detached, |this| {
-                                this.child(crate::music_ui::ghost_icon_button(
+                                this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "queue-detach",
                                     LocalIcon::ArrowUpRightFromSquare,
                                     "Pop out",
-                                    crate::music_ui::PANEL_CLOSE_ICON_SIZE_PX,
+                                    13.,
+                                    1.,
                                     {
                                         let playback = self.playback.clone();
                                         move |_, _, cx| {

@@ -15,7 +15,7 @@ pub(crate) struct SidebarPopoutRoot {
     lyrics: gpui::Entity<LyricsPanel>,
     queue: gpui::Entity<QueuePanel>,
     closing: bool,
-    window_handle: Option<gpui::WindowHandle<Self>>,
+    window_handle: Option<gpui::WindowHandle<gpui_component::Root>>,
 }
 
 impl SidebarPopoutRoot {
@@ -72,7 +72,7 @@ impl SidebarPopoutRoot {
 impl Render for SidebarPopoutRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.window_handle.is_none() {
-            self.window_handle = window.window_handle().downcast::<Self>();
+            self.window_handle = window.window_handle().downcast::<gpui_component::Root>();
         }
         let view = self.current_view(cx);
         self.sync_panel_detachment(view, cx);
@@ -82,7 +82,7 @@ impl Render for SidebarPopoutRoot {
             Some(RightSidebar::Queue) | Some(RightSidebar::Closed) | None => {
                 if !self.closing {
                     self.closing = true;
-                    let handle = window.window_handle().downcast::<Self>();
+                    let handle = window.window_handle().downcast::<gpui_component::Root>();
                     if let Some(handle) = handle {
                         super::sidebar_popout::forget_closed_popout(&handle);
                     }

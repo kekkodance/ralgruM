@@ -1287,11 +1287,12 @@ impl Render for LyricsPanel {
                                     .child("Lyrics"),
                             )
                             .when(!self.detached, |this| {
-                                this.child(crate::music_ui::ghost_icon_button(
+                                this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "lyrics-detach",
                                     LocalIcon::ArrowUpRightFromSquare,
                                     "Pop out",
-                                    crate::music_ui::PANEL_CLOSE_ICON_SIZE_PX,
+                                    13.,
+                                    1.,
                                     {
                                         let playback = self.playback.clone();
                                         move |_, _, cx| {

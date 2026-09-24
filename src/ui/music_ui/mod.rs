@@ -1869,6 +1869,21 @@ pub(crate) fn ghost_icon_button(
     icon_size: f32,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    ghost_icon_button_with_nudge(id, icon, label, icon_size, 0., handler)
+}
+
+/// Same as `ghost_icon_button` with a vertical optical nudge applied to the
+/// icon. SVG glyphs rasterize with their intrinsic aspect (a square viewBox
+/// glyph paints proportionally smaller next to a tall one), so some icons
+/// need a size bump and a nudge to sit evenly with the close glyph.
+pub(crate) fn ghost_icon_button_with_nudge(
+    id: &'static str,
+    icon: LocalIcon,
+    label: &'static str,
+    icon_size: f32,
+    nudge_up: f32,
+    handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
     div()
         .id(id)
         .group(id)
@@ -1892,6 +1907,7 @@ pub(crate) fn ghost_icon_button(
             div()
                 .relative()
                 .size(px(icon_size))
+                .when(nudge_up > 0., |this| this.top(px(-nudge_up)))
                 .child(
                     div()
                         .absolute()
