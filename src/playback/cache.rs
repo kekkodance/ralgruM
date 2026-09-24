@@ -795,6 +795,14 @@ impl AudioCache {
         tracks
     }
 
+    /// Reads a cached block, deleting it when its size disagrees with the
+    /// expectation.
+    ///
+    /// The corrupted-block removal takes the maintenance lock internally, and
+    /// the tokio mutex is not reentrant: callers must NOT already hold the
+    /// maintenance lock (or any function that acquires it, such as `prune`,
+    /// `clear`, or `purge_partial_prefetch`) when calling this. Range-seek
+    /// callers hold only the per-path `lock_for` guard, which is safe.
     pub(crate) async fn read(&self, path: &Path, expected: usize) -> Option<Vec<u8>> {
         match tokio::fs::read(path).await {
             Ok(bytes) if bytes.len() == expected => Some(bytes),
@@ -1031,14 +1039,14 @@ impl AudioCache {
         // Do not hold the maintenance lock while enumerating a potentially
         // large cache. If an in-process mutation overlaps the scan, retry once
         // so the settings meter does not retain a partial/zero snapshot.
-        for attempt in 0..2 {
-            let revision = self.revision();
-            let overview = self.scan_overview().await?;
-            if self.revision() == revision || attempt == 1 {
-                return Ok(overview);
-            }
+        let revision = self.revision();
+        let mut overview = self.scan_overview().await?;
+        if self.revision() != revision {
+            // The scan raced a mutation; take one more fresh pass instead of
+            // returning a snapshot the cache no longer matches.
+            overview = self.scan_overview().await?;
         }
-        unreachable!("the bounded overview scan always returns")
+        Ok(overview)
     }
 
     async fn scan_overview(&self) -> Result<Overview, String> {
