@@ -235,6 +235,16 @@ pub(crate) enum BackendProvenance {
     SoundCloud,
 }
 
+/// Distinguishes range fetches for the track the user is listening to from
+/// background work like next-track prefetch and library downloads. Playback
+/// fetches run unthrottled once the source is resolved; background fetches
+/// keep sharing the process-wide request budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MediaFetchScope {
+    Playback,
+    Background,
+}
+
 #[cfg_attr(not(ralgrum_private_backend), allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BackendCacheIdentity(String);
@@ -277,17 +287,20 @@ pub(crate) trait BackendSourceOps: Send + Sync {
         &'a self,
         start: u64,
         end: u64,
+        scope: MediaFetchScope,
         cancellation: &'a CancellationToken,
     ) -> BackendFuture<'a, Result<Vec<u8>, PlaybackDownloadError>>;
 
     fn probe_size<'a>(
         &'a self,
+        scope: MediaFetchScope,
         cancellation: &'a CancellationToken,
     ) -> BackendFuture<'a, Option<u64>>;
 
     fn download<'a>(
         &'a self,
         output: &'a mut dyn DownloadOutput,
+        scope: MediaFetchScope,
         cancellation: &'a CancellationToken,
         progress: Option<&'a ProgressCallback>,
     ) -> BackendFuture<'a, Result<(), PlaybackDownloadError>>;
@@ -330,25 +343,28 @@ impl BackendSource {
         &'a self,
         start: u64,
         end: u64,
+        scope: MediaFetchScope,
         cancellation: &'a CancellationToken,
     ) -> BackendFuture<'a, Result<Vec<u8>, PlaybackDownloadError>> {
-        self.0.read_range(start, end, cancellation)
+        self.0.read_range(start, end, scope, cancellation)
     }
 
     pub(crate) fn probe_size<'a>(
         &'a self,
+        scope: MediaFetchScope,
         cancellation: &'a CancellationToken,
     ) -> BackendFuture<'a, Option<u64>> {
-        self.0.probe_size(cancellation)
+        self.0.probe_size(scope, cancellation)
     }
 
     pub(crate) fn download<'a>(
         &'a self,
         output: &'a mut dyn DownloadOutput,
+        scope: MediaFetchScope,
         cancellation: &'a CancellationToken,
         progress: Option<&'a ProgressCallback>,
     ) -> BackendFuture<'a, Result<(), PlaybackDownloadError>> {
-        self.0.download(output, cancellation, progress)
+        self.0.download(output, scope, cancellation, progress)
     }
 }
 

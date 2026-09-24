@@ -26,6 +26,7 @@ impl super::super::media_source::BackendSourceOps for TestBackendSource {
         &'a self,
         _start: u64,
         _end: u64,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
     ) -> super::super::media_source::BackendFuture<'a, Result<Vec<u8>, PlaybackDownloadError>> {
         Box::pin(async { Err(PlaybackDownloadError::message("test backend source")) })
@@ -33,6 +34,7 @@ impl super::super::media_source::BackendSourceOps for TestBackendSource {
 
     fn probe_size<'a>(
         &'a self,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
     ) -> super::super::media_source::BackendFuture<'a, Option<u64>> {
         Box::pin(async { self.probed_size })
@@ -41,6 +43,7 @@ impl super::super::media_source::BackendSourceOps for TestBackendSource {
     fn download<'a>(
         &'a self,
         _output: &'a mut dyn DownloadOutput,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
         _progress: Option<&'a ProgressCallback>,
     ) -> super::super::media_source::BackendFuture<'a, Result<(), PlaybackDownloadError>> {

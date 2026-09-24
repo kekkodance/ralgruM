@@ -839,7 +839,7 @@ impl StreamResolver {
             let backend = backend.clone();
             Box::pin(async move {
                 backend
-                    .read_range(start, end, &fetch_cancellation)
+                    .read_range(start, end, MediaFetchScope::Playback, &fetch_cancellation)
                     .await
                     .map_err(|error| error.message)
             })
@@ -1167,25 +1167,49 @@ impl StreamResolver {
         };
         let Some(cache) = self.cache.as_ref() else {
             return self
-                .download_source_inner(source, output, cancellation, progress)
+                .download_source_inner(
+                    source,
+                    output,
+                    cancellation,
+                    progress,
+                    MediaFetchScope::Playback,
+                )
                 .await;
         };
         let cache_generation = cache.generation();
         let Some(size) = cacheable_size(source.size, cache.max_bytes()) else {
             return self
-                .download_source_inner(source, output, cancellation, progress)
+                .download_source_inner(
+                    source,
+                    output,
+                    cancellation,
+                    progress,
+                    MediaFetchScope::Playback,
+                )
                 .await;
         };
         let Some(key) = cache_key(&source) else {
             return self
-                .download_source_inner(source, output, cancellation, progress)
+                .download_source_inner(
+                    source,
+                    output,
+                    cancellation,
+                    progress,
+                    MediaFetchScope::Playback,
+                )
                 .await;
         };
         if matches!(&source.data, SourceData::Backend(source) if source.metadata().timeline)
             && !cache.is_fully_cached(&key, size).await
         {
             return self
-                .download_source_inner(source, output, cancellation, progress)
+                .download_source_inner(
+                    source,
+                    output,
+                    cancellation,
+                    progress,
+                    MediaFetchScope::Playback,
+                )
                 .await;
         }
         cache.promote_prefetch(&key, size).await;
@@ -1234,7 +1258,9 @@ impl StreamResolver {
                         .filter(|prefix_len| *prefix_len > 0 && *prefix_len < expected as u64)
                 {
                     let prefix_end = prefix_len - 1;
-                    let prefix = backend.read_range(0, prefix_end, cancellation).await?;
+                    let prefix = backend
+                        .read_range(0, prefix_end, MediaFetchScope::Playback, cancellation)
+                        .await?;
                     if prefix.len() != prefix_len as usize {
                         return Err(
                             "The backend source returned an incomplete startup prefix".into()
@@ -1251,7 +1277,9 @@ impl StreamResolver {
                     .await?;
 
                     let rest_start = prefix_len;
-                    let rest = backend.read_range(rest_start, end, cancellation).await?;
+                    let rest = backend
+                        .read_range(rest_start, end, MediaFetchScope::Playback, cancellation)
+                        .await?;
                     let expected_rest = expected - prefix.len();
                     if rest.len() != expected_rest {
                         return Err("The backend source returned an incomplete cache block".into());
@@ -1274,7 +1302,9 @@ impl StreamResolver {
                     start = end + 1;
                     continue;
                 } else if let SourceData::Backend(backend) = &source.data {
-                    let bytes = backend.read_range(start, end, cancellation).await?;
+                    let bytes = backend
+                        .read_range(start, end, MediaFetchScope::Playback, cancellation)
+                        .await?;
                     if bytes.len() != expected {
                         return Err("The backend source returned an incomplete cache block".into());
                     }
@@ -1560,7 +1590,10 @@ impl StreamResolver {
         cache_track_token: &CacheTrackToken,
     ) -> Result<(), String> {
         if let SourceData::Backend(backend) = &source.data {
-            let Some(total) = backend.probe_size(cancellation).await else {
+            let Some(total) = backend
+                .probe_size(MediaFetchScope::Background, cancellation)
+                .await
+            else {
                 return Ok(());
             };
             if total == 0 || total > cache.max_bytes() || total > MAX_AUDIO_SIZE {
@@ -1571,7 +1604,7 @@ impl StreamResolver {
             };
             let expected = (end - start + 1) as usize;
             let bytes = backend
-                .read_range(start, end, cancellation)
+                .read_range(start, end, MediaFetchScope::Background, cancellation)
                 .await
                 .map_err(|error| error.message)?;
             if bytes.len() != expected {
@@ -1691,7 +1724,7 @@ impl StreamResolver {
                 inline_range(bytes, start, end).map_err(|error| error.message)?
             }
             SourceData::Backend(backend) => backend
-                .read_range(start, end, cancellation)
+                .read_range(start, end, MediaFetchScope::Background, cancellation)
                 .await
                 .map_err(|error| error.message)?,
             SourceData::Hls(_) => return Ok(()),

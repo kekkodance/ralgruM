@@ -215,7 +215,9 @@ impl StreamResolver {
                 .await
                 .unwrap_or(0)),
             SourceData::Backend(backend) => {
-                if let Some(total) = backend.probe_size(cancellation).await
+                if let Some(total) = backend
+                    .probe_size(MediaFetchScope::Background, cancellation)
+                    .await
                     && total > 0
                 {
                     return Ok(total);
@@ -314,9 +316,15 @@ impl StreamResolver {
         cancellation: &CancellationToken,
         progress: Option<ProgressCallback>,
     ) -> Result<(), String> {
-        self.download_source_inner(source, &mut output, cancellation, progress)
-            .await
-            .map_err(|error| error.message)
+        self.download_source_inner(
+            source,
+            &mut output,
+            cancellation,
+            progress,
+            MediaFetchScope::Background,
+        )
+        .await
+        .map_err(|error| error.message)
     }
 
     pub(super) async fn download_source_inner<W>(
@@ -325,13 +333,14 @@ impl StreamResolver {
         output: &mut W,
         cancellation: &CancellationToken,
         progress: Option<ProgressCallback>,
+        scope: MediaFetchScope,
     ) -> Result<(), PlaybackDownloadError>
     where
         W: DownloadOutput,
     {
         if let SourceData::Backend(backend) = &source.data {
             return backend
-                .download(output, cancellation, progress.as_ref())
+                .download(output, scope, cancellation, progress.as_ref())
                 .await;
         }
         self.download(

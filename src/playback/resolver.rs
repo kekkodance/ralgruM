@@ -144,7 +144,8 @@ impl ResolvedProgressiveAudio {
 }
 
 pub(crate) use super::media_source::{
-    AudioFormat, DownloadOutput, PlaybackDownloadError, ProgressCallback, ProgressUpdate,
+    AudioFormat, DownloadOutput, MediaFetchScope, PlaybackDownloadError, ProgressCallback,
+    ProgressUpdate,
 };
 
 #[derive(Clone)]

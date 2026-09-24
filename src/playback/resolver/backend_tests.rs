@@ -1,6 +1,7 @@
 use super::*;
 use crate::playback::media_source::{
-    BackendCacheIdentity, BackendFuture, BackendProvenance, BackendSourceMetadata, BackendSourceOps,
+    BackendCacheIdentity, BackendFuture, BackendProvenance, BackendSourceMetadata,
+    BackendSourceOps, MediaFetchScope,
 };
 use std::sync::Mutex;
 use tokio::sync::Notify;
@@ -33,6 +34,7 @@ impl super::super::media_source::BackendSourceOps for RecordingBackendSource {
         &'a self,
         start: u64,
         end: u64,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
     ) -> super::super::media_source::BackendFuture<'a, Result<Vec<u8>, PlaybackDownloadError>> {
         let bytes = self.bytes.clone();
@@ -68,6 +70,7 @@ impl super::super::media_source::BackendSourceOps for RecordingBackendSource {
 
     fn probe_size<'a>(
         &'a self,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
     ) -> super::super::media_source::BackendFuture<'a, Option<u64>> {
         Box::pin(async { Some(self.metadata.size) })
@@ -76,6 +79,7 @@ impl super::super::media_source::BackendSourceOps for RecordingBackendSource {
     fn download<'a>(
         &'a self,
         _output: &'a mut dyn DownloadOutput,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
         _progress: Option<&'a ProgressCallback>,
     ) -> super::super::media_source::BackendFuture<'a, Result<(), PlaybackDownloadError>> {
@@ -212,6 +216,7 @@ impl BackendSourceOps for OfflineBackendSource {
         &'a self,
         _start: u64,
         _end: u64,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
     ) -> BackendFuture<'a, Result<Vec<u8>, PlaybackDownloadError>> {
         Box::pin(async move {
@@ -223,6 +228,7 @@ impl BackendSourceOps for OfflineBackendSource {
 
     fn probe_size<'a>(
         &'a self,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
     ) -> BackendFuture<'a, Option<u64>> {
         Box::pin(async { Some(self.metadata.size) })
@@ -231,6 +237,7 @@ impl BackendSourceOps for OfflineBackendSource {
     fn download<'a>(
         &'a self,
         output: &'a mut dyn DownloadOutput,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
         _progress: Option<&'a ProgressCallback>,
     ) -> BackendFuture<'a, Result<(), PlaybackDownloadError>> {
@@ -605,7 +612,13 @@ async fn source_and_exact_resolution_retry_refresh_once_and_return_downloadable_
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut output = File::from_std(file.reopen().unwrap());
         resolver
-            .download_source_inner(source, &mut output, &CancellationToken::new(), None)
+            .download_source_inner(
+                source,
+                &mut output,
+                &CancellationToken::new(),
+                None,
+                MediaFetchScope::Playback,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -776,6 +789,7 @@ impl BackendSourceOps for SeekFixtureBackend {
         &'a self,
         start: u64,
         end: u64,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
     ) -> BackendFuture<'a, Result<Vec<u8>, PlaybackDownloadError>> {
         let bytes = self.bytes.clone();
@@ -793,6 +807,7 @@ impl BackendSourceOps for SeekFixtureBackend {
 
     fn probe_size<'a>(
         &'a self,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
     ) -> BackendFuture<'a, Option<u64>> {
         Box::pin(async { Some(self.metadata.size) })
@@ -801,6 +816,7 @@ impl BackendSourceOps for SeekFixtureBackend {
     fn download<'a>(
         &'a self,
         output: &'a mut dyn DownloadOutput,
+        _scope: MediaFetchScope,
         _cancellation: &'a CancellationToken,
         _progress: Option<&'a ProgressCallback>,
     ) -> BackendFuture<'a, Result<(), PlaybackDownloadError>> {
