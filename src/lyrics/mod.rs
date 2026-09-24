@@ -1291,7 +1291,7 @@ impl Render for LyricsPanel {
                                     "lyrics-detach",
                                     LocalIcon::ArrowUpRightFromSquare,
                                     "Pop out",
-                                    13.,
+                                    12.,
                                     1.,
                                     {
                                         let playback = self.playback.clone();
