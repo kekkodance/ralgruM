@@ -16,7 +16,8 @@ const POPOUT_MIN_WIDTH: f32 = 320.;
 const POPOUT_MIN_HEIGHT: f32 = 400.;
 const POPOUT_INITIAL_WIDTH: f32 = 400.;
 const POPOUT_INITIAL_HEIGHT: f32 = 640.;
-const POPOUT_MAX_WIDTH: f32 = 600.;
+// Match the in-app sidebar width clamp (see shell_metrics).
+const POPOUT_MAX_WIDTH: f32 = 400.;
 const POPOUT_MAX_HEIGHT: f32 = 900.;
 
 /// Result of a popout lifecycle request.

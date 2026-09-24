@@ -339,6 +339,7 @@ pub(crate) struct PlaybackState {
     lyrics_context: Option<PlaybackTrack>,
     right_sidebar_open: bool,
     right_sidebar_popped: Option<RightSidebar>,
+    popout_always_on_top: bool,
     // A library can legitimately contain the same provider/track more than
     // once, and an ID-only deck would select the first occurrence repeatedly.
     play_next: Vec<usize>,
@@ -375,6 +376,7 @@ impl Default for PlaybackState {
             lyrics_context: None,
             right_sidebar_open: false,
             right_sidebar_popped: None,
+            popout_always_on_top: false,
             play_next: Vec::new(),
             history: Vec::new(),
             shuffle_order: Vec::new(),
@@ -1279,6 +1281,7 @@ impl PlaybackState {
                 // The popout shows this view: pressing its playerbar button
                 // dismisses the popout without redocking.
                 self.right_sidebar_popped = None;
+                self.popout_always_on_top = false;
             } else {
                 self.right_sidebar_popped = Some(sidebar);
                 self.right_sidebar_view = sidebar;
@@ -1315,6 +1318,18 @@ impl PlaybackState {
         self.right_sidebar_open = false;
     }
 
+    /// Toggles the detached window's always-on-top pin. Returns the new state
+    /// so the caller can apply it to the platform window.
+    pub(crate) fn toggle_popout_always_on_top(&mut self) -> bool {
+        self.popout_always_on_top = !self.popout_always_on_top;
+        self.popout_always_on_top
+    }
+
+    /// Whether the detached floating window is pinned above other windows.
+    pub(crate) fn popout_always_on_top(&self) -> bool {
+        self.popout_always_on_top
+    }
+
     /// Docks the popped-out view back into the app. Used by the popout's
     /// close control; the playerbar toggle-off path intentionally keeps the
     /// sidebar closed.
@@ -1322,6 +1337,7 @@ impl PlaybackState {
         let Some(view) = self.right_sidebar_popped.take() else {
             return;
         };
+        self.popout_always_on_top = false;
         self.right_sidebar = view;
         self.right_sidebar_open = true;
         self.right_sidebar_view = view;
@@ -1374,11 +1390,13 @@ impl PlaybackState {
         self.right_sidebar = RightSidebar::Closed;
         self.right_sidebar_open = false;
         self.right_sidebar_popped = None;
+        self.popout_always_on_top = false;
         self.lyrics_context = None;
     }
 
     pub(crate) fn restore_sidebar(&mut self, open: bool, view: RightSidebar) {
         self.right_sidebar_popped = None;
+        self.popout_always_on_top = false;
         self.right_sidebar_view = view;
         self.right_sidebar_open = open;
         self.right_sidebar = if open && self.current().is_some() {

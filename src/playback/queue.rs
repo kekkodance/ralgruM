@@ -671,18 +671,26 @@ impl Render for QueuePanel {
                         div()
                             .flex()
                             .items_center()
-                            .when(self.detached(cx), |this| {
-                                this.window_control_area(gpui::WindowControlArea::Drag)
-                            })
-                            .child(local_icon(LocalIcon::ListUl, FOREGROUND).size(px(14.)))
+                            .gap(px(8.))
                             .child(
                                 div()
-                                    .text_size(px(15.5))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(title),
+                                    .flex()
+                                    .flex_1()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .min_w_0()
+                                    .when(self.detached(cx), |this| {
+                                        this.window_control_area(gpui::WindowControlArea::Drag)
+                                    })
+                                    .child(local_icon(LocalIcon::ListUl, FOREGROUND).size(px(14.)))
+                                    .child(
+                                        div()
+                                            .text_size(px(15.5))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(title),
+                                    ),
                             )
                             .when_some(flow_mode_selector, |this, selector| this.child(selector))
-                            .child(div().flex_1())
                             .when(!self.detached(cx), |this| {
                                 this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "queue-detach",
@@ -695,6 +703,33 @@ impl Render for QueuePanel {
                                         move |_, _, cx| {
                                             playback.update(cx, |playback, cx| {
                                                 playback.state.detach_sidebar();
+                                                cx.notify();
+                                            });
+                                        }
+                                    },
+                                ))
+                            })
+                            .when(self.detached(cx), |this| {
+                                let playback = self.playback.clone();
+                                this.child(crate::music_ui::ghost_icon_button_with_nudge(
+                                    "queue-always-on-top",
+                                    if playback.read(cx).state.popout_always_on_top() {
+                                        LocalIcon::Thumbtack
+                                    } else {
+                                        LocalIcon::ThumbtackSlash
+                                    },
+                                    if playback.read(cx).state.popout_always_on_top() {
+                                        "Disable always on top"
+                                    } else {
+                                        "Enable always on top"
+                                    },
+                                    12.,
+                                    1.,
+                                    {
+                                        let playback = playback.clone();
+                                        move |_, _, cx| {
+                                            playback.update(cx, |playback, cx| {
+                                                playback.state.toggle_popout_always_on_top();
                                                 cx.notify();
                                             });
                                         }

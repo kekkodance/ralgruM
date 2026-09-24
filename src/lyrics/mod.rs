@@ -612,15 +612,12 @@ impl LyricsPanel {
                 }
                 let second_key = LyricsCacheKey::new(second_provider, &track);
                 if first_has_lyrics {
+                    // The first response is already displayed; the late
+                    // primary must not override it. Cache only, so the
+                    // provider toggle switches instantly without re-fetch.
                     if let Ok(value) = second_result {
                         if this.cache.get(&second_key).is_none() {
-                            this.cache.set(second_key, value.clone());
-                        }
-                        if let Some((provider, value)) =
-                            late_primary_selection(primary_provider, second_provider, value)
-                        {
-                            this.apply(provider, value);
-                            cx.notify();
+                            this.cache.set(second_key, value);
                         }
                     }
                     return;
@@ -1231,17 +1228,25 @@ impl Render for LyricsPanel {
                 if matches!(&self.status, Status::Loading) {
                     vec![loading_lyrics_state()]
                 } else {
+                    let (icon, heading, description) = match &self.status {
+                        Status::Empty => (
+                            LocalIcon::CompactDisc,
+                            "No lyrics found",
+                            "Neither provider has lyrics for this track.".to_owned(),
+                        ),
+                        Status::Error(error) => (
+                            LocalIcon::TriangleExclamation,
+                            "Lyrics failed to load",
+                            error.clone(),
+                        ),
+                        _ => (
+                            LocalIcon::QuoteRight,
+                            "No track playing",
+                            "Play a track to view lyrics.".to_owned(),
+                        ),
+                    };
                     vec![
-                        div()
-                            .text_color(rgb(match &self.status {
-                                Status::Error(_) => DANGER,
-                                _ => MUTED,
-                            }))
-                            .child(match &self.status {
-                                Status::Empty => "No lyrics found for this track.".to_owned(),
-                                Status::Error(error) => error.clone(),
-                                _ => "Play a track to view lyrics.".to_owned(),
-                            })
+                        centered_lyrics_message(icon, heading, StyledText::new(description))
                             .into_any_element(),
                     ]
                 }
@@ -1276,19 +1281,55 @@ impl Render for LyricsPanel {
                     .child(
                         div()
                             .flex()
-                            .when(self.detached(cx), |this| {
-                                this.window_control_area(gpui::WindowControlArea::Drag)
-                            })
                             .items_center()
                             .gap(px(8.))
-                            .child(local_icon(LocalIcon::QuoteRight, FOREGROUND).size(px(14.)))
                             .child(
                                 div()
+                                    .flex()
                                     .flex_1()
-                                    .text_size(px(15.5))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Lyrics"),
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .min_w_0()
+                                    .when(self.detached(cx), |this| {
+                                        this.window_control_area(gpui::WindowControlArea::Drag)
+                                    })
+                                    .child(
+                                        local_icon(LocalIcon::QuoteRight, FOREGROUND).size(px(14.)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(15.5))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("Lyrics"),
+                                    ),
                             )
+                            .when(self.detached(cx), |this| {
+                                let playback = self.playback.clone();
+                                this.child(crate::music_ui::ghost_icon_button_with_nudge(
+                                    "lyrics-always-on-top",
+                                    if playback.read(cx).state.popout_always_on_top() {
+                                        LocalIcon::Thumbtack
+                                    } else {
+                                        LocalIcon::ThumbtackSlash
+                                    },
+                                    if playback.read(cx).state.popout_always_on_top() {
+                                        "Disable always on top"
+                                    } else {
+                                        "Enable always on top"
+                                    },
+                                    12.,
+                                    1.,
+                                    {
+                                        let playback = playback.clone();
+                                        move |_, _, cx| {
+                                            playback.update(cx, |playback, cx| {
+                                                playback.state.toggle_popout_always_on_top();
+                                                cx.notify();
+                                            });
+                                        }
+                                    },
+                                ))
+                            })
                             .when(!self.detached(cx), |this| {
                                 this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "lyrics-detach",

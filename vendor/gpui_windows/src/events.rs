@@ -1005,8 +1005,14 @@ impl WindowsWindowInner {
         let dpi = unsafe { GetDpiForWindow(handle) };
         // We do not use the OS title bar, so the default `DefWindowProcW` will only register a 1px edge for resizes
         // We need to calculate the frame thickness ourselves and do the hit test manually.
-        let frame_y = get_frame_thicknessx(dpi);
-        let frame_x = get_frame_thicknessy(dpi);
+        // App-owned titlebars draw no visible resize affordance, so their
+        // edge band stays thin instead of stealing the whole system frame.
+        let (frame_y, frame_x) = if self.hide_title_bar && self.app_owns_titlebar_drag {
+            let thin = ((dpi / 96).max(1) * 3) as i32;
+            (thin, thin)
+        } else {
+            (get_frame_thicknessx(dpi), get_frame_thicknessy(dpi))
+        };
         let mut cursor_point = POINT {
             x: lparam.signed_loword().into(),
             y: lparam.signed_hiword().into(),
