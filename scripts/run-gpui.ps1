@@ -158,11 +158,24 @@ if (-not $BuildOnly) {
             }
     )
     foreach ($process in $running) {
-        if (-not $process.CloseMainWindow()) {
-            throw "The project app (PID $($process.Id)) has no closable window. Close it manually before rebuilding."
-        }
-        if (-not $process.WaitForExit(5000)) {
-            throw "The project app (PID $($process.Id)) did not close in time. Close it manually before rebuilding."
+        $closeRequested = $false
+        try {
+            if (-not $process.HasExited) {
+                $closeRequested = $process.CloseMainWindow()
+            }
+            if ($closeRequested -and $process.WaitForExit(2500)) {
+                continue
+            }
+
+            Write-Host "Force-stopping the matching project app (PID $($process.Id)) before rebuilding."
+            if (-not $process.HasExited) {
+                $process.Kill()
+            }
+            if (-not $process.WaitForExit(5000)) {
+                throw "The process is still running after the force-stop timeout."
+            }
+        } catch {
+            throw "Could not stop the matching project app (PID $($process.Id)): $($_.Exception.Message)"
         }
     }
 }
@@ -269,7 +282,7 @@ try {
 }
 
 $windowReady = $false
-$windowDeadline = [DateTime]::UtcNow.AddSeconds(10)
+$windowDeadline = [DateTime]::UtcNow.AddSeconds(30)
 while ([DateTime]::UtcNow -lt $windowDeadline) {
     $gpuiProcess = Get-Process -Id $gpuiPid -ErrorAction SilentlyContinue
     if ($null -eq $gpuiProcess) {
@@ -341,9 +354,9 @@ if (-not $windowReady) {
     } catch {
     }
     if ($startupError) {
-        throw "GPUI did not create a stable visible window within 10 seconds (MainWindowHandle=$observedHandle, MainWindowTitle='$observedTitle', Responding=$observedResponding): $startupError"
+        throw "GPUI did not create a stable visible window within 30 seconds (MainWindowHandle=$observedHandle, MainWindowTitle='$observedTitle', Responding=$observedResponding): $startupError"
     }
-    throw "GPUI did not create a stable visible window within 10 seconds (MainWindowHandle=$observedHandle, MainWindowTitle='$observedTitle', Responding=$observedResponding)."
+    throw "GPUI did not create a stable visible window within 30 seconds (MainWindowHandle=$observedHandle, MainWindowTitle='$observedTitle', Responding=$observedResponding)."
 }
 
 $gpuiProcess = Get-Process -Id $gpuiPid -ErrorAction Stop
