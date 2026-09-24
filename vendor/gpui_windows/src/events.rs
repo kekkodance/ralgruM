@@ -972,8 +972,12 @@ impl WindowsWindowInner {
                 WindowControlArea::Drag if self.is_movable => Some(HTCAPTION as _),
                 WindowControlArea::Drag => None,
                 WindowControlArea::Close => Some(HTCLOSE as _),
-                WindowControlArea::Max if self.is_resizable => Some(HTMAXBUTTON as _),
-                WindowControlArea::Max if self.is_movable => Some(HTCAPTION as _),
+                WindowControlArea::Max if self.is_resizable && self.is_maximizable => {
+                    Some(HTMAXBUTTON as _)
+                }
+                WindowControlArea::Max if self.is_maximizable && self.is_movable => {
+                    Some(HTCAPTION as _)
+                }
                 WindowControlArea::Max => Some(HTNOWHERE as _),
                 WindowControlArea::Min if self.is_minimizable => Some(HTMINBUTTON as _),
                 WindowControlArea::Min if self.is_movable => Some(HTCAPTION as _),
