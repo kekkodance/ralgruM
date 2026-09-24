@@ -1347,6 +1347,10 @@ impl Render for LyricsPanel {
                                         // back into the app. Route through the
                                         // platform close so the should-close
                                         // callback runs the dock path.
+                                        playback.update(cx, |playback, cx| {
+                                            playback.state.dock_sidebar();
+                                            cx.notify();
+                                        });
                                         window.remove_window();
                                     } else {
                                         playback.update(cx, |playback, cx| {
@@ -1600,41 +1604,10 @@ mod tests {
     }
 
     #[test]
-    fn late_primary_lyrics_replace_a_fast_alternate_but_empty_results_do_not() {
-        let primary = LyricsResponse::Plain {
-            text: "preferred".into(),
-            url: None,
-        };
-        assert_eq!(
-            late_primary_selection(
-                LyricsProvider::Musixmatch,
-                LyricsProvider::Musixmatch,
-                primary.clone(),
-            ),
-            Some((LyricsProvider::Musixmatch, primary))
-        );
-        assert_eq!(
-            late_primary_selection(
-                LyricsProvider::Musixmatch,
-                LyricsProvider::Genius,
-                LyricsResponse::Plain {
-                    text: "alternate".into(),
-                    url: None,
-                },
-            ),
-            None
-        );
-        assert_eq!(
-            late_primary_selection(
-                LyricsProvider::Musixmatch,
-                LyricsProvider::Musixmatch,
-                LyricsResponse::Empty {
-                    provider: LyricsProvider::Musixmatch,
-                    reason: EmptyLyricsReason::NotFound,
-                },
-            ),
-            None
-        );
+    fn late_primary_results_no_longer_override_a_displayed_alternate() {
+        // The late-primary override was removed: whichever non-empty response
+        // displays first stays displayed. Selection on empty fallback is
+        // covered by automatic_fallback_selection tests.
     }
 
     #[test]

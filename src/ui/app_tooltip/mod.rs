@@ -1,6 +1,6 @@
 pub(crate) mod geometry;
 
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{cell::Cell, collections::HashMap, rc::Rc, time::Duration};
 
 use gpui::{
     AnimationExt, App, Bounds, BoxShadow, Context, ElementId, Entity, FontWeight, Global,
@@ -34,7 +34,7 @@ pub(crate) struct AppTooltipOverlay {
     generation: u64,
     show_task: Option<Task<()>>,
     measured_size: Option<Size<gpui::Pixels>>,
-    last_viewport_size: Option<Size<gpui::Pixels>>,
+    last_viewport_sizes: HashMap<gpui::WindowId, Size<gpui::Pixels>>,
     last_had_dialog: bool,
 }
 
@@ -106,7 +106,7 @@ impl AppTooltipOverlay {
             generation: 0,
             show_task: None,
             measured_size: None,
-            last_viewport_size: None,
+            last_viewport_sizes: HashMap::new(),
             last_had_dialog: false,
         }
     }
@@ -189,16 +189,20 @@ impl AppTooltipOverlay {
 impl Render for AppTooltipOverlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewport_size = window.viewport_size();
+        let window_id = window.window_handle().window_id();
 
         // A new viewport invalidates both the trigger bounds and the measured
-        // text size. Wait for a fresh hover to avoid a stale placement.
+        // text size. Wait for a fresh hover to avoid a stale placement. The
+        // overlay renders once per window, so track the viewport per window
+        // instead of letting distinct windows clobber each other's viewports.
         if self
-            .last_viewport_size
-            .is_some_and(|previous| previous != viewport_size)
+            .last_viewport_sizes
+            .get(&window_id)
+            .is_some_and(|previous| *previous != viewport_size)
         {
             self.clear_without_notify();
         }
-        self.last_viewport_size = Some(viewport_size);
+        self.last_viewport_sizes.insert(window_id, viewport_size);
 
         // Dialogs own the modal interaction layer. Suppress only stale triggers
         // from outside the topmost dialog so tooltips inside the modal still

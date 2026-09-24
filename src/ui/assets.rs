@@ -299,8 +299,20 @@ impl LocalIcon {
             Self::GitHub => "ralgrum/icons/fontawesome-free-7.3.1/brands/github.svg",
         }
     }
-}
 
+    /// The viewBox width-to-height ratio of the icon's SVG. GPUI rasterizes
+    /// SVGs scaled by width, so callers sizing icons by visual height need
+    /// this to normalize mixed-aspect glyphs (a square viewBox glyph next to
+    /// a wide one renders at very different visual sizes).
+    pub(crate) fn aspect_ratio(self) -> f32 {
+        match self {
+            Self::Thumbtack => 384. / 512.,
+            Self::ThumbtackSlash => 576. / 512.,
+            // Font Awesome solid icons default to the narrow 384x512 frame.
+            _ => 384. / 512.,
+        }
+    }
+}
 pub(crate) fn local_icon(icon: LocalIcon, color: u32) -> gpui::Svg {
     svg().path(icon.path()).text_color(rgb(color))
 }

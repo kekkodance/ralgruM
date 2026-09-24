@@ -1854,7 +1854,9 @@ pub(crate) fn ghost_close_button_with_icon_size(
         id,
         LocalIcon::X,
         "Close",
-        PANEL_CLOSE_ICON_SIZE_PX.max(icon_size),
+        // The legacy sizing predates height-normalized icons; 10px width on
+        // a 384x512 viewBox yields a 13.3px visual height. Keep it exact.
+        PANEL_CLOSE_ICON_SIZE_PX.max(icon_size) / LocalIcon::X.aspect_ratio(),
         handler,
     )
 }
@@ -1873,9 +1875,9 @@ pub(crate) fn ghost_icon_button(
 }
 
 /// Same as `ghost_icon_button` with a vertical optical nudge applied to the
-/// icon. SVG glyphs rasterize with their intrinsic aspect (a square viewBox
-/// glyph paints proportionally smaller next to a tall one), so some icons
-/// need a size bump and a nudge to sit evenly with the close glyph.
+/// icon. `icon_size` is the target visual height; the box width is derived
+/// from the icon's viewBox aspect so mixed-aspect glyphs render at equal
+/// visual sizes.
 pub(crate) fn ghost_icon_button_with_nudge(
     id: &'static str,
     icon: LocalIcon,
@@ -1906,7 +1908,11 @@ pub(crate) fn ghost_icon_button_with_nudge(
         .child(
             div()
                 .relative()
-                .size(px(icon_size))
+                // GPUI rasterizes SVGs scaled by width, letting height follow
+                // the viewBox aspect. Scaling the box width by the aspect
+                // ratio renders every glyph at the same visual height.
+                .w(px(icon_size * icon.aspect_ratio()))
+                .h(px(icon_size))
                 .when(nudge_up > 0., |this| this.top(px(-nudge_up)))
                 .child(
                     div()

@@ -744,9 +744,13 @@ impl Render for QueuePanel {
                                     move |_, window, cx| {
                                         if playback.read(cx).state.right_sidebar_popped().is_some()
                                         {
-                                            // Closing the popout docks the view
-                                            // back into the app through the
-                                            // platform close path.
+                                            // Closing the popout docks the
+                                            // view back into the app, then
+                                            // removes the window.
+                                            playback.update(cx, |playback, cx| {
+                                                playback.state.dock_sidebar();
+                                                cx.notify();
+                                            });
                                             window.remove_window();
                                         } else {
                                             playback.update(cx, |playback, cx| {
