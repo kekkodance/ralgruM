@@ -724,7 +724,7 @@ impl Render for QueuePanel {
                                         "Enable always on top"
                                     },
                                     12.,
-                                    1.,
+                                    0.,
                                     {
                                         let playback = playback.clone();
                                         move |_, _, cx| {

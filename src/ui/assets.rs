@@ -301,18 +301,100 @@ impl LocalIcon {
     }
 
     /// The viewBox width-to-height ratio of the icon's SVG. GPUI rasterizes
-    /// SVGs scaled by width, so callers sizing icons by visual height need
-    /// this to normalize mixed-aspect glyphs (a square viewBox glyph next to
-    /// a wide one renders at very different visual sizes).
+    /// SVGs scaled by width, so callers targeting one visual height derive
+    /// the box width from this value; the ratios come from the shipped
+    /// Font Awesome 7.3.1 files.
     pub(crate) fn aspect_ratio(self) -> f32 {
         match self {
-            Self::Thumbtack => 384. / 512.,
-            Self::ThumbtackSlash => 576. / 512.,
-            // Font Awesome solid icons default to the narrow 384x512 frame.
-            _ => 384. / 512.,
+            Self::EllipsisVertical => 0.25,
+            Self::ChevronLeft | Self::ChevronRight | Self::VolumeOff => 0.625,
+            Self::ArrowDown
+            | Self::ArrowUp
+            | Self::FileImport
+            | Self::ForwardStep
+            | Self::Next
+            | Self::Pause
+            | Self::PayPal
+            | Self::Previous
+            | Self::Thumbtack
+            | Self::X => 0.75,
+            Self::Check
+            | Self::ChevronDown
+            | Self::ChevronUp
+            | Self::Copy
+            | Self::Download
+            | Self::HardDrive
+            | Self::Headphones
+            | Self::Image
+            | Self::Minus
+            | Self::Play
+            | Self::Plus
+            | Self::QuoteRight
+            | Self::Server
+            | Self::TrashCan
+            | Self::Upload
+            | Self::User
+            | Self::VolumeLow => 0.875,
+            Self::ArrowLeft
+            | Self::ArrowRight
+            | Self::ArrowUpRightFromSquare
+            | Self::Bitcoin
+            | Self::Brain
+            | Self::CircleCheck
+            | Self::CircleInfo
+            | Self::CircleXmark
+            | Self::CompactDisc
+            | Self::Compass
+            | Self::Deezer
+            | Self::EarthAmericas
+            | Self::GitHub
+            | Self::Heart
+            | Self::Key
+            | Self::Layers
+            | Self::List
+            | Self::ListCheck
+            | Self::ListUl
+            | Self::Lock
+            | Self::LogIn
+            | Self::LogOut
+            | Self::MagnifyingGlass
+            | Self::Music
+            | Self::Paste
+            | Self::Pen
+            | Self::Radio
+            | Self::Repeat
+            | Self::RotateRight
+            | Self::Scissors
+            | Self::Settings
+            | Self::ShareNodes
+            | Self::Shuffle
+            | Self::Signal
+            | Self::Sliders
+            | Self::Spinner
+            | Self::Telegram
+            | Self::TriangleExclamation
+            | Self::WaveSquare
+            | Self::WindowMaximize => 1.0,
+            Self::ClockRotateLeft
+            | Self::CloudArrowUp
+            | Self::CreditCard
+            | Self::Crosshairs
+            | Self::Eye
+            | Self::EyeSlash
+            | Self::FolderOpen
+            | Self::IdCard
+            | Self::ObjectGroup
+            | Self::ShieldUser
+            | Self::ThumbtackSlash
+            | Self::UserGroup
+            | Self::UserLock
+            | Self::VolumeMuted
+            | Self::WindowRestore => 1.125,
+            Self::Infinity | Self::SoundCloud | Self::VolumeHigh => 1.25,
         }
     }
 }
+
 pub(crate) fn local_icon(icon: LocalIcon, color: u32) -> gpui::Svg {
     svg().path(icon.path()).text_color(rgb(color))
 }

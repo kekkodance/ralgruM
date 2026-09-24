@@ -129,7 +129,7 @@ impl AppTooltipOverlay {
 
         self.show_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(APP_TOOLTIP_SHOW_DELAY).await;
-            let _ = this.update_in(cx, |overlay, window, cx| {
+            let _ = this.update_in(cx, |overlay, _, cx| {
                 if overlay.generation != generation {
                     return;
                 }
@@ -138,12 +138,10 @@ impl AppTooltipOverlay {
                 let Some(request) = overlay.pending.take() else {
                     return;
                 };
-                if request.trigger_bounds.size.width > px(0.)
-                    && request.trigger_bounds.size.height > px(0.)
-                    && !request.trigger_bounds.contains(&window.mouse_position())
-                {
-                    return;
-                }
+                // The pointer-leaves-trigger check is owned by the hover
+                // system: on_hover(false) cancels the pending request. Reading
+                // window.mouse_position() here races across windows, so the
+                // delay only gates the timing, not the geometry.
                 overlay.visible = Some(VisibleTooltip {
                     request,
                     generation,
@@ -241,7 +239,8 @@ impl Render for AppTooltipOverlay {
             return div().into_any_element();
         };
 
-        if visible.request.trigger_bounds.size.width > px(0.)
+        if visible.request.trigger_window == window.window_handle().window_id()
+            && visible.request.trigger_bounds.size.width > px(0.)
             && visible.request.trigger_bounds.size.height > px(0.)
             && !visible
                 .request
@@ -478,7 +477,7 @@ mod tests {
         AnyWindowHandle, AppContext, Bounds, Context, Entity, FocusHandle, InteractiveElement,
         IntoElement, KeyDownEvent, Modifiers, MouseButton, ParentElement, Render, Role,
         StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext, Window, WindowId,
-        div, prelude::FluentBuilder, px,
+        div, point, prelude::FluentBuilder, px,
     };
     use gpui_component::Root;
 
@@ -777,5 +776,120 @@ mod tests {
 
         assert!(visual.debug_bounds("removing-tooltip-owner").is_none());
         assert!(visual.read(|cx| overlay.read(cx).visible.is_none()));
+    }
+    #[gpui::test]
+    fn a_tooltip_triggered_in_a_second_window_survives_first_window_renders(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::configure_component_theme(cx);
+        });
+        let overlay = cx.update(|cx| {
+            let overlay = cx.new(|_| AppTooltipOverlay::new());
+            super::set_global(cx, &overlay);
+            overlay
+        });
+
+        let first = cx.add_window({
+            let overlay = overlay.clone();
+            move |window, cx| {
+                let view = cx.new(|_| TooltipTriggerHost {
+                    overlay: overlay.clone(),
+                });
+                let _ = window;
+                Root::new(view, window, cx)
+            }
+        });
+        let second = cx.add_window({
+            let overlay = overlay.clone();
+            move |window, cx| {
+                let view = cx.new(|_| TooltipTriggerHost {
+                    overlay: overlay.clone(),
+                });
+                Root::new(view, window, cx)
+            }
+        });
+
+        let mut first_visual = VisualTestContext::from_window(AnyWindowHandle::from(first), cx);
+        let mut second_visual = VisualTestContext::from_window(AnyWindowHandle::from(second), cx);
+        first_visual.run_until_parked();
+        second_visual.run_until_parked();
+        second_visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+
+        // Hover the trigger in the second window (the popout stand-in).
+        second_visual.simulate_mouse_move(point(px(20.), px(20.)), None, Modifiers::default());
+        second_visual.run_until_parked();
+        let pending_set = second_visual.read(|cx| overlay.read(cx).pending.is_some());
+        assert!(pending_set, "hover never set a pending tooltip");
+
+        // Interleave renders from the first window (different viewport)
+        // while the show delay is pending, then let the delay elapse.
+        first_visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        cx.executor().advance_clock(APP_TOOLTIP_SHOW_DELAY * 2);
+        second_visual.run_until_parked();
+        second_visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        second_visual.run_until_parked();
+        let before_first_render = second_visual.read(|cx| overlay.read(cx).visible.is_some());
+
+        first_visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        second_visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        second_visual.run_until_parked();
+        let after_first_render = second_visual.read(|cx| overlay.read(cx).visible.is_some());
+
+        assert!(
+            before_first_render,
+            "tooltip never became visible even without first-window renders"
+        );
+        assert!(
+            after_first_render,
+            "tooltip triggered in the second window must survive first-window renders"
+        );
+    }
+
+    struct TooltipTriggerHost {
+        overlay: Entity<AppTooltipOverlay>,
+    }
+
+    impl Render for TooltipTriggerHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let overlay = self.overlay.clone();
+            div().size_full().child(
+                div()
+                    .id("second-window-trigger")
+                    .size(px(40.))
+                    .top(px(10.))
+                    .left(px(10.))
+                    .on_hover(move |hovered, window, cx| {
+                        if *hovered {
+                            let request = TooltipRequest {
+                                text: "Second window".into(),
+                                trigger_bounds: Bounds::new(
+                                    point(px(10.), px(10.)),
+                                    gpui::size(px(40.), px(40.)),
+                                ),
+                                trigger_window: window.window_handle().window_id(),
+                                placement: TooltipPlacement::Top,
+                                trigger_gap: TRIGGER_GAP,
+                                bubble_horizontal_pin: BubbleHorizontalPin::None,
+                            };
+                            overlay.update(cx, |overlay, cx| {
+                                overlay.request_show(request, window, cx);
+                            });
+                        }
+                    })
+                    .child(self.overlay.clone()),
+            )
+        }
     }
 }

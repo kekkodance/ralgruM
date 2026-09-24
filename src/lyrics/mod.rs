@@ -15,7 +15,6 @@ use self::core::{
     LyricsProvider, LyricsResponse, LyricsTrack, collapse_blank_lyric_gaps, genius_line_fragments,
     lyric_block_text, lyric_full_text, parse_synced_lyrics, prepare_genius_lyrics,
 };
-use futures::future::{Either, select};
 use gpui::{
     AnimationExt, AnyElement, App, ClickEvent, Context, FontWeight, HighlightStyle, IntoElement,
     Render, ScrollHandle, StyledText, Task, Window, div, point, prelude::*, px, rgb, rgba,
@@ -563,71 +562,58 @@ impl LyricsPanel {
             async move { client.load(alternate, request_track, cancellation).await }
         });
         cx.spawn(async move |this, cx| {
-            let primary_future = Box::pin(lyrics_task_result(primary_task));
-            let alternate_future = Box::pin(lyrics_task_result(alternate_task));
-            let (first_provider, first_result, second_provider, second_future) =
-                match select(primary_future, alternate_future).await {
-                    Either::Left((result, remaining)) => {
-                        (primary_provider, result, alternate, remaining)
-                    }
-                    Either::Right((result, remaining)) => {
-                        (alternate, result, primary_provider, remaining)
-                    }
-                };
-            let first_has_lyrics = this
+            // The preferred provider decides what the panel shows: await it
+            // first so the loading screen belongs to it, and fall back to the
+            // alternate only when it returns no lyrics.
+            let primary_result = lyrics_task_result(primary_task).await;
+            let primary_has_lyrics = this
                 .update(cx, |this, cx| {
                     if generation != this.generation {
                         return None;
                     }
-                    let key = LyricsCacheKey::new(first_provider, &track);
-                    let has_lyrics = match first_result {
+                    let has_lyrics = match primary_result {
                         Ok(value) if !matches!(value, LyricsResponse::Empty { .. }) => {
-                            this.cache.set(key, value.clone());
-                            this.apply(first_provider, value);
+                            this.cache.set(primary_key.clone(), value.clone());
+                            this.apply(primary_provider, value);
                             true
                         }
                         Ok(empty) => {
-                            this.cache.set(key, empty);
-                            this.status = Status::Loading;
+                            this.cache.set(primary_key.clone(), empty);
                             false
                         }
-                        Err(error) if error == "Lyrics request cancelled" => false,
-                        Err(_) => {
-                            this.status = Status::Loading;
-                            false
-                        }
+                        Err(error) if error == "Lyrics request cancelled" => return None,
+                        Err(_) => false,
                     };
                     cx.notify();
                     Some(has_lyrics)
                 })
                 .ok()
                 .flatten();
-            let Some(first_has_lyrics) = first_has_lyrics else {
+            let Some(primary_has_lyrics) = primary_has_lyrics else {
                 return;
             };
-            let second_result = second_future.await;
+            let alternate_result = lyrics_task_result(alternate_task).await;
             this.update(cx, |this, cx| {
                 if generation != this.generation {
                     return;
                 }
-                let second_key = LyricsCacheKey::new(second_provider, &track);
-                if first_has_lyrics {
-                    // The first response is already displayed; the late
-                    // primary must not override it. Cache only, so the
+                if primary_has_lyrics {
+                    // Cache only; the displayed primary stays put and the
                     // provider toggle switches instantly without re-fetch.
-                    if let Ok(value) = second_result {
-                        if this.cache.get(&second_key).is_none() {
-                            this.cache.set(second_key, value);
+                    if let Ok(value) = alternate_result {
+                        if this.cache.get(&alternate_key).is_none() {
+                            this.cache.set(alternate_key.clone(), value);
                         }
                     }
                     return;
                 }
-                match second_result {
+                match alternate_result {
                     Ok(value) => {
-                        this.cache.set(second_key, value.clone());
-                        if second_provider == primary_provider {
-                            this.apply(primary_provider, value);
+                        this.cache.set(alternate_key.clone(), value.clone());
+                        if !matches!(value, LyricsResponse::Empty { .. }) {
+                            this.apply(alternate, value);
                         } else {
+                            // Both empty: prefer the primary's empty state.
                             let primary_empty =
                                 this.cache.get(&primary_key).cloned().filter(|cached| {
                                     matches!(cached, LyricsResponse::Empty { .. })
@@ -1309,7 +1295,7 @@ impl Render for LyricsPanel {
                                         "Enable always on top"
                                     },
                                     12.,
-                                    1.,
+                                    0.,
                                     {
                                         let playback = playback.clone();
                                         move |_, _, cx| {
