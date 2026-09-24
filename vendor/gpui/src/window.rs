@@ -1518,6 +1518,7 @@ impl Window {
             window_background,
             app_id,
             window_min_size,
+            window_max_size,
             window_decorations,
             #[cfg_attr(
                 not(any(target_os = "linux", target_os = "freebsd")),
@@ -1548,6 +1549,7 @@ impl Window {
                 show,
                 display_id,
                 window_min_size,
+                window_max_size,
                 app_id: app_id.clone(),
                 icon,
                 #[cfg(target_os = "macos")]
@@ -6210,6 +6212,11 @@ impl Window {
     /// Focus the current window and bring it to the foreground at the platform level.
     pub fn activate_window(&self) {
         self.platform_window.activate();
+    }
+
+    /// Pins or unpins this window above all non-topmost windows.
+    pub fn set_always_on_top(&self, always_on_top: bool) {
+        self.platform_window.set_always_on_top(always_on_top);
     }
 
     /// Requests that the operating system draw attention to this window.

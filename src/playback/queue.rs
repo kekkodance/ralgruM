@@ -671,7 +671,9 @@ impl Render for QueuePanel {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.))
+                            .when(self.detached(cx), |this| {
+                                this.window_control_area(gpui::WindowControlArea::Drag)
+                            })
                             .child(local_icon(LocalIcon::ListUl, FOREGROUND).size(px(14.)))
                             .child(
                                 div()

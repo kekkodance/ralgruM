@@ -33,6 +33,8 @@ pub(crate) enum LocalIcon {
     ArrowUp,
     ArrowDown,
     ArrowUpRightFromSquare,
+    Thumbtack,
+    ThumbtackSlash,
     MagnifyingGlass,
     EarthAmericas,
     List,
@@ -96,7 +98,7 @@ pub(crate) enum LocalIcon {
 
 impl LocalIcon {
     #[cfg(test)]
-    pub(crate) const ALL: [LocalIcon; 87] = [
+    pub(crate) const ALL: [LocalIcon; 89] = [
         LocalIcon::Music,
         LocalIcon::QuoteRight,
         LocalIcon::Compass,
@@ -125,6 +127,8 @@ impl LocalIcon {
         LocalIcon::ArrowUp,
         LocalIcon::ArrowDown,
         LocalIcon::ArrowUpRightFromSquare,
+        LocalIcon::Thumbtack,
+        LocalIcon::ThumbtackSlash,
         LocalIcon::MagnifyingGlass,
         LocalIcon::EarthAmericas,
         LocalIcon::List,
@@ -217,6 +221,10 @@ impl LocalIcon {
             Self::ArrowDown => "ralgrum/icons/fontawesome-free-7.3.1/solid/arrow-down.svg",
             Self::ArrowUpRightFromSquare => {
                 "ralgrum/icons/fontawesome-free-7.3.1/solid/arrow-up-right-from-square.svg"
+            }
+            Self::Thumbtack => "ralgrum/icons/fontawesome-free-7.3.1/solid/thumbtack.svg",
+            Self::ThumbtackSlash => {
+                "ralgrum/icons/fontawesome-free-7.3.1/solid/thumbtack-slash.svg"
             }
             Self::MagnifyingGlass => {
                 "ralgrum/icons/fontawesome-free-7.3.1/solid/magnifying-glass.svg"

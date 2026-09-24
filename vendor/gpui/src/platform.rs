@@ -848,6 +848,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
     fn minimize(&self);
+
+    /// Pins or unpins the window above all non-topmost windows.
+    fn set_always_on_top(&self, always_on_top: bool);
     fn zoom(&self);
     fn toggle_fullscreen(&self);
     fn is_fullscreen(&self) -> bool;
@@ -2008,6 +2011,9 @@ pub struct WindowOptions {
     /// Window minimum size
     pub window_min_size: Option<Size<Pixels>>,
 
+    /// The maximum window size the user can resize to
+    pub window_max_size: Option<Size<Pixels>>,
+
     /// Whether to use client or server-side decorations on X11 and Wayland.
     /// The platform may ignore requests it cannot satisfy.
     pub window_decorations: Option<WindowDecorations>,
@@ -2084,6 +2090,9 @@ pub struct WindowParams {
 
     pub window_min_size: Option<Size<Pixels>>,
 
+    #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
+    pub window_max_size: Option<Size<Pixels>>,
+
     #[cfg(target_os = "macos")]
     pub tabbing_identifier: Option<String>,
 }
@@ -2146,6 +2155,7 @@ impl Default for WindowOptions {
             icon: None,
             app_id: None,
             window_min_size: None,
+            window_max_size: None,
             window_decorations: None,
             tabbing_identifier: None,
         }

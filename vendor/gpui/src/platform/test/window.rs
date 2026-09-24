@@ -346,6 +346,8 @@ impl PlatformWindow for TestWindow {
         unimplemented!()
     }
 
+    fn set_always_on_top(&self, _always_on_top: bool) {}
+
     fn zoom(&self) {
         unimplemented!()
     }

@@ -1276,6 +1276,9 @@ impl Render for LyricsPanel {
                     .child(
                         div()
                             .flex()
+                            .when(self.detached(cx), |this| {
+                                this.window_control_area(gpui::WindowControlArea::Drag)
+                            })
                             .items_center()
                             .gap(px(8.))
                             .child(local_icon(LocalIcon::QuoteRight, FOREGROUND).size(px(14.)))

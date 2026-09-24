@@ -46,6 +46,7 @@ pub struct WindowsWindowState {
     pub origin: Cell<Point<Pixels>>,
     pub logical_size: Cell<Size<Pixels>>,
     pub min_size: Option<Size<Pixels>>,
+    pub max_size: Option<Size<Pixels>>,
     pub fullscreen_restore_bounds: Cell<Bounds<Pixels>>,
     pub border_offset: WindowBorderOffset,
     pub appearance: Cell<WindowAppearance>,
@@ -119,6 +120,7 @@ impl WindowsWindowState {
         cursor_visible: Arc<AtomicBool>,
         display: WindowsDisplay,
         min_size: Option<Size<Pixels>>,
+        max_size: Option<Size<Pixels>>,
         appearance: WindowAppearance,
         is_popup: bool,
         disable_direct_composition: bool,
@@ -170,6 +172,7 @@ impl WindowsWindowState {
             scale_factor: Cell::new(scale_factor),
             restore_from_minimized: Cell::new(restore_from_minimized),
             min_size,
+            max_size,
             callbacks,
             input_handler: Cell::new(input_handler),
             ime_enabled: Cell::new(true),
@@ -263,6 +266,7 @@ impl WindowsWindowInner {
             context.cursor_visible.clone(),
             context.display,
             context.min_size,
+            context.max_size,
             context.appearance,
             context.is_popup,
             context.disable_direct_composition,
@@ -406,6 +410,7 @@ struct WindowCreateContext {
     is_minimizable: bool,
     is_maximizable: bool,
     min_size: Option<Size<Pixels>>,
+    max_size: Option<Size<Pixels>>,
     executor: ForegroundExecutor,
     current_cursor: Option<HCURSOR>,
     cursor_visible: Arc<AtomicBool>,
@@ -525,6 +530,7 @@ impl WindowsWindow {
             is_minimizable: params.is_minimizable,
             is_maximizable: params.is_maximizable,
             min_size: params.window_min_size,
+            max_size: params.window_max_size,
             executor,
             current_cursor,
             cursor_visible,
@@ -977,6 +983,33 @@ impl PlatformWindow for WindowsWindow {
                 dwm_set_window_composition_attribute(hwnd, 4);
             }
         }
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) {
+        let hwnd = self.0.hwnd;
+        self.0
+            .executor
+            .spawn(async move {
+                unsafe {
+                    let after = if always_on_top {
+                        Some(HWND_TOPMOST)
+                    } else {
+                        Some(HWND_NOTOPMOST)
+                    };
+                    SetWindowPos(
+                        hwnd,
+                        after,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                    .context("unable to set window topmost state")
+                    .log_err();
+                }
+            })
+            .detach();
     }
 
     fn minimize(&self) {

@@ -3,10 +3,12 @@ use gpui::{
 };
 
 use crate::{
+    assets::LocalIcon,
     lyrics::LyricsPanel,
     playback::{PlaybackModel, QueuePanel, RightSidebar},
     theme::BACKGROUND,
     ui::app_tooltip::global_tooltip_overlay,
+    ui::artwork_cache::global_cache as global_artwork_cache,
 };
 
 /// Root view for the detached sidebar window. Hosts the same live panel
@@ -16,6 +18,7 @@ pub(crate) struct SidebarPopoutRoot {
     playback: gpui::Entity<PlaybackModel>,
     lyrics: gpui::Entity<LyricsPanel>,
     queue: gpui::Entity<QueuePanel>,
+    always_on_top: bool,
     closing: bool,
     window_handle: Option<gpui::WindowHandle<gpui_component::Root>>,
 }
@@ -32,6 +35,7 @@ impl SidebarPopoutRoot {
             playback,
             lyrics,
             queue,
+            always_on_top: false,
             closing: false,
             window_handle: None,
         }
@@ -110,16 +114,43 @@ impl Render for SidebarPopoutRoot {
             .flex()
             .flex_col()
             .bg(rgb(BACKGROUND))
+            // Queue rows resolve their artwork through the window's image
+            // cache stack, so the popout must register the shared cache.
+            .when_some(global_artwork_cache(cx), |this, cache| {
+                this.image_cache(cache)
+            })
             .child(
                 // Drag strip spanning the window top so the whole upper
-                // edge moves the window, not just the panel header below
-                // the padding. The app owns the titlebar, so this is the
-                // only drag region the popout needs.
+                // edge moves the window, plus the always-on-top control.
                 div()
                     .id("sidebar-popout-drag-strip")
                     .flex_none()
                     .h(px(24.))
-                    .window_control_area(gpui::WindowControlArea::Drag),
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .px(px(10.))
+                    .window_control_area(gpui::WindowControlArea::Drag)
+                    .child(crate::music_ui::ghost_icon_button_with_nudge(
+                        "sidebar-popout-always-on-top",
+                        if self.always_on_top {
+                            LocalIcon::Thumbtack
+                        } else {
+                            LocalIcon::ThumbtackSlash
+                        },
+                        if self.always_on_top {
+                            "Disable always on top"
+                        } else {
+                            "Enable always on top"
+                        },
+                        11.,
+                        0.,
+                        cx.listener(|this, _, window, cx| {
+                            this.always_on_top = !this.always_on_top;
+                            window.set_always_on_top(this.always_on_top);
+                            cx.notify();
+                        }),
+                    )),
             )
             .child(
                 div()

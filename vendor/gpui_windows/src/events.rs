@@ -222,7 +222,9 @@ impl WindowsWindowInner {
     }
 
     fn handle_get_min_max_info_msg(&self, lparam: LPARAM) -> Option<isize> {
-        let min_size = self.state.min_size?;
+        let Some(min_size) = self.state.min_size else {
+            return None;
+        };
         let scale_factor = self.state.scale_factor.get();
         let boarder_offset = &self.state.border_offset;
 
@@ -232,6 +234,14 @@ impl WindowsWindowInner {
                 + boarder_offset.width_offset.get();
             minmax_info.ptMinTrackSize.y = min_size.height.scale(scale_factor).as_f32() as i32
                 + boarder_offset.height_offset.get();
+            if let Some(max_size) = self.state.max_size {
+                minmax_info.ptMaxTrackSize.x =
+                    max_size.width.scale(scale_factor).as_f32() as i32
+                        + boarder_offset.width_offset.get();
+                minmax_info.ptMaxTrackSize.y =
+                    max_size.height.scale(scale_factor).as_f32() as i32
+                        + boarder_offset.height_offset.get();
+            }
         }
         Some(0)
     }
