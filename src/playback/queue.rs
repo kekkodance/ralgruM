@@ -7,11 +7,12 @@ use crate::{
     },
     drag_cursor::{DragCursorOwner, DragCursorState, grabbing_cursor, set_drag_cursor_owned},
     library::{FavoriteKey, FavoriteKind, FavoriteState, LibraryView, flow_controls},
+    playback::RightSidebar,
     search::SearchView,
     theme::{BACKGROUND, BORDER, FOREGROUND, MUTED, PRIMARY, SURFACE_RAISED},
 };
 use gpui::{
-    Bounds, Context, DragMoveEvent, Entity, FontWeight, IntoElement, ListAlignment, ListState,
+    App, Bounds, Context, DragMoveEvent, Entity, FontWeight, IntoElement, ListAlignment, ListState,
     MouseButton, Pixels, Render, Transformation, Window, div, list, point, prelude::*, px, rgb,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
@@ -127,10 +128,8 @@ fn queue_scrollbar_lane(scroll: &FixedListScrollHandle, narrow: bool) -> impl In
         .when(!narrow, |this| this.right(px(-24.)))
         .child(Scrollbar::vertical(scroll).scrollbar_show(ScrollbarShow::Hover))
 }
-
 pub(crate) struct QueuePanel {
     playback: Entity<PlaybackModel>,
-    detached: bool,
     library: gpui::WeakEntity<LibraryView>,
     search: gpui::WeakEntity<SearchView>,
     downloads: Entity<crate::downloads::DownloadModel>,
@@ -164,19 +163,18 @@ impl QueuePanel {
                 .with_uniform_item_height(px(QUEUE_ITEM_HEIGHT_PX)),
             browser_scroll: BrowserScrollState::new(),
             list_identity: QueueListIdentity::default(),
-            detached: false,
             drag_pointer: None,
             drag_autoscroll_running: false,
         }
     }
 
-    /// Marks the panel as hosted by the detached floating window. The
-    /// detached header hides the pop-out button and drags the window.
-    pub(crate) fn set_detached(&mut self, detached: bool, cx: &mut Context<Self>) {
-        if self.detached != detached {
-            self.detached = detached;
-            cx.notify();
-        }
+    /// Whether this panel renders inside the detached floating window.
+    /// Derived from the playback state so a popout window that dies without
+    /// a callback can never leave the panel stuck in detached mode.
+    fn detached(&self, cx: &App) -> bool {
+        self.playback.read_with(cx, |model, _| {
+            model.state.right_sidebar_popped() == Some(RightSidebar::Queue)
+        })
     }
 
     fn request_extension(&self, cx: &mut Context<Self>) -> bool {
@@ -506,9 +504,9 @@ impl Render for QueuePanel {
                     )
                 })
             });
-        let narrow = !self.detached
-            && crate::music_ui::narrow_content_viewport(f32::from(window.viewport_size().width));
 
+        let narrow = !self.detached(cx)
+            && crate::music_ui::narrow_content_viewport(f32::from(window.viewport_size().width));
         let snapshots = {
             let state = &self.playback.read(cx).state;
             upcoming
@@ -674,7 +672,7 @@ impl Render for QueuePanel {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .when(self.detached, |this| {
+                            .when(self.detached(cx), |this| {
                                 this.window_control_area(gpui::WindowControlArea::Drag)
                             })
                             .child(local_icon(LocalIcon::ListUl, FOREGROUND).size(px(14.)))
@@ -686,7 +684,7 @@ impl Render for QueuePanel {
                             )
                             .when_some(flow_mode_selector, |this, selector| this.child(selector))
                             .child(div().flex_1())
-                            .when(!self.detached, |this| {
+                            .when(!self.detached(cx), |this| {
                                 this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "queue-detach",
                                     LocalIcon::ArrowUpRightFromSquare,

@@ -26,29 +26,18 @@ impl SidebarPopoutRoot {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
-        let this = Self {
+        Self {
             playback,
             lyrics,
             queue,
             closing: false,
             window_handle: None,
-        };
-        this.sync_panel_detachment(this.current_view(cx), cx);
-        this
+        }
     }
 
     fn current_view(&self, cx: &App) -> Option<RightSidebar> {
         self.playback
             .read_with(cx, |model, _| model.state.right_sidebar_popped())
-    }
-
-    fn sync_panel_detachment(&self, view: Option<RightSidebar>, cx: &mut App) {
-        let lyrics_detached = matches!(view, Some(RightSidebar::Lyrics));
-        let queue_detached = matches!(view, Some(RightSidebar::Queue));
-        self.lyrics
-            .update(cx, |lyrics, cx| lyrics.set_detached(lyrics_detached, cx));
-        self.queue
-            .update(cx, |queue, cx| queue.set_detached(queue_detached, cx));
     }
 
     /// Docks the popped view back into the app and closes this window.
@@ -58,11 +47,11 @@ impl SidebarPopoutRoot {
         if self.closing {
             return;
         }
+        self.closing = true;
         self.playback.update(cx, |playback, cx| {
             playback.state.dock_sidebar();
             cx.notify();
         });
-        self.sync_panel_detachment(None, cx);
         if let Some(handle) = self.window_handle.as_ref() {
             super::sidebar_popout::forget_closed_popout(handle);
         }
@@ -75,11 +64,11 @@ impl Render for SidebarPopoutRoot {
             self.window_handle = window.window_handle().downcast::<gpui_component::Root>();
         }
         let view = self.current_view(cx);
-        self.sync_panel_detachment(view, cx);
 
         let content = match view {
             Some(RightSidebar::Lyrics) => self.lyrics.clone().into_any_element(),
-            Some(RightSidebar::Queue) | Some(RightSidebar::Closed) | None => {
+            Some(RightSidebar::Queue) => self.queue.clone().into_any_element(),
+            Some(RightSidebar::Closed) | None => {
                 if !self.closing {
                     self.closing = true;
                     let handle = window.window_handle().downcast::<gpui_component::Root>();

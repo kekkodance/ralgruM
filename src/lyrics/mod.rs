@@ -24,22 +24,21 @@ use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use tokio::{runtime::Runtime, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
+use self::annotation::{AnnotationController, AnnotationOpen};
+use self::scroll_motion::ScrollMotion;
+use self::scroll_state::{
+    LyricsScrollbarHandle, ScrollOffsetFreeze, ScrollSuppression, active_line_index,
+    centered_scroll_offset, is_highlightable_line, should_resume_auto_centering, timed_line_index,
+};
 use crate::{
     assets::{LocalIcon, local_icon},
     browser_scroll::{BrowserScrollState, BrowserScrollTarget, browser_scroll_surface},
     context_menu::ContextMenuExt,
     motion::SegmentedSelectorMotion,
     navigation_state::LyricsSource,
-    playback::{PlaybackModel, PlaybackStatus, PlaybackTrack},
+    playback::{PlaybackModel, PlaybackStatus, PlaybackTrack, RightSidebar},
     playing_indicator::playing_bars,
     theme::{BACKGROUND, BORDER, DANGER, FOREGROUND, MUTED, PRIMARY, SURFACE_RAISED},
-};
-
-use self::annotation::{AnnotationController, AnnotationOpen};
-use self::scroll_motion::ScrollMotion;
-use self::scroll_state::{
-    LyricsScrollbarHandle, ScrollOffsetFreeze, ScrollSuppression, active_line_index,
-    centered_scroll_offset, is_highlightable_line, should_resume_auto_centering, timed_line_index,
 };
 
 // GPUI's stock scrollbar considers itself visible for 3s after scrolling.
@@ -110,7 +109,6 @@ fn lyrics_track_identity(track: &PlaybackTrack) -> String {
 
 pub(crate) struct LyricsPanel {
     playback: gpui::Entity<PlaybackModel>,
-    detached: bool,
     runtime: Arc<Runtime>,
     client: client::LyricsClient,
     cache: LyricsCache,
@@ -158,7 +156,6 @@ impl LyricsPanel {
     pub(crate) fn new(playback: gpui::Entity<PlaybackModel>, runtime: Arc<Runtime>) -> Self {
         Self {
             playback,
-            detached: false,
             runtime,
             client: client::LyricsClient::new(),
             cache: LyricsCache::default(),
@@ -194,14 +191,15 @@ impl LyricsPanel {
         }
     }
 
-    /// Marks the panel as hosted by the detached floating window. The
-    /// detached header hides the pop-out button and drags the window.
-    pub(crate) fn set_detached(&mut self, detached: bool, cx: &mut Context<Self>) {
-        if self.detached != detached {
-            self.detached = detached;
-            cx.notify();
-        }
+    /// Whether this panel renders inside the detached floating window.
+    /// Derived from the playback state so a popout window that dies without
+    /// a callback can never leave the panel stuck in detached mode.
+    fn detached(&self, cx: &App) -> bool {
+        self.playback.read_with(cx, |model, _| {
+            model.state.right_sidebar_popped() == Some(RightSidebar::Lyrics)
+        })
     }
+
     pub(crate) fn set_default_provider(&mut self, source: LyricsSource, cx: &mut Context<Self>) {
         let provider = match source {
             LyricsSource::Musixmatch => LyricsProvider::Musixmatch,
@@ -1275,7 +1273,7 @@ impl Render for LyricsPanel {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .when(self.detached, |this| {
+                            .when(self.detached(cx), |this| {
                                 this.window_control_area(gpui::WindowControlArea::Drag)
                             })
                             .child(local_icon(LocalIcon::QuoteRight, FOREGROUND).size(px(14.)))
@@ -1286,7 +1284,7 @@ impl Render for LyricsPanel {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("Lyrics"),
                             )
-                            .when(!self.detached, |this| {
+                            .when(!self.detached(cx), |this| {
                                 this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "lyrics-detach",
                                     LocalIcon::ArrowUpRightFromSquare,
@@ -1394,7 +1392,7 @@ impl Render for LyricsPanel {
                             self.scroll.clone(),
                             self.scrollbar_freeze.clone(),
                         ),
-                        if self.detached {
+                        if self.detached(cx) {
                             f32::INFINITY
                         } else {
                             f32::from(window.viewport_size().width)

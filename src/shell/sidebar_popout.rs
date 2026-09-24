@@ -66,8 +66,8 @@ pub(super) fn open_or_focus_popout(
         cx,
     );
     let playback = playback.clone();
+    let closed_playback = playback.clone();
     let lyrics = lyrics.clone();
-    let queue = queue.clone();
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -90,6 +90,38 @@ pub(super) fn open_or_focus_popout(
             if let Ok(mut slot) = POPOUT_WINDOW.lock() {
                 *slot = Some(handle);
             }
+            // Reconcile when the window dies through any path the shell did
+            // not drive (renderer reset, platform close, crash): clear the
+            // stale handle and drop the popped state so the panels go back
+            // to docked headers instead of dragging the main window.
+            let window_id = handle.window_id();
+            let playback = closed_playback.clone();
+            cx.on_window_closed(move |cx, closed_id| {
+                if closed_id != window_id {
+                    return;
+                }
+                let still_current = POPOUT_WINDOW
+                    .lock()
+                    .map(|slot| {
+                        slot.as_ref()
+                            .is_some_and(|handle| handle.window_id() == window_id)
+                    })
+                    .unwrap_or(false);
+                if still_current {
+                    if let Ok(mut slot) = POPOUT_WINDOW.lock() {
+                        *slot = None;
+                    }
+                    crate::diagnostics::event(
+                        "WARN",
+                        "sidebar popout window closed outside the dock path",
+                    );
+                    playback.update(cx, |playback, cx| {
+                        playback.state.close_sidebar();
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
         }
         Err(error) => {
             crate::diagnostics::event(
