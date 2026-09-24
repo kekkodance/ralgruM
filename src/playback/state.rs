@@ -338,7 +338,7 @@ pub(crate) struct PlaybackState {
     /// playback.
     lyrics_context: Option<PlaybackTrack>,
     right_sidebar_open: bool,
-    // Navigation decks use physical queue positions instead of provider IDs.
+    right_sidebar_popped: Option<RightSidebar>,
     // A library can legitimately contain the same provider/track more than
     // once, and an ID-only deck would select the first occurrence repeatedly.
     play_next: Vec<usize>,
@@ -374,6 +374,7 @@ impl Default for PlaybackState {
             pending_queue_load: false,
             lyrics_context: None,
             right_sidebar_open: false,
+            right_sidebar_popped: None,
             play_next: Vec::new(),
             history: Vec::new(),
             shuffle_order: Vec::new(),
@@ -456,7 +457,7 @@ impl PlaybackState {
         self.queue = queue;
         self.current_index = Some(index);
         self.context = PlaybackContext::None;
-        if self.right_sidebar_open {
+        if self.right_sidebar_popped.is_none() && self.right_sidebar_open {
             self.right_sidebar = self.right_sidebar_view;
         }
         self.history.clear();
@@ -1273,6 +1274,17 @@ impl PlaybackState {
     }
 
     pub(crate) fn toggle_sidebar(&mut self, sidebar: RightSidebar) -> RightSidebar {
+        if let Some(popped) = self.right_sidebar_popped {
+            if popped == sidebar {
+                // The popout shows this view: pressing its playerbar button
+                // dismisses the popout without redocking.
+                self.right_sidebar_popped = None;
+            } else {
+                self.right_sidebar_popped = Some(sidebar);
+                self.right_sidebar_view = sidebar;
+            }
+            return self.right_sidebar;
+        }
         if self.right_sidebar == sidebar {
             self.right_sidebar = RightSidebar::Closed;
             self.right_sidebar_open = false;
@@ -1291,6 +1303,35 @@ impl PlaybackState {
         self.right_sidebar
     }
 
+    /// Moves the current sidebar view into its detached floating window. The
+    /// in-app sidebar collapses; the popout hosts the view instead.
+    pub(crate) fn detach_sidebar(&mut self) {
+        let view = match self.right_sidebar {
+            RightSidebar::Closed => return,
+            sidebar => sidebar,
+        };
+        self.right_sidebar_popped = Some(view);
+        self.right_sidebar = RightSidebar::Closed;
+        self.right_sidebar_open = false;
+    }
+
+    /// Docks the popped-out view back into the app. Used by the popout's
+    /// close control; the playerbar toggle-off path intentionally keeps the
+    /// sidebar closed.
+    pub(crate) fn dock_sidebar(&mut self) {
+        let Some(view) = self.right_sidebar_popped.take() else {
+            return;
+        };
+        self.right_sidebar = view;
+        self.right_sidebar_open = true;
+        self.right_sidebar_view = view;
+    }
+
+    /// The view hosted by the detached floating window, if it is open.
+    pub(crate) fn right_sidebar_popped(&self) -> Option<RightSidebar> {
+        self.right_sidebar_popped
+    }
+
     /// Opens the lyrics sidebar for a track that may not be playing. Playback
     /// is untouched; the panel fetches lyrics for the given context track.
     pub(crate) fn open_lyrics_context(&mut self, track: &PlaybackTrack) {
@@ -1302,9 +1343,21 @@ impl PlaybackState {
         } else {
             self.lyrics_context = Some(track.clone());
         }
-        self.right_sidebar = RightSidebar::Lyrics;
-        self.right_sidebar_open = true;
-        self.right_sidebar_view = RightSidebar::Lyrics;
+        match self.right_sidebar_popped {
+            Some(popped) => {
+                // A popout is hosting a sidebar view; lyrics context opens
+                // into it instead of the in-app sidebar.
+                self.right_sidebar_popped = Some(RightSidebar::Lyrics);
+                if popped != RightSidebar::Lyrics {
+                    self.right_sidebar_view = RightSidebar::Lyrics;
+                }
+            }
+            None => {
+                self.right_sidebar = RightSidebar::Lyrics;
+                self.right_sidebar_open = true;
+                self.right_sidebar_view = RightSidebar::Lyrics;
+            }
+        }
     }
 
     /// The track the lyrics sidebar should display: the context track when
@@ -1320,10 +1373,12 @@ impl PlaybackState {
     pub(crate) fn close_sidebar(&mut self) {
         self.right_sidebar = RightSidebar::Closed;
         self.right_sidebar_open = false;
+        self.right_sidebar_popped = None;
         self.lyrics_context = None;
     }
 
     pub(crate) fn restore_sidebar(&mut self, open: bool, view: RightSidebar) {
+        self.right_sidebar_popped = None;
         self.right_sidebar_view = view;
         self.right_sidebar_open = open;
         self.right_sidebar = if open && self.current().is_some() {

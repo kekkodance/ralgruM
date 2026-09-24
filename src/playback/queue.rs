@@ -130,6 +130,7 @@ fn queue_scrollbar_lane(scroll: &FixedListScrollHandle, narrow: bool) -> impl In
 
 pub(crate) struct QueuePanel {
     playback: Entity<PlaybackModel>,
+    detached: bool,
     library: gpui::WeakEntity<LibraryView>,
     search: gpui::WeakEntity<SearchView>,
     downloads: Entity<crate::downloads::DownloadModel>,
@@ -163,8 +164,18 @@ impl QueuePanel {
                 .with_uniform_item_height(px(QUEUE_ITEM_HEIGHT_PX)),
             browser_scroll: BrowserScrollState::new(),
             list_identity: QueueListIdentity::default(),
+            detached: false,
             drag_pointer: None,
             drag_autoscroll_running: false,
+        }
+    }
+
+    /// Marks the panel as hosted by the detached floating window. The
+    /// detached header hides the pop-out button and drags the window.
+    pub(crate) fn set_detached(&mut self, detached: bool, cx: &mut Context<Self>) {
+        if self.detached != detached {
+            self.detached = detached;
+            cx.notify();
         }
     }
 
@@ -495,8 +506,8 @@ impl Render for QueuePanel {
                     )
                 })
             });
-        let narrow =
-            crate::music_ui::narrow_content_viewport(f32::from(window.viewport_size().width));
+        let narrow = !self.detached
+            && crate::music_ui::narrow_content_viewport(f32::from(window.viewport_size().width));
 
         let snapshots = {
             let state = &self.playback.read(cx).state;
@@ -663,6 +674,9 @@ impl Render for QueuePanel {
                             .flex()
                             .items_center()
                             .gap(px(8.))
+                            .when(self.detached, |this| {
+                                this.window_control_area(gpui::WindowControlArea::Drag)
+                            })
                             .child(local_icon(LocalIcon::ListUl, FOREGROUND).size(px(14.)))
                             .child(
                                 div()
@@ -672,6 +686,23 @@ impl Render for QueuePanel {
                             )
                             .when_some(flow_mode_selector, |this, selector| this.child(selector))
                             .child(div().flex_1())
+                            .when(!self.detached, |this| {
+                                this.child(crate::music_ui::ghost_icon_button(
+                                    "queue-detach",
+                                    LocalIcon::ArrowUpRightFromSquare,
+                                    "Pop out",
+                                    crate::music_ui::PANEL_CLOSE_ICON_SIZE_PX,
+                                    {
+                                        let playback = self.playback.clone();
+                                        move |_, _, cx| {
+                                            playback.update(cx, |playback, cx| {
+                                                playback.state.detach_sidebar();
+                                                cx.notify();
+                                            });
+                                        }
+                                    },
+                                ))
+                            })
                             .child(crate::music_ui::ghost_close_button_with_icon_size(
                                 "queue-close",
                                 crate::music_ui::PANEL_CLOSE_ICON_SIZE_PX,
@@ -679,7 +710,11 @@ impl Render for QueuePanel {
                                     let playback = self.playback.clone();
                                     move |_, _, cx| {
                                         playback.update(cx, |playback, cx| {
-                                            playback.state.close_sidebar();
+                                            if playback.state.right_sidebar_popped().is_some() {
+                                                playback.state.dock_sidebar();
+                                            } else {
+                                                playback.state.close_sidebar();
+                                            }
                                             cx.notify();
                                         })
                                     }

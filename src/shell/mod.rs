@@ -42,6 +42,9 @@ use chrome::render_titlebar;
 mod sidebar;
 use sidebar::render_sidebar;
 
+mod sidebar_popout;
+mod sidebar_popout_root;
+
 mod update_badge;
 
 mod sidebar_badge;
@@ -841,6 +844,10 @@ impl RalgrumApp {
                 state.player_bar_open(),
             )
         };
+        let mut last_popped = playback.read(cx).state.right_sidebar_popped();
+        let popout_playback = playback.clone();
+        let popout_lyrics = lyrics.clone();
+        let popout_queue = queue.clone();
         cx.observe(&playback, move |this, playback, cx| {
             let (sync_args, current) = {
                 let state = &playback.read(cx).state;
@@ -870,6 +877,19 @@ impl RalgrumApp {
                 (sync_args, current)
             };
             this.sync_right_sidebar_transition(current.0, cx);
+            let popped = playback.read(cx).state.right_sidebar_popped();
+            if popped != last_popped {
+                last_popped = popped;
+                match popped {
+                    Some(_) => sidebar_popout::open_or_focus_popout(
+                        &popout_playback,
+                        &popout_lyrics,
+                        &popout_queue,
+                        cx,
+                    ),
+                    None => sidebar_popout::close_popout(cx),
+                }
+            }
             let sidebar_exits_settings =
                 playback_sidebar_exits_settings(last_shell_playback.0, current.0);
             let exited_settings =

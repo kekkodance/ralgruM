@@ -27,6 +27,7 @@ impl Render for PlaybackView {
             shuffle_enabled,
             repeat_mode,
             right_sidebar,
+            right_sidebar_popped,
             loading_from_cache,
             player_bar_open,
             pending_queue_load,
@@ -46,6 +47,7 @@ impl Render for PlaybackView {
                 state.shuffle_enabled,
                 state.repeat_mode,
                 state.right_sidebar,
+                state.right_sidebar_popped(),
                 model.loading_from_cache(),
                 state.player_bar_open(),
                 state.pending_queue_load(),
@@ -269,7 +271,8 @@ impl Render for PlaybackView {
         };
         let lyrics_button = || {
             let model = self.model.clone();
-            let selected = right_sidebar == RightSidebar::Lyrics;
+            let selected = right_sidebar == RightSidebar::Lyrics
+                || right_sidebar_popped == Some(RightSidebar::Lyrics);
             bare_action_button(
                 "lyrics-toggle",
                 LocalIcon::QuoteRight.path(),
@@ -282,7 +285,8 @@ impl Render for PlaybackView {
         };
         let queue_button = || {
             let model = self.model.clone();
-            let selected = right_sidebar == RightSidebar::Queue;
+            let selected = right_sidebar == RightSidebar::Queue
+                || right_sidebar_popped == Some(RightSidebar::Queue);
             bare_action_button(
                 "queue-toggle",
                 LocalIcon::ListUl.path(),

@@ -1850,13 +1850,32 @@ pub(crate) fn ghost_close_button_with_icon_size(
     icon_size: f32,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    ghost_icon_button(
+        id,
+        LocalIcon::X,
+        "Close",
+        PANEL_CLOSE_ICON_SIZE_PX.max(icon_size),
+        handler,
+    )
+}
+
+/// A compact ghost-styled header action button with a hover crossfade between
+/// muted and foreground icon states. Shared by panel close and detach
+/// controls so both get identical hit areas and focus treatment.
+pub(crate) fn ghost_icon_button(
+    id: &'static str,
+    icon: LocalIcon,
+    label: &'static str,
+    icon_size: f32,
+    handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
     div()
         .id(id)
         .group(id)
         .focusable()
         .tab_stop(true)
         .role(gpui::Role::Button)
-        .aria_label("Close")
+        .aria_label(label)
         .size(px(28.))
         .flex_none()
         .flex()
@@ -1866,7 +1885,7 @@ pub(crate) fn ghost_close_button_with_icon_size(
         .border_1()
         .border_color(rgba(0x00000000))
         .cursor_pointer()
-        .app_tooltip("Close")
+        .app_tooltip(label)
         .hover(|style| style.bg(rgb(BORDER)).border_color(rgb(BORDER)))
         .focus_visible(|style| style.border_color(rgb(PRIMARY)))
         .child(
@@ -1878,7 +1897,7 @@ pub(crate) fn ghost_close_button_with_icon_size(
                         .absolute()
                         .inset_0()
                         .group_hover(id, |style| style.invisible())
-                        .child(local_icon(LocalIcon::X, MUTED).size_full()),
+                        .child(local_icon(icon, MUTED).size_full()),
                 )
                 .child(
                     div()
@@ -1886,7 +1905,7 @@ pub(crate) fn ghost_close_button_with_icon_size(
                         .inset_0()
                         .invisible()
                         .group_hover(id, |style| style.visible())
-                        .child(local_icon(LocalIcon::X, FOREGROUND).size_full()),
+                        .child(local_icon(icon, FOREGROUND).size_full()),
                 ),
         )
         .on_click(handler)

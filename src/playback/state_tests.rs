@@ -1459,3 +1459,97 @@ fn can_next_reports_false_on_last_track_without_repeat() {
     state.play_next.push(0);
     assert!(state.can_next());
 }
+
+#[test]
+fn detaching_pops_out_the_open_view_and_collapses_the_sidebar() {
+    let mut state = PlaybackState::default();
+    state.replace(tracks(), 0);
+    state.toggle_sidebar(RightSidebar::Queue);
+    assert_eq!(state.right_sidebar, RightSidebar::Queue);
+
+    state.detach_sidebar();
+    assert_eq!(state.right_sidebar_popped(), Some(RightSidebar::Queue));
+    assert_eq!(state.right_sidebar, RightSidebar::Closed);
+    assert_eq!(state.sidebar_preferences(), (false, RightSidebar::Queue));
+}
+
+#[test]
+fn docking_from_the_popout_reopens_the_in_app_sidebar() {
+    let mut state = PlaybackState::default();
+    state.replace(tracks(), 0);
+    state.toggle_sidebar(RightSidebar::Lyrics);
+    state.detach_sidebar();
+
+    state.dock_sidebar();
+    assert_eq!(state.right_sidebar_popped(), None);
+    assert_eq!(state.right_sidebar, RightSidebar::Lyrics);
+    assert_eq!(state.sidebar_preferences(), (true, RightSidebar::Lyrics));
+}
+
+#[test]
+fn toggling_the_popped_view_off_from_the_playerbar_keeps_the_sidebar_closed() {
+    let mut state = PlaybackState::default();
+    state.replace(tracks(), 0);
+    state.toggle_sidebar(RightSidebar::Queue);
+    state.detach_sidebar();
+
+    // Same view: close the popout without redocking.
+    state.toggle_sidebar(RightSidebar::Queue);
+    assert_eq!(state.right_sidebar_popped(), None);
+    assert_eq!(state.right_sidebar, RightSidebar::Closed);
+    assert_eq!(state.sidebar_preferences(), (false, RightSidebar::Queue));
+
+    // Pressing again reopens the in-app sidebar.
+    state.toggle_sidebar(RightSidebar::Queue);
+    assert_eq!(state.right_sidebar, RightSidebar::Queue);
+    assert_eq!(state.sidebar_preferences(), (true, RightSidebar::Queue));
+}
+
+#[test]
+fn toggling_the_other_view_while_popped_switches_the_popout_content() {
+    let mut state = PlaybackState::default();
+    state.replace(tracks(), 0);
+    state.toggle_sidebar(RightSidebar::Queue);
+    state.detach_sidebar();
+
+    state.toggle_sidebar(RightSidebar::Lyrics);
+    assert_eq!(state.right_sidebar_popped(), Some(RightSidebar::Lyrics));
+    assert_eq!(state.right_sidebar, RightSidebar::Closed);
+    assert_eq!(state.sidebar_preferences(), (false, RightSidebar::Lyrics));
+}
+
+#[test]
+fn queue_replacement_does_not_reopen_the_sidebar_behind_a_popout() {
+    let mut state = PlaybackState::default();
+    state.replace(tracks(), 0);
+    state.toggle_sidebar(RightSidebar::Queue);
+    state.detach_sidebar();
+
+    state.replace(tracks(), 1);
+    assert_eq!(state.right_sidebar, RightSidebar::Closed);
+    assert_eq!(state.right_sidebar_popped(), Some(RightSidebar::Queue));
+}
+
+#[test]
+fn closing_the_sidebar_while_popped_clears_the_popout() {
+    let mut state = PlaybackState::default();
+    state.replace(tracks(), 0);
+    state.toggle_sidebar(RightSidebar::Lyrics);
+    state.detach_sidebar();
+
+    state.close_sidebar();
+    assert_eq!(state.right_sidebar_popped(), None);
+    assert_eq!(state.right_sidebar, RightSidebar::Closed);
+}
+
+#[test]
+fn restoring_sidebar_preferences_clears_a_stale_popout() {
+    let mut state = PlaybackState::default();
+    state.replace(tracks(), 0);
+    state.toggle_sidebar(RightSidebar::Lyrics);
+    state.detach_sidebar();
+
+    state.restore_sidebar(true, RightSidebar::Queue);
+    assert_eq!(state.right_sidebar_popped(), None);
+    assert_eq!(state.right_sidebar, RightSidebar::Queue);
+}

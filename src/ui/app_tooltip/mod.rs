@@ -5,8 +5,8 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 use gpui::{
     AnimationExt, App, Bounds, BoxShadow, Context, ElementId, Entity, FontWeight, Global,
     InteractiveElement, IntoElement, ParentElement, PathBuilder, Pixels, Render, SharedString,
-    Size, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, canvas, deferred, div, px,
-    rgb, rgba,
+    Size, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, WindowId, canvas, deferred,
+    div, px, rgb, rgba,
 };
 use gpui_component::{ElementExt as _, WindowExt as _};
 
@@ -42,6 +42,7 @@ pub(crate) struct AppTooltipOverlay {
 struct TooltipRequest {
     text: SharedString,
     trigger_bounds: Bounds<gpui::Pixels>,
+    trigger_window: WindowId,
     placement: TooltipPlacement,
     trigger_gap: Pixels,
     bubble_horizontal_pin: BubbleHorizontalPin,
@@ -68,6 +69,13 @@ pub(crate) fn set_global(cx: &mut App, overlay: &Entity<AppTooltipOverlay>) {
 
 fn global_overlay(cx: &mut App) -> Option<Entity<AppTooltipOverlay>> {
     cx.try_global::<AppTooltipGlobal>()?.0.upgrade()
+}
+
+/// The registered tooltip overlay entity, for windows that also need to
+/// paint it (the sidebar popout).
+pub(crate) fn global_tooltip_overlay(cx: &App) -> Option<Entity<AppTooltipOverlay>> {
+    cx.try_global::<AppTooltipGlobal>()
+        .and_then(|global| global.0.upgrade())
 }
 
 pub(crate) fn dismiss_global(cx: &mut App) {
@@ -216,6 +224,13 @@ impl Render for AppTooltipOverlay {
                 self.clear_without_notify();
                 return div().into_any_element();
             }
+        }
+        // One overlay entity renders in every window, but each window paints
+        // only the tooltip triggered inside it.
+        if self.visible.as_ref().is_some_and(|tooltip| {
+            tooltip.request.trigger_window != window.window_handle().window_id()
+        }) {
+            return div().into_any_element();
         }
 
         let Some(visible) = self.visible.as_ref() else {
@@ -409,6 +424,7 @@ pub(crate) trait AppTooltipExt:
                     let request = TooltipRequest {
                         text: text.clone(),
                         trigger_bounds: trigger_bounds.get(),
+                        trigger_window: window.window_handle().window_id(),
                         placement,
                         trigger_gap,
                         bubble_horizontal_pin,
@@ -448,21 +464,19 @@ pub(crate) trait AppTooltipExt:
 }
 
 impl<E> AppTooltipExt for E where E: StatefulInteractiveElement + gpui_component::ElementExt {}
-
 #[cfg(test)]
 mod tests {
-    use gpui::{
-        AnyWindowHandle, AppContext, Bounds, Context, Entity, FocusHandle, InteractiveElement,
-        IntoElement, KeyDownEvent, Modifiers, MouseButton, ParentElement, Render, Role,
-        StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext, Window, div,
-        prelude::FluentBuilder, px,
-    };
-    use gpui_component::Root;
-
     use super::{
         APP_TOOLTIP_SHOW_DELAY, AppTooltipExt, AppTooltipOverlay, BubbleHorizontalPin,
         TOOLTIP_PADDING_X, TRIGGER_GAP, TooltipPlacement, TooltipRequest, VisibleTooltip,
     };
+    use gpui::{
+        AnyWindowHandle, AppContext, Bounds, Context, Entity, FocusHandle, InteractiveElement,
+        IntoElement, KeyDownEvent, Modifiers, MouseButton, ParentElement, Render, Role,
+        StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext, Window, WindowId,
+        div, prelude::FluentBuilder, px,
+    };
+    use gpui_component::Root;
 
     struct RemovingTooltipOwner {
         overlay: Entity<AppTooltipOverlay>,
@@ -516,6 +530,9 @@ mod tests {
                                                     TooltipRequest {
                                                         text: "Remove owner".into(),
                                                         trigger_bounds: Bounds::default(),
+                                                        trigger_window: window
+                                                            .window_handle()
+                                                            .window_id(),
                                                         placement: TooltipPlacement::Top,
                                                         trigger_gap: TRIGGER_GAP,
                                                         bubble_horizontal_pin:
@@ -624,6 +641,7 @@ mod tests {
                     request: TooltipRequest {
                         text: "Remove owner".into(),
                         trigger_bounds: Bounds::default(),
+                        trigger_window: WindowId::from(0),
                         placement: TooltipPlacement::Top,
                         trigger_gap: TRIGGER_GAP,
                         bubble_horizontal_pin: BubbleHorizontalPin::None,
@@ -733,6 +751,7 @@ mod tests {
                     request: TooltipRequest {
                         text: "Remove owner".into(),
                         trigger_bounds: Bounds::default(),
+                        trigger_window: WindowId::from(0),
                         placement: TooltipPlacement::Top,
                         trigger_gap: TRIGGER_GAP,
                         bubble_horizontal_pin: BubbleHorizontalPin::None,

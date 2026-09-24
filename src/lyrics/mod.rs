@@ -110,6 +110,7 @@ fn lyrics_track_identity(track: &PlaybackTrack) -> String {
 
 pub(crate) struct LyricsPanel {
     playback: gpui::Entity<PlaybackModel>,
+    detached: bool,
     runtime: Arc<Runtime>,
     client: client::LyricsClient,
     cache: LyricsCache,
@@ -157,6 +158,7 @@ impl LyricsPanel {
     pub(crate) fn new(playback: gpui::Entity<PlaybackModel>, runtime: Arc<Runtime>) -> Self {
         Self {
             playback,
+            detached: false,
             runtime,
             client: client::LyricsClient::new(),
             cache: LyricsCache::default(),
@@ -192,6 +194,14 @@ impl LyricsPanel {
         }
     }
 
+    /// Marks the panel as hosted by the detached floating window. The
+    /// detached header hides the pop-out button and drags the window.
+    pub(crate) fn set_detached(&mut self, detached: bool, cx: &mut Context<Self>) {
+        if self.detached != detached {
+            self.detached = detached;
+            cx.notify();
+        }
+    }
     pub(crate) fn set_default_provider(&mut self, source: LyricsSource, cx: &mut Context<Self>) {
         let provider = match source {
             LyricsSource::Musixmatch => LyricsProvider::Musixmatch,
@@ -1260,12 +1270,14 @@ impl Render for LyricsPanel {
                     .pb(px(20.))
                     .mb(px(16.))
                     .border_b_1()
-                    .border_color(rgb(BORDER))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
+                            .when(self.detached, |this| {
+                                this.window_control_area(gpui::WindowControlArea::Drag)
+                            })
                             .child(local_icon(LocalIcon::QuoteRight, FOREGROUND).size(px(14.)))
                             .child(
                                 div()
@@ -1274,11 +1286,32 @@ impl Render for LyricsPanel {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("Lyrics"),
                             )
+                            .when(!self.detached, |this| {
+                                this.child(crate::music_ui::ghost_icon_button(
+                                    "lyrics-detach",
+                                    LocalIcon::ArrowUpRightFromSquare,
+                                    "Pop out",
+                                    crate::music_ui::PANEL_CLOSE_ICON_SIZE_PX,
+                                    {
+                                        let playback = self.playback.clone();
+                                        move |_, _, cx| {
+                                            playback.update(cx, |playback, cx| {
+                                                playback.state.detach_sidebar();
+                                                cx.notify();
+                                            });
+                                        }
+                                    },
+                                ))
+                            })
                             .child(crate::music_ui::ghost_close_button("lyrics-close", {
                                 let playback = self.playback.clone();
                                 move |_, _, cx| {
                                     playback.update(cx, |playback, cx| {
-                                        playback.state.close_sidebar();
+                                        if playback.state.right_sidebar_popped().is_some() {
+                                            playback.state.dock_sidebar();
+                                        } else {
+                                            playback.state.close_sidebar();
+                                        }
                                         cx.notify();
                                     });
                                 }
@@ -1360,7 +1393,11 @@ impl Render for LyricsPanel {
                             self.scroll.clone(),
                             self.scrollbar_freeze.clone(),
                         ),
-                        f32::from(window.viewport_size().width),
+                        if self.detached {
+                            f32::INFINITY
+                        } else {
+                            f32::from(window.viewport_size().width)
+                        },
                         cx.listener(|this, hovered, _, cx| {
                             if *hovered {
                                 this.scrollbar_freeze.reveal_for_user_scroll();
