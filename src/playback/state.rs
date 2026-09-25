@@ -472,6 +472,19 @@ impl PlaybackState {
         self.select_with_history(index, true)
     }
 
+    /// True when the queue entry at `index` is the track already loaded at
+    /// the current position, so a click on it can restart in place.
+    pub(crate) fn same_track_at(&self, queue: &[PlaybackTrack], index: usize) -> bool {
+        let Some(track) = queue.get(index) else {
+            return false;
+        };
+        if self.content_blocked(track) {
+            return false;
+        }
+        self.current()
+            .is_some_and(|current| current.provider == track.provider && current.id == track.id)
+    }
+
     /// Re-resolve the current source after an output change without treating
     /// it as a new queue selection. Navigation history, play-next order, and
     /// the lyrics context belong to the track and must survive the reload.

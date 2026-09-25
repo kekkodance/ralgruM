@@ -1553,3 +1553,36 @@ fn restoring_sidebar_preferences_clears_a_stale_popout() {
     assert_eq!(state.right_sidebar_popped(), None);
     assert_eq!(state.right_sidebar, RightSidebar::Queue);
 }
+
+#[test]
+fn same_track_at_matches_only_the_loaded_track() {
+    let mut state = PlaybackState::default();
+    let queue = tracks();
+    state.replace(queue.clone(), 0);
+
+    assert!(state.same_track_at(&queue, 0));
+    assert!(!state.same_track_at(&queue, 1));
+    assert!(!state.same_track_at(&queue, 2));
+    assert!(!state.same_track_at(&[], 0));
+
+    // A different queue containing the same track at the clicked index still
+    // matches: the click restarts that track in place.
+    let reordered = vec![queue[1].clone(), queue[0].clone()];
+    assert!(state.same_track_at(&reordered, 1));
+    assert!(!state.same_track_at(&reordered, 0));
+}
+
+#[test]
+fn same_track_at_rejects_blocked_entries() {
+    let mut state = PlaybackState::default();
+    let mut queue = tracks();
+    state.replace(queue.clone(), 0);
+
+    // An AI-generated track stops qualifying once AI blocking is enabled.
+    queue[0].ai_generated = true;
+    state.set_block_ai(true);
+    assert!(!state.same_track_at(&queue, 0));
+
+    state.set_block_ai(false);
+    assert!(state.same_track_at(&queue, 0));
+}

@@ -7,6 +7,13 @@ impl PlaybackModel {
         index: usize,
         cx: &mut Context<Self>,
     ) {
+        // Clicking the already-playing track restarts it in place: seek to
+        // the start without re-resolving the source, so the quality tag and
+        // the buffered progress do not blink.
+        if self.state.same_track_at(&queue, index) {
+            self.seek_to(Duration::ZERO, cx);
+            return;
+        }
         self.finish_deezer_listen(cx);
         self.consecutive_failures = 0;
         self.cancel_seek_slider_interaction();

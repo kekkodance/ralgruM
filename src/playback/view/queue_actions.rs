@@ -90,6 +90,11 @@ impl PlaybackModel {
     }
 
     pub(crate) fn select_from_queue(&mut self, index: usize, cx: &mut Context<Self>) {
+        // Clicking the already-playing queue row restarts it in place.
+        if self.state.same_track_at(&self.state.queue, index) {
+            self.seek_to(Duration::ZERO, cx);
+            return;
+        }
         self.select(index, cx);
     }
 
