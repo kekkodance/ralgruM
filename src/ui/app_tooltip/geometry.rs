@@ -100,11 +100,12 @@ pub(crate) fn resolve_tooltip_geometry_with_gap_and_end_inset(
 
     match preferred {
         TooltipPlacement::Right => {
-            let bubble_y = clamp_axis(
+            let bubble_y = clamp_axis_asymmetric(
                 y,
                 tooltip_size.height,
                 viewport_size.height,
                 TOP_SAFE_MARGIN,
+                VIEWPORT_MARGIN,
             );
             let bubble_x = clamp_axis_with_end_inset(
                 trigger_bounds.right() + trigger_gap,
@@ -198,6 +199,20 @@ fn placement_for_arrow(
 fn clamp_axis(origin: Pixels, length: Pixels, viewport: Pixels, margin: Pixels) -> Pixels {
     let max_origin = (viewport - margin - length).max(margin);
     origin.max(margin).min(max_origin)
+}
+
+/// Clamp an axis with a dedicated top margin (keeping the titlebar clear) and
+/// a smaller bottom margin, so triggers near the window bottom keep their
+/// tooltip centered instead of being shoved up by the titlebar margin.
+fn clamp_axis_asymmetric(
+    origin: Pixels,
+    length: Pixels,
+    viewport: Pixels,
+    top_margin: Pixels,
+    bottom_margin: Pixels,
+) -> Pixels {
+    let max_origin = (viewport - bottom_margin - length).max(top_margin);
+    origin.max(top_margin).min(max_origin)
 }
 
 fn clamp_axis_with_end_inset(
@@ -402,6 +417,22 @@ mod tests {
 
         assert_eq!(geometry.bubble_bounds.origin.y, TOP_SAFE_MARGIN);
         assert_eq!(geometry.arrow_offset, TOP_SAFE_MARGIN + ARROW_INSET);
+    }
+
+    #[test]
+    fn right_placement_centers_on_triggers_near_the_window_bottom() {
+        // A trigger flush to the viewport bottom (the compact sidebar's
+        // settings back button) must keep its tooltip centered on it; the
+        // titlebar margin is a top-edge rule and must not shove the bubble
+        // upward.
+        let trigger = bounds(40., 248., 30., 20.);
+        let geometry = resolve_tooltip_geometry(
+            trigger,
+            size(px(100.), px(32.)),
+            size(px(400.), px(300.)),
+            TooltipPlacement::Right,
+        );
+        assert_eq!(geometry.bubble_bounds.center().y, trigger.center().y);
     }
 
     #[test]
