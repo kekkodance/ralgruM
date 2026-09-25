@@ -5,9 +5,9 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, CursorStyle, ElementId, Hitbox, HitboxBehavior, ListOffset, ListState, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollHandle,
-    ScrollWheelEvent, Size, Window, canvas, div, point, prelude::*, px, size,
+    AnyElement, App, CursorStyle, ElementId, Hitbox, HitboxBehavior, ListOffset, ListState,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta,
+    ScrollHandle, ScrollWheelEvent, Size, Window, canvas, div, point, prelude::*, px, size,
 };
 use gpui_component::scroll::ScrollbarHandle;
 
@@ -131,6 +131,9 @@ pub(crate) struct BrowserScrollState {
     inner: Rc<RefCell<BrowserScrollStateInner>>,
 }
 
+/// Callback fired on captured wheel scrolls over the surface.
+type OnWheel = Rc<dyn Fn(&mut Window, &mut App)>;
+
 #[derive(Default)]
 struct BrowserScrollStateInner {
     wheel_target: Option<f32>,
@@ -142,6 +145,7 @@ struct BrowserScrollStateInner {
     autoscroll: Option<AutoscrollState>,
     generation: u64,
     scrolls_while_menu_open: bool,
+    on_wheel: Option<OnWheel>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -493,6 +497,14 @@ impl BrowserScrollState {
         Rc::as_ptr(&self.inner) as usize
     }
 
+    /// Registers a callback invoked on captured wheel scrolls over this
+    /// surface. The capture-phase handler consumes wheel events before
+    /// bubble-phase listeners run, so scroll-dismissal hooks (closing an
+    /// open dropdown) must attach here instead of `on_scroll_wheel`.
+    pub(crate) fn on_wheel(&self, callback: impl Fn(&mut Window, &mut App) + 'static) {
+        self.inner.borrow_mut().on_wheel = Some(Rc::new(callback));
+    }
+
     pub(crate) fn reset(&self) {
         let mut inner = self.inner.borrow_mut();
         inner.clear_wheel_motion();
@@ -771,6 +783,9 @@ fn register_handlers(
         }
 
         cancel_autoscroll_and_release(&wheel_state, window);
+        if let Some(on_wheel) = wheel_state.inner.borrow().on_wheel.clone() {
+            on_wheel(window, cx);
+        }
         let delta_y = -f32::from(delta.y);
         match event.delta {
             ScrollDelta::Lines(_) if cx.reduce_motion() => {

@@ -5,8 +5,7 @@ use std::{
 
 use gpui::{
     AnimationExt as _, Context, Entity, EventEmitter, FontWeight, IntoElement, KeyDownEvent,
-    Render, ScrollHandle, ScrollWheelEvent, SharedString, Task, Window, div, point, prelude::*, px,
-    rgb,
+    Render, ScrollHandle, SharedString, Task, Window, div, point, prelude::*, px, rgb,
 };
 use gpui_component::IndexPath;
 use gpui_component::select::{SelectEvent, SelectState};
@@ -403,6 +402,22 @@ impl SettingsView {
             scroll: ScrollHandle::new(),
             browser_scroll: BrowserScrollState::new(),
         };
+        // Scrolling the settings panel dismisses open dropdown menus before
+        // they can clip behind the sticky header. The browser scroll consumes
+        // wheel events in the capture phase, so the hook attaches there.
+        let close_on_scroll = [
+            this.start_page_select.clone(),
+            this.lyrics_source_select.clone(),
+            this.output_device_select.clone(),
+            this.cache_limit_select.clone(),
+        ];
+        this.browser_scroll.on_wheel(move |window, cx| {
+            for select in &close_on_scroll {
+                select.update(cx, |select, cx| {
+                    select.close(window, cx);
+                });
+            }
+        });
         let mut view = this;
         view.subscribe_selects(cx);
         view.refresh_output_device_select(window, cx);
@@ -459,22 +474,6 @@ impl SettingsView {
             options.into_iter().map(SharedString::from).collect(),
             has_rows.then_some(selected),
         )
-    }
-
-    /// Closes any open dropdown menu. Scrolling the settings panel while a
-    /// menu is open would leave the anchored menu clipping behind the header,
-    /// so the scroll dismisses the menu like an outside click.
-    fn close_open_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for select in [
-            &self.start_page_select,
-            &self.lyrics_source_select,
-            &self.output_device_select,
-            &self.cache_limit_select,
-        ] {
-            select.update(cx, |select, cx| {
-                select.close(window, cx);
-            });
-        }
     }
 
     /// Rebuilds the output device picker for the current draft. The row
@@ -947,9 +946,6 @@ impl Render for SettingsView {
             .size_full()
             .min_h_0()
             .track_scroll(&self.scroll)
-            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, window, cx| {
-                this.close_open_selects(window, cx)
-            }))
             .overflow_y_scroll()
             .px(px(header_padding))
             .pt(px(24.))
