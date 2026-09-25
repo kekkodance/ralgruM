@@ -25,6 +25,9 @@ const TOOLTIP_LINE_HEIGHT: f32 = 14.85;
 const OVERLAY_DEFERRED_PRIORITY: usize = 3;
 const TOOLTIP_BACKGROUND: u32 = 0x18181bfa;
 const TOOLTIP_BORDER: u32 = 0x3f3f46eb;
+/// Distance the tooltip slides while entering, from the direction of its
+/// trigger toward its final resting place.
+const ENTRY_SLIDE_PX: f32 = 6.;
 
 /// App-owned tooltip overlay state. The shell creates one entity for its
 /// window and registers a weak handle so trigger elements do not retain it.
@@ -326,6 +329,19 @@ impl Render for AppTooltipOverlay {
             }
         };
 
+        // The tooltip enters from the side it appears on: entering from the
+        // direction of its trigger. Vertical placements slide along the
+        // trigger axis; the end-inset pin places the bubble flush to the
+        // viewport edge left of its trigger, so it enters moving left.
+        let (enter_dx, enter_dy) = match request.bubble_horizontal_pin {
+            BubbleHorizontalPin::ViewportEndInset(_) => (-ENTRY_SLIDE_PX, 0.),
+            BubbleHorizontalPin::None => match geometry.placement {
+                TooltipPlacement::Top => (0., ENTRY_SLIDE_PX),
+                TooltipPlacement::Bottom => (0., -ENTRY_SLIDE_PX),
+                TooltipPlacement::Right => (-ENTRY_SLIDE_PX, 0.),
+            },
+        };
+
         let animation_id = ElementId::from(("app-tooltip-entry", generation));
         deferred(
             div()
@@ -336,10 +352,15 @@ impl Render for AppTooltipOverlay {
                 // border segment beneath its inner half.
                 .child(bubble)
                 .child(arrow)
-                .with_animation(animation_id, crate::motion::interaction(), |this, delta| {
-                    this.opacity(crate::motion::lerp(0.0, 1.0, delta))
-                        .top(px(crate::motion::lerp(2.0, 0.0, delta)))
-                }),
+                .with_animation(
+                    animation_id,
+                    crate::motion::interaction(),
+                    move |this, delta| {
+                        this.opacity(crate::motion::lerp(0.0, 1.0, delta))
+                            .top(px(crate::motion::lerp(enter_dy, 0.0, delta)))
+                            .left(px(crate::motion::lerp(enter_dx, 0.0, delta)))
+                    },
+                ),
         )
         .with_priority(OVERLAY_DEFERRED_PRIORITY)
         .into_any_element()
