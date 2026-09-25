@@ -40,10 +40,10 @@ fn take_slot() -> PopoutSlot {
 /// Clears the stored handle only when it still matches, so a stale close
 /// cannot drop a freshly reopened window.
 fn clear_slot(handle: &WindowHandle<gpui_component::Root>) {
-    if let Ok(mut slot) = POPOUT_WINDOW.lock() {
-        if slot.as_ref() == Some(handle) {
-            *slot = None;
-        }
+    if let Ok(mut slot) = POPOUT_WINDOW.lock()
+        && slot.as_ref() == Some(handle)
+    {
+        *slot = None;
     }
 }
 /// Opens the detached sidebar window, or focuses it when it already exists.
@@ -93,7 +93,7 @@ pub(super) fn open_or_focus_popout(
             window_min_size: Some(size(px(POPOUT_MIN_WIDTH), px(POPOUT_MIN_HEIGHT))),
             ..Default::default()
         },
-        move |window, cx| build_root(&playback, &lyrics, &queue, window, cx),
+        move |window, cx| build_root(&playback, &lyrics, queue, window, cx),
     );
     match opened {
         Ok(handle) => {
@@ -145,13 +145,12 @@ pub(super) fn open_or_focus_popout(
 /// Closes the detached sidebar window when one exists. The caller decides
 /// whether the hosted view redocks; this only handles the window.
 pub(super) fn close_popout(cx: &mut App) {
-    if let PopoutSlot::Occupied(handle) = take_slot() {
-        if handle
+    if let PopoutSlot::Occupied(handle) = take_slot()
+        && handle
             .update(cx, |_, window, _| window.remove_window())
             .is_err()
-        {
-            clear_slot(&handle);
-        }
+    {
+        clear_slot(&handle);
     }
 }
 

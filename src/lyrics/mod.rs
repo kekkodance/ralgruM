@@ -600,10 +600,10 @@ impl LyricsPanel {
                 if primary_has_lyrics {
                     // Cache only; the displayed primary stays put and the
                     // provider toggle switches instantly without re-fetch.
-                    if let Ok(value) = alternate_result {
-                        if this.cache.get(&alternate_key).is_none() {
-                            this.cache.set(alternate_key.clone(), value);
-                        }
+                    if let Ok(value) = alternate_result
+                        && this.cache.get(&alternate_key).is_none()
+                    {
+                        this.cache.set(alternate_key.clone(), value);
                     }
                     return;
                 }
