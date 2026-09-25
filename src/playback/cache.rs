@@ -176,6 +176,45 @@ fn cached_provider(provider: PlaybackProvider) -> CachedProvider {
     }
 }
 
+/// A fully-cached variant selected for offline playback.
+#[derive(Clone, Debug)]
+pub(crate) struct OfflinePlaybackVariant {
+    pub(crate) cache_key: String,
+    pub(crate) total: u64,
+    pub(crate) extension: String,
+    pub(crate) format_name: String,
+    quality: u8,
+}
+
+/// Rank cached variants by audio quality; a higher rank is better. Lossless
+/// FLAC leads, then WAV/AIFF, then the lossy tiers by bitrate label.
+fn offline_variant_rank(_variant: &str, extension: &str, format_name: &str) -> u8 {
+    if extension == "flac" || format_name.eq_ignore_ascii_case("FLAC") {
+        return 5;
+    }
+    if extension == "wav" || extension == "aiff" {
+        return 4;
+    }
+    let lossy = format_name
+        .rsplit('_')
+        .next()
+        .and_then(|kbps| kbps.parse::<u8>().ok())
+        .unwrap_or(0);
+    (lossy / 32).min(10) + (lossy > 0) as u8
+}
+
+fn parse_cached_key_from_parts(
+    provider: CachedProvider,
+    track_id: &str,
+    cache_key: &str,
+) -> Option<(String, String, String)> {
+    let provider = match provider {
+        CachedProvider::Deezer => "deezer",
+        CachedProvider::Soundcloud => "soundcloud",
+    };
+    parse_cached_key_from_prefix(provider, track_id, cache_key)
+}
+
 fn parse_cached_key(
     provider: PlaybackProvider,
     track_id: &str,
@@ -185,6 +224,14 @@ fn parse_cached_key(
         PlaybackProvider::Deezer => "deezer",
         PlaybackProvider::SoundCloud => "soundcloud",
     };
+    parse_cached_key_from_prefix(provider, track_id, cache_key)
+}
+
+fn parse_cached_key_from_prefix(
+    provider: &str,
+    track_id: &str,
+    cache_key: &str,
+) -> Option<(String, String, String)> {
     let prefix = format!("{provider}:{track_id}:");
     let remainder = cache_key.strip_prefix(&prefix)?;
     let mut fields = remainder.splitn(3, ':');
@@ -432,6 +479,62 @@ impl AudioCache {
         let value = tokio::fs::read_to_string(path).await.ok()?;
         let total = value.trim().parse::<u64>().ok()?;
         (total > 0 && total <= self.max_bytes()).then_some(total)
+    }
+
+    /// Find the best fully-cached variant of a track for offline playback.
+    /// Returns the cache key, total size, and the extension/format name pair
+    /// so the caller can synthesize a source without touching the network.
+    /// Highest quality wins; ties prefer the newest catalog record.
+    pub(crate) async fn offline_playback_variant(
+        &self,
+        provider: PlaybackProvider,
+        track_id: &str,
+    ) -> Option<OfflinePlaybackVariant> {
+        if track_id.trim().is_empty() {
+            return None;
+        }
+        let bytes = {
+            let _guard = self.maintenance.lock().await;
+            tokio::fs::read(self.catalog_path()).await.ok()
+        }?;
+        let records = serde_json::from_slice::<Vec<CachedTrack>>(&bytes).ok()?;
+        let provider = cached_provider(provider);
+        let mut selected: Option<OfflinePlaybackVariant> = None;
+        for record in records.into_iter().rev() {
+            if record.provider != provider || record.id != track_id {
+                continue;
+            }
+            let Some((variant, extension, format_name)) =
+                parse_cached_key_from_parts(provider, track_id, &record.cache_key)
+            else {
+                continue;
+            };
+            let quality = offline_variant_rank(&variant, &extension, &format_name);
+            if selected
+                .as_ref()
+                .is_some_and(|current| current.quality >= quality)
+            {
+                continue;
+            }
+            let total = match record.total {
+                Some(total) if total > 0 && total <= self.max_bytes() => total,
+                _ => match self.known_total(&record.cache_key).await {
+                    Some(total) => total,
+                    None => continue,
+                },
+            };
+            if !self.is_fully_cached(&record.cache_key, total).await {
+                continue;
+            }
+            selected = Some(OfflinePlaybackVariant {
+                cache_key: record.cache_key,
+                total,
+                extension,
+                format_name,
+                quality,
+            });
+        }
+        selected
     }
 
     /// Find one complete cache variant for an exact download request. This
@@ -1489,6 +1592,55 @@ mod tests {
 
         tokio::fs::write(&path, [1, 2, 3]).await.unwrap();
         assert!(cache.cached_tracks().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn offline_playback_variant_picks_the_best_complete_track() {
+        let temp = TempDir::new().unwrap();
+        let cache = AudioCache::new(temp.path().into(), 1 << 20);
+        let track = test_track("offline-id", "Offline track");
+        let flac_key = "soundcloud:offline-id:standard:flac:FLAC";
+        cache.remember_track(&track, flac_key, Some(8)).await;
+        cache
+            .write(
+                &cache.block_path(flac_key, 8, 0, 7),
+                &[0; 8],
+                cache.generation(),
+            )
+            .await;
+        // A partial higher-rank entry must not shadow the complete one.
+        let partial_key = "soundcloud:offline-id:standard:wav:WAV";
+        cache.remember_track(&track, partial_key, Some(8)).await;
+        cache
+            .write(
+                &cache.block_path(partial_key, 8, 0, 7),
+                &[0; 4],
+                cache.generation(),
+            )
+            .await;
+
+        let variant = cache
+            .offline_playback_variant(PlaybackProvider::SoundCloud, "offline-id")
+            .await
+            .expect("complete variant");
+        assert_eq!(variant.cache_key, flac_key);
+        assert_eq!(variant.total, 8);
+        assert_eq!(variant.extension, "flac");
+        assert_eq!(variant.format_name, "FLAC");
+
+        // Unknown tracks and empty ids resolve to nothing.
+        assert!(
+            cache
+                .offline_playback_variant(PlaybackProvider::SoundCloud, "missing")
+                .await
+                .is_none()
+        );
+        assert!(
+            cache
+                .offline_playback_variant(PlaybackProvider::SoundCloud, "")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]

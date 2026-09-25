@@ -24,6 +24,21 @@ pub(crate) enum AudioFormat {
 }
 
 impl AudioFormat {
+    /// Map a file extension back to the audio format it stores.
+    pub(crate) fn from_extension(extension: &str) -> Option<Self> {
+        Some(match extension.trim().to_ascii_lowercase().as_str() {
+            "flac" => Self::Flac,
+            "mp3" => Self::Mp3,
+            "wav" => Self::Wav,
+            "aiff" | "aif" | "aifc" => Self::Aiff,
+            "ogg" => Self::OggVorbis,
+            "opus" => Self::OggOpus,
+            "aac" => Self::Aac,
+            "m4a" | "mp4" => Self::M4a,
+            _ => return None,
+        })
+    }
+
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Flac => "FLAC",

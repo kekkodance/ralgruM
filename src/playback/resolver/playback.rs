@@ -440,7 +440,7 @@ impl StreamResolver {
         };
         let murglar_fallback =
             track.provider == PlaybackProvider::Deezer && murglar.is_some() && deezer_arl.is_some();
-        let mut source = self
+        let mut source = match self
             .resolve_playback_source(
                 track,
                 deezer_arl.clone(),
@@ -451,7 +451,49 @@ impl StreamResolver {
                 false,
                 source_cache_epoch,
             )
-            .await?;
+            .await
+        {
+            Ok(source) => source,
+            Err(error) if error == "Playback request cancelled" => return Err(error),
+            Err(error) => {
+                // The network resolution failed (for example, the machine is
+                // fully offline). A fully-cached variant still plays: the
+                // catalog carries the block-store identity and the block
+                // loop serves every byte from disk.
+                let cached = match self.cache.as_ref() {
+                    Some(cache) => {
+                        cache
+                            .offline_playback_variant(track.provider, track.id.as_str())
+                            .await
+                    }
+                    None => None,
+                };
+                let Some(cached) = cached else {
+                    return Err(error);
+                };
+                let format = offline_cached_format(&cached.extension);
+                crate::diagnostics::event(
+                    "INFO",
+                    format!(
+                        "playback offline cache key={} total={} format={}",
+                        cached.cache_key,
+                        cached.total,
+                        format.label()
+                    ),
+                );
+                ResolvedSource {
+                    data: SourceData::Remote("about:offline-cached".to_owned()),
+                    size: cached.total,
+                    deezer_track_id: (track.provider == PlaybackProvider::Deezer)
+                        .then(|| track.id.clone()),
+                    is_soundcloud: track.provider == PlaybackProvider::SoundCloud,
+                    cache_identity: Some(cached.cache_key),
+                    format,
+                    format_name: cached.format_name.clone(),
+                    declared_bitrate: None,
+                }
+            }
+        };
         if source.size == 0
             && let (Some(cache), Some(key)) = (self.cache.as_ref(), cache_key(&source))
             && let Some(total) = cache.known_total(&key).await
@@ -1784,4 +1826,10 @@ impl StreamResolver {
             .await;
         Ok(())
     }
+}
+
+/// Map a cached variant's extension back to the audio format used to decode
+/// it. The format name is informational; the extension is authoritative.
+fn offline_cached_format(extension: &str) -> AudioFormat {
+    AudioFormat::from_extension(extension).unwrap_or(AudioFormat::Flac)
 }
