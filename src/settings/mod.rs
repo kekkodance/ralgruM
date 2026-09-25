@@ -5,7 +5,8 @@ use std::{
 
 use gpui::{
     AnimationExt as _, Context, Entity, EventEmitter, FontWeight, IntoElement, KeyDownEvent,
-    Render, ScrollHandle, SharedString, Task, Window, div, point, prelude::*, px, rgb,
+    Render, ScrollHandle, ScrollWheelEvent, SharedString, Task, Window, div, point, prelude::*, px,
+    rgb,
 };
 use gpui_component::IndexPath;
 use gpui_component::select::{SelectEvent, SelectState};
@@ -458,6 +459,22 @@ impl SettingsView {
             options.into_iter().map(SharedString::from).collect(),
             has_rows.then_some(selected),
         )
+    }
+
+    /// Closes any open dropdown menu. Scrolling the settings panel while a
+    /// menu is open would leave the anchored menu clipping behind the header,
+    /// so the scroll dismisses the menu like an outside click.
+    fn close_open_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for select in [
+            &self.start_page_select,
+            &self.lyrics_source_select,
+            &self.output_device_select,
+            &self.cache_limit_select,
+        ] {
+            select.update(cx, |select, cx| {
+                select.close(window, cx);
+            });
+        }
     }
 
     /// Rebuilds the output device picker for the current draft. The row
@@ -929,7 +946,9 @@ impl Render for SettingsView {
             .id("settings-panel-scroll-content")
             .size_full()
             .min_h_0()
-            .track_scroll(&self.scroll)
+            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, window, cx| {
+                this.close_open_selects(window, cx)
+            }))
             .overflow_y_scroll()
             .px(px(header_padding))
             .pt(px(24.))

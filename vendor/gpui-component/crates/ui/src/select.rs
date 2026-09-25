@@ -331,6 +331,20 @@ where
         self.state.focus_handle.focus(window, cx);
     }
 
+    /// Whether the dropdown menu is currently open.
+    pub fn is_open(&self) -> bool {
+        self.state.is_open()
+    }
+
+    /// Close the dropdown menu if it is open. Scrolling containers call this
+    /// so an open menu cannot linger where its anchored layer would clip.
+    pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.is_open() {
+            self.set_open(false, window, cx);
+            cx.notify();
+        }
+    }
+
     fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.state.list.read(cx).is_focused(window, cx)
             || self.state.focus_handle.is_focused(window)

@@ -455,6 +455,22 @@ impl LyricsPanel {
         generation: u64,
         cx: &mut Context<Self>,
     ) {
+        self.load_single_attempt(track, provider, manual, generation, 0, cx);
+    }
+
+    /// One attempt of the single-provider load. A transport failure of the
+    /// preferred provider (slow connection, timeout) retries once before the
+    /// automatic fallback runs, so a momentarily slow network cannot swap
+    /// the user's preferred provider for the alternate.
+    fn load_single_attempt(
+        &mut self,
+        track: LyricsTrack,
+        provider: LyricsProvider,
+        manual: bool,
+        generation: u64,
+        attempt: u8,
+        cx: &mut Context<Self>,
+    ) {
         self.status = Status::Loading;
         let client = self.client.clone();
         let cancellation = self.cancellation.clone();
@@ -480,6 +496,10 @@ impl LyricsPanel {
                         }
                     }
                     Err(error) if !manual && error != "Lyrics request cancelled" => {
+                        if attempt == 0 {
+                            this.load_single_attempt(track, provider, manual, generation, 1, cx);
+                            return;
+                        }
                         this.load_alternate(track, provider, None, generation, cx)
                     }
                     Err(error) if error != "Lyrics request cancelled" => {
@@ -547,7 +567,8 @@ impl LyricsPanel {
         self.status = Status::Loading;
         let client = self.client.clone();
         let cancellation = self.cancellation.clone();
-        let primary_task = self.runtime.spawn({
+        let runtime = self.runtime.clone();
+        let primary_task = runtime.spawn({
             let client = client.clone();
             let cancellation = cancellation.clone();
             let request_track = track.clone();
@@ -557,15 +578,28 @@ impl LyricsPanel {
                     .await
             }
         });
-        let alternate_task = self.runtime.spawn({
+        let retry_client = client.clone();
+        let retry_cancellation = cancellation.clone();
+        let alternate_task = runtime.spawn({
             let request_track = track.clone();
             async move { client.load(alternate, request_track, cancellation).await }
         });
         cx.spawn(async move |this, cx| {
             // The preferred provider decides what the panel shows: await it
             // first so the loading screen belongs to it, and fall back to the
-            // alternate only when it returns no lyrics.
-            let primary_result = lyrics_task_result(primary_task).await;
+            // alternate only when it returns no lyrics. A transport failure
+            // (slow connection) retries once so a slow network cannot swap
+            // the preferred provider for the alternate.
+            let mut primary_result = lyrics_task_result(primary_task).await;
+            if is_transport_failure(&primary_result) {
+                let retry_track = track.clone();
+                let retry_task = runtime.spawn(async move {
+                    retry_client
+                        .load(primary_provider, retry_track, retry_cancellation)
+                        .await
+                });
+                primary_result = lyrics_task_result(retry_task).await;
+            }
             let primary_has_lyrics = this
                 .update(cx, |this, cx| {
                     if generation != this.generation {
@@ -817,6 +851,16 @@ fn alternate_provider(provider: LyricsProvider) -> LyricsProvider {
         LyricsProvider::Musixmatch => LyricsProvider::Genius,
         LyricsProvider::Genius => LyricsProvider::Musixmatch,
     }
+}
+
+/// True when a lyrics result is a transport failure (network error or
+/// timeout) rather than a definitive provider answer. These deserve one
+/// retry before the alternate provider takes over.
+fn is_transport_failure(result: &Result<LyricsResponse, String>) -> bool {
+    result
+        .as_ref()
+        .err()
+        .is_some_and(|error| error != "Lyrics request cancelled")
 }
 
 fn automatic_fallback_selection(
