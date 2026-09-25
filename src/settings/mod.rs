@@ -946,6 +946,7 @@ impl Render for SettingsView {
             .id("settings-panel-scroll-content")
             .size_full()
             .min_h_0()
+            .track_scroll(&self.scroll)
             .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, window, cx| {
                 this.close_open_selects(window, cx)
             }))
