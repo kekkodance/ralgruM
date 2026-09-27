@@ -29,6 +29,7 @@ pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
 pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
 pub(crate) const WM_GPUI_KEYDOWN: u32 = WM_USER + 8;
 pub(crate) const WM_GPUI_END_SESSION: u32 = WM_USER + 9;
+pub(crate) const WM_GPUI_POWER_BROADCAST: u32 = WM_USER + 10;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 
@@ -111,6 +112,10 @@ impl WindowsWindowInner {
             WM_DESTROY => self.handle_destroy_msg(handle),
             WM_QUERYENDSESSION => Some(1),
             WM_ENDSESSION => self.handle_end_session_msg(wparam),
+            // The platform window is message-only, so broadcast messages
+            // like WM_POWERBROADCAST never reach it; forward from this
+            // top-level window instead, the same way WM_ENDSESSION is.
+            WM_POWERBROADCAST => self.handle_power_broadcast_msg(wparam),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
             WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),
             WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
@@ -185,6 +190,19 @@ impl WindowsWindowInner {
             }
         }
         Some(0)
+    }
+
+    fn handle_power_broadcast_msg(&self, wparam: WPARAM) -> Option<isize> {
+        unsafe {
+            SendMessageW(
+                self.platform_window_handle,
+                WM_GPUI_POWER_BROADCAST,
+                Some(WPARAM(self.validation_number)),
+                Some(LPARAM(wparam.0 as isize)),
+            );
+        }
+        // The notification was already consumed by the platform window.
+        Some(1)
     }
 
     fn handle_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {

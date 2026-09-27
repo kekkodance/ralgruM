@@ -33,7 +33,10 @@ use super::{
     PlaybackProvider, PlaybackState, PlaybackStatus, PlaybackTrack, PreviousAction,
     QueueExtensionTicket, ResolvedTrackInfo, RightSidebar, asio_drivers,
     deezer_extension::{self, ExtensionObserverKey},
-    engine::{AudioEngine, AudioOutputTarget, RodioEngine, SeekCompletion, SeekOutcome},
+    engine::{
+        AudioEngine, AudioOutputTarget, RodioEngine, SeekCompletion, SeekOutcome,
+        asio_endpoint_matches_driver,
+    },
     fade::{
         USER_FADE_FRAME, USER_FADE_SETTLE_TIMEOUT, UserFadeSupervisor, UserToggleFadeDecision,
         user_toggle_fade_decision,
@@ -41,6 +44,7 @@ use super::{
     listen_history::{
         DeezerListenSession, ListenHistorySignal, SoundCloudListenReport, deezer_next_media,
     },
+    output_devices,
     progressive::TimelineSuffixState,
     resolver::{ProgressCallback, ProgressUpdate, StreamResolver},
     standby::{self, ArmedStandby, PreparedSource, SinkProbe, StandbyPhase, WatchTick},
@@ -86,6 +90,10 @@ pub(crate) struct PlaybackModel {
     asio_bridge_origin: Option<AudioOutputTarget>,
     queued_output_request: Option<(bool, Option<String>, Option<String>)>,
     pending_output_resume: Option<OutputResume>,
+    /// Detects a wedged output after the system wakes: when the sink position
+    /// refuses to advance while playing, the reopen did not revive the
+    /// backend and the matching plain endpoint must take over.
+    wake_stall_probe: Option<WakeStallProbe>,
     ai_client: Result<crate::search::SearchClient, String>,
     ai_enrichment_abort: Option<tokio::task::AbortHandle>,
     ai_enrichment_id: u64,
@@ -108,6 +116,14 @@ struct SeekSliderInteraction {
     cancelled: bool,
     pointer_change: Option<SliderValue>,
     control_disabled: bool,
+}
+
+/// Position seen by the previous poll, used to detect a sink that refuses
+/// to advance while playback claims to be running.
+#[derive(Clone, Copy, Debug)]
+struct WakeStallProbe {
+    last_position: Duration,
+    poll_count: u32,
 }
 
 impl SeekSliderInteraction {
@@ -484,6 +500,7 @@ impl PlaybackModel {
             asio_bridge_origin: None,
             queued_output_request: None,
             pending_output_resume: None,
+            wake_stall_probe: None,
             ai_client: crate::search::SearchClient::new().map_err(|error| error.message),
             ai_enrichment_abort: None,
             ai_enrichment_id: 0,
@@ -1439,6 +1456,9 @@ impl PlaybackModel {
                     }
                 };
                 self.state.position = position;
+                if self.wake_stall_probe.is_some() && self.check_wake_stall(position, cx) {
+                    return;
+                }
                 if (restore_landed || restore_failed)
                     && let Some(resume) = self
                         .pending_output_resume

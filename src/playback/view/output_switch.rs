@@ -97,7 +97,9 @@ impl PlaybackModel {
     /// Reinitializes the audio output after the system wakes from sleep. A
     /// sleeping OS can leave an ASIO driver's buffer-switch interrupt dead
     /// while every layer above still reports the same target, so the switch
-    /// must be forced even when the saved target matches the engine's.
+    /// must be forced even when the saved target matches the engine's. The
+    /// stall probe is armed so a backend that still refuses to move the
+    /// position falls back to a working endpoint.
     pub(crate) fn reinitialize_audio_output_after_wake(
         &mut self,
         asio_mode: bool,
@@ -105,6 +107,10 @@ impl PlaybackModel {
         asio_driver: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        self.wake_stall_probe = Some(WakeStallProbe {
+            last_position: self.state.position,
+            poll_count: 0,
+        });
         self.set_audio_output_with_reason(asio_mode, output_device, asio_driver, true, cx);
     }
 
@@ -317,6 +323,75 @@ impl PlaybackModel {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Verifies playback actually advanced after the wake-driven output
+    /// reopen. A wedged backend keeps the position frozen even though every
+    /// layer above still reports a live stream, so after a grace window the
+    /// engine falls back to the plain endpoint matching the stuck driver
+    /// (or the system default). The ordinary switch path reloads the source
+    /// at the stalled position, so playback resumes where it froze.
+    pub(super) fn check_wake_stall(&mut self, position: Duration, cx: &mut Context<Self>) -> bool {
+        // A quarter second per poll; several seconds of grace cover slow
+        // stream opens without ever firing on ordinary playback.
+        const GRACE_POLLS: u32 = 16;
+        let Some(mut probe) = self.wake_stall_probe else {
+            return false;
+        };
+        if self.state.status != PlaybackStatus::Playing || self.pending_output_target.is_some() {
+            return false;
+        }
+        if position != probe.last_position {
+            probe.last_position = position;
+            probe.poll_count = 0;
+            self.wake_stall_probe = Some(probe);
+            return false;
+        }
+        probe.poll_count += 1;
+        self.wake_stall_probe = Some(probe);
+        if probe.poll_count < GRACE_POLLS {
+            return false;
+        }
+        self.wake_stall_probe = None;
+        let driver_name =
+            self.engine
+                .as_ref()
+                .ok()
+                .and_then(|engine| match engine.output_target() {
+                    AudioOutputTarget::AsioDriver(name) => Some(name.clone()),
+                    _ => None,
+                });
+        diagnostics::event(
+            "WARN",
+            format!(
+                "playback stalled at {}ms after the system wake; switching away from the \
+                 unresponsive audio output",
+                position.as_millis()
+            ),
+        );
+        crate::toast::push_global(
+            cx,
+            crate::toast::ToastKind::Error,
+            "The audio output stopped responding",
+            Some(
+                "Playback will continue on the fallback device; switch outputs to retry \
+                 this one."
+                    .into(),
+            ),
+        );
+        match driver_name {
+            Some(driver_name) => {
+                let fallback = output_devices::list_output_devices()
+                    .into_iter()
+                    .find(|device| asio_endpoint_matches_driver(device, &driver_name));
+                match fallback {
+                    Some(device) => self.set_audio_output(false, Some(device), None, cx),
+                    None => self.set_audio_output(false, None, None, cx),
+                }
+            }
+            None => self.set_audio_output(false, None, None, cx),
+        }
+        true
     }
 }
 

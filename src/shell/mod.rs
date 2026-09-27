@@ -656,9 +656,12 @@ impl RalgrumApp {
             // ASIO driver sessions die across system sleeps without any
             // error surfacing: the driver's buffer-switch interrupt stops
             // firing while cpal's stream still looks running. Re-applying
-            // the saved output target reopens the stream (ASIOStart on a
-            // fresh driver session) through the standard output-switch
-            // machinery, which also restores the playback position.
+            // the saved output target reopens the stream through the
+            // standard output-switch machinery, which also restores the
+            // playback position. The platform forwards the wake broadcast
+            // to the message-only platform window, and the armed stall
+            // probe falls back to a working endpoint if the reopened
+            // backend still refuses to advance.
             let shell = cx.entity().downgrade();
             cx.on_system_wake(move |cx| {
                 crate::diagnostics::event(
