@@ -652,6 +652,38 @@ impl RalgrumApp {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&window_state, |_, _, cx| cx.notify()).detach();
+        {
+            // ASIO driver sessions die across system sleeps without any
+            // error surfacing: the driver's buffer-switch interrupt stops
+            // firing while cpal's stream still looks running. Re-applying
+            // the saved output target reopens the stream (ASIOStart on a
+            // fresh driver session) through the standard output-switch
+            // machinery, which also restores the playback position.
+            let shell = cx.entity().downgrade();
+            cx.on_system_wake(move |cx| {
+                crate::diagnostics::event(
+                    "INFO",
+                    "system resumed; reinitializing the audio output",
+                );
+                if let Some(shell) = shell.upgrade() {
+                    shell.update(cx, |this, cx| {
+                        let saved = this.settings.read(cx).saved();
+                        let asio_mode = saved.asio_mode;
+                        let output_device = saved.output_device.clone();
+                        let asio_driver = saved.asio_driver.clone();
+                        this.playback.update(cx, |playback, cx| {
+                            playback.reinitialize_audio_output_after_wake(
+                                asio_mode,
+                                output_device,
+                                asio_driver,
+                                cx,
+                            );
+                        });
+                    });
+                }
+            })
+            .detach();
+        }
         let saved = settings.read(cx).saved().clone();
         cx.set_reduce_motion(saved.motion_preference.is_reduced());
         let cache = settings.read(cx).cache.clone();

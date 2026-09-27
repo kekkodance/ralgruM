@@ -91,6 +91,31 @@ impl PlaybackModel {
         asio_driver: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        self.set_audio_output_with_reason(asio_mode, output_device, asio_driver, false, cx);
+    }
+
+    /// Reinitializes the audio output after the system wakes from sleep. A
+    /// sleeping OS can leave an ASIO driver's buffer-switch interrupt dead
+    /// while every layer above still reports the same target, so the switch
+    /// must be forced even when the saved target matches the engine's.
+    pub(crate) fn reinitialize_audio_output_after_wake(
+        &mut self,
+        asio_mode: bool,
+        output_device: Option<String>,
+        asio_driver: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_audio_output_with_reason(asio_mode, output_device, asio_driver, true, cx);
+    }
+
+    fn set_audio_output_with_reason(
+        &mut self,
+        asio_mode: bool,
+        output_device: Option<String>,
+        asio_driver: Option<String>,
+        force_reopen: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.pending_output_target.is_some() {
             self.queued_output_request = Some((asio_mode, output_device, asio_driver));
             return;
@@ -114,6 +139,7 @@ impl PlaybackModel {
                         output_device,
                         asio_driver,
                         epoch,
+                        force_reopen,
                         cx,
                     );
                 }
@@ -123,6 +149,7 @@ impl PlaybackModel {
         .detach();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn begin_audio_output_switch(
         &mut self,
         target: AudioOutputTarget,
@@ -130,13 +157,14 @@ impl PlaybackModel {
         output_device: Option<String>,
         asio_driver: Option<String>,
         epoch: u64,
+        force_reopen: bool,
         cx: &mut Context<Self>,
     ) {
         self.pending_output_target = None;
         let Ok(engine) = self.engine.as_ref() else {
             return;
         };
-        if *engine.output_target() == target {
+        if *engine.output_target() == target && !force_reopen {
             self.sync_transport_after_fade_cancel();
             return;
         }
