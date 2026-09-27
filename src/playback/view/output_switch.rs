@@ -117,6 +117,9 @@ impl PlaybackModel {
         cx: &mut Context<Self>,
     ) {
         self.wake_retries_left = WAKE_OUTPUT_RETRIES;
+        if let Ok(engine) = self.engine.as_mut() {
+            engine.mark_stream_slept_through();
+        }
         self.wake_stall_probe = Some(WakeStallProbe {
             last_position: self.state.position,
             poll_count: 0,
@@ -309,20 +312,43 @@ impl PlaybackModel {
                     }
                     Err(error) => {
                         diagnostics::event("WARN", format!("audio output switch failed: {error}"));
-                        if this.wake_retries_left > 0 {
-                            // A wake can race USB re-enumeration: the saved
-                            // output is briefly missing even though it comes
-                            // back moments later. Retry the same target
-                            // instead of surfacing a failure to the user.
-                            this.wake_retries_left -= 1;
-                            diagnostics::event(
-                                "WARN",
-                                format!(
-                                    "retrying the audio output after the wake ({})",
-                                    this.wake_retries_left
+                        if force_reopen {
+                            if this.wake_retries_left > 0 {
+                                // A wake can race USB re-enumeration: the saved
+                                // output is briefly missing even though it comes
+                                // back moments later. Retry the same target
+                                // instead of surfacing a failure to the user.
+                                this.wake_retries_left -= 1;
+                                diagnostics::event(
+                                    "WARN",
+                                    format!(
+                                        "retrying the audio output after the wake ({})",
+                                        this.wake_retries_left
+                                    ),
+                                );
+                                this.retry_wake_output(cx);
+                                cx.notify();
+                                return;
+                            }
+                            // The selected output never came back after the
+                            // wake. Pause on it rather than migrating: the
+                            // user picks when and where to continue.
+                            this.wake_stall_probe = None;
+                            if this.state.toggle().is_some_and(|playing| !playing) {
+                                this.cancel_user_fade();
+                                this.sync_transport_after_fade_cancel();
+                                this.sync_discord();
+                            }
+                            crate::toast::push_global(
+                                cx,
+                                crate::toast::ToastKind::Error,
+                                "The audio output could not be restored",
+                                Some(
+                                    "Playback was paused. Pick a working output to \
+                                     continue."
+                                        .into(),
                                 ),
                             );
-                            this.retry_wake_output(cx);
                             cx.notify();
                             return;
                         }

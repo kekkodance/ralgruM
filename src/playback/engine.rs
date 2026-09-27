@@ -95,6 +95,9 @@ pub(crate) trait AudioEngine {
     fn position(&self) -> Duration;
     fn ended(&self) -> bool;
     fn set_output(&mut self, prepared: PreparedOutputSwitch, retire: bool) -> OutputSwitch;
+    /// Flags the live stream as having survived a system sleep, so its
+    /// teardown is avoided from then on.
+    fn mark_stream_slept_through(&mut self);
     fn output_target(&self) -> &AudioOutputTarget;
     fn append_standby(&mut self, prepared: PreparedSource);
     fn skip_to_standby(&mut self);
@@ -174,6 +177,10 @@ pub(crate) struct RodioEngine {
     /// can crash inside its own teardown when the driver is wedged, so the
     /// wake path parks the old stream here instead of dropping it.
     retired_streams: Vec<OutputStream>,
+    /// True while the current stream has survived a system sleep. Any
+    /// replacement then parks it instead of dropping it, wake-driven or
+    /// not, because its teardown can crash inside the wedged driver.
+    stream_slept_through: bool,
     sink: Arc<Sink>,
     retained_files: Vec<tempfile::NamedTempFile>,
     progressive_seek: Option<ProgressiveSeek>,
@@ -204,6 +211,7 @@ impl RodioEngine {
         Ok(Self {
             stream,
             retired_streams: Vec::new(),
+            stream_slept_through: false,
             sink,
             retained_files: Vec::new(),
             progressive_seek: None,
@@ -1410,14 +1418,18 @@ impl AudioEngine for RodioEngine {
         discard_progressive_seek(&mut self.standby_progressive_seek);
         self.standby_reopen = None;
         self.sink.stop();
-        if retire {
-            // Tearing down a slept-through ASIO stream can crash inside the
-            // wedged driver, so park it instead of dropping it.
+        // Tearing down a slept-through ASIO stream can crash inside the
+        // wedged driver, so park it instead of dropping it. A wake-driven
+        // replacement always parks the old stream; later replacements
+        // decide from the tracked flag.
+        let park_old = retire || self.stream_slept_through;
+        if park_old {
             self.retired_streams
                 .push(std::mem::replace(&mut self.stream, stream));
         } else {
             self.stream = stream;
         }
+        self.stream_slept_through = false;
 
         if let Some(source) = source.filter(|_| had_source) {
             // The positioned install recreates the sink on the new stream
@@ -1459,6 +1471,9 @@ impl AudioEngine for RodioEngine {
         } else {
             OutputSwitch::SourceRestored
         }
+    }
+    fn mark_stream_slept_through(&mut self) {
+        self.stream_slept_through = true;
     }
     fn output_target(&self) -> &AudioOutputTarget {
         &self.output_target
