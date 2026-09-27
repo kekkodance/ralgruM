@@ -94,7 +94,7 @@ pub(crate) trait AudioEngine {
     fn set_volume(&self, volume: f32);
     fn position(&self) -> Duration;
     fn ended(&self) -> bool;
-    fn set_output(&mut self, prepared: PreparedOutputSwitch) -> OutputSwitch;
+    fn set_output(&mut self, prepared: PreparedOutputSwitch, retire: bool) -> OutputSwitch;
     fn output_target(&self) -> &AudioOutputTarget;
     fn append_standby(&mut self, prepared: PreparedSource);
     fn skip_to_standby(&mut self);
@@ -170,6 +170,10 @@ impl PreparedOutputSwitch {
 
 pub(crate) struct RodioEngine {
     stream: OutputStream,
+    /// Streams replaced after a system wake. A slept-through ASIO session
+    /// can crash inside its own teardown when the driver is wedged, so the
+    /// wake path parks the old stream here instead of dropping it.
+    retired_streams: Vec<OutputStream>,
     sink: Arc<Sink>,
     retained_files: Vec<tempfile::NamedTempFile>,
     progressive_seek: Option<ProgressiveSeek>,
@@ -199,6 +203,7 @@ impl RodioEngine {
         let sink = Arc::new(Sink::connect_new(stream.mixer()));
         Ok(Self {
             stream,
+            retired_streams: Vec::new(),
             sink,
             retained_files: Vec::new(),
             progressive_seek: None,
@@ -1389,7 +1394,7 @@ impl AudioEngine for RodioEngine {
     /// holds the old sink paused while preparing, so its captured position
     /// remains exact and this handoff performs no blocking driver or decode
     /// work on the UI thread.
-    fn set_output(&mut self, prepared: PreparedOutputSwitch) -> OutputSwitch {
+    fn set_output(&mut self, prepared: PreparedOutputSwitch, retire: bool) -> OutputSwitch {
         let PreparedOutputSwitch {
             stream,
             source,
@@ -1405,7 +1410,14 @@ impl AudioEngine for RodioEngine {
         discard_progressive_seek(&mut self.standby_progressive_seek);
         self.standby_reopen = None;
         self.sink.stop();
-        self.stream = stream;
+        if retire {
+            // Tearing down a slept-through ASIO stream can crash inside the
+            // wedged driver, so park it instead of dropping it.
+            self.retired_streams
+                .push(std::mem::replace(&mut self.stream, stream));
+        } else {
+            self.stream = stream;
+        }
 
         if let Some(source) = source.filter(|_| had_source) {
             // The positioned install recreates the sink on the new stream

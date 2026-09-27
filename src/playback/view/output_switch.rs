@@ -283,7 +283,11 @@ impl PlaybackModel {
                     Ok(prepared) => {
                         let position = current.map_or(Duration::ZERO, AudioEngine::position);
                         let playing = this.state.status == PlaybackStatus::Playing;
-                        let switch = this.engine.as_mut().unwrap().set_output(prepared);
+                        let switch = this
+                            .engine
+                            .as_mut()
+                            .unwrap()
+                            .set_output(prepared, force_reopen);
                         this.standby = StandbyPhase::Idle;
                         if switch == OutputSwitch::SourceLost {
                             if let Some(generation) = this.state.reload_current_source() {
