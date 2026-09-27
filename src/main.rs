@@ -170,20 +170,24 @@ fn main() {
             );
             let displays = cx
                 .displays()
-                .iter()
-                .map(|display| display.bounds())
+                .into_iter()
+                .map(|display| window_state::StartupDisplay {
+                    bounds: display.bounds(),
+                    id: display.id(),
+                })
                 .collect::<Vec<_>>();
-            let bounds = window_state::startup_bounds(
-                restore_window,
-                window_state
-                    .as_ref()
-                    .and_then(window_state::WindowStateStore::saved),
-                &displays,
-                cx,
-            );
+            let saved_state = window_state
+                .as_ref()
+                .and_then(window_state::WindowStateStore::saved);
+            let bounds = window_state::startup_bounds(restore_window, saved_state, &displays, cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(bounds),
+                    display_id: window_state::display_id_for(
+                        restore_window,
+                        saved_state,
+                        &displays,
+                    ),
                     inactive_frame_interval: None,
                     titlebar: Some(TitlebarOptions {
                         title: Some("ralgruM".into()),

@@ -9,7 +9,9 @@ use std::{
     time::Duration,
 };
 
-use gpui::{App, Bounds, Context, Entity, Pixels, Point, Size, Task, Window, WindowBounds, px};
+use gpui::{
+    App, Bounds, Context, DisplayId, Entity, Pixels, Point, Size, Task, Window, WindowBounds, px,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -167,7 +169,7 @@ impl WindowStateStore {
 pub(crate) fn startup_bounds(
     restore_window: bool,
     saved: Option<SavedWindowState>,
-    displays: &[Bounds<Pixels>],
+    displays: &[StartupDisplay],
     cx: &App,
 ) -> WindowBounds {
     let centered = Bounds::centered(None, Size::new(px(1180.), px(760.)), cx);
@@ -182,7 +184,7 @@ pub(crate) fn startup_bounds(
     let bounds = if saved.has_valid_position()
         && displays
             .iter()
-            .any(|display| position_is_visible(saved, *display))
+            .any(|display| position_is_visible(saved, display.bounds))
     {
         saved.bounds()
     } else {
@@ -197,6 +199,30 @@ pub(crate) fn startup_bounds(
     } else {
         WindowBounds::Windowed(bounds)
     }
+}
+
+/// A display available at startup, combining its bounds with its platform id.
+#[derive(Clone, Copy)]
+pub(crate) struct StartupDisplay {
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) id: DisplayId,
+}
+
+/// Returns the display that should own the startup window so the platform
+/// backend validates the restored bounds against the correct monitor.
+pub(crate) fn display_id_for(
+    restore_window: bool,
+    saved: Option<SavedWindowState>,
+    displays: &[StartupDisplay],
+) -> Option<DisplayId> {
+    let saved = restore_window
+        .then_some(saved)
+        .flatten()
+        .and_then(|state| state.repaired())?;
+    displays
+        .iter()
+        .find(|display| saved.has_valid_position() && position_is_visible(saved, display.bounds))
+        .map(|display| display.id)
 }
 
 fn position_is_visible(window: SavedWindowState, display: Bounds<Pixels>) -> bool {
@@ -496,5 +522,55 @@ mod tests {
     fn save_schedule_coalesces_bounds_events_while_timer_is_pending() {
         assert!(should_start_save(false));
         assert!(!should_start_save(true));
+    }
+
+    fn display(x: f32, y: f32, w: f32, h: f32, id: u64) -> StartupDisplay {
+        StartupDisplay {
+            bounds: Bounds {
+                origin: Point::new(px(x), px(y)),
+                size: Size::new(px(w), px(h)),
+            },
+            id: DisplayId::new(id),
+        }
+    }
+
+    #[test]
+    fn display_id_for_selects_the_monitor_holding_the_saved_window() {
+        let displays = [
+            display(0., 0., 1920., 1080., 1),
+            display(-1920., 0., 1920., 1080., 2),
+        ];
+
+        assert_eq!(
+            display_id_for(
+                true,
+                Some(state(-1695., 176., 1223., 854., false)),
+                &displays
+            ),
+            Some(DisplayId::new(2))
+        );
+        assert_eq!(
+            display_id_for(true, Some(state(100., 100., 900., 620., false)), &displays),
+            Some(DisplayId::new(1))
+        );
+    }
+
+    #[test]
+    fn display_id_for_returns_none_when_the_saved_window_is_nowhere_visible() {
+        let displays = [display(0., 0., 1920., 1080., 1)];
+
+        assert_eq!(
+            display_id_for(
+                true,
+                Some(state(-1695., 176., 1223., 854., false)),
+                &displays
+            ),
+            None
+        );
+        assert_eq!(
+            display_id_for(false, Some(state(100., 100., 900., 620., false)), &displays),
+            None
+        );
+        assert_eq!(display_id_for(true, None, &displays), None);
     }
 }
