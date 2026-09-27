@@ -33,10 +33,7 @@ use super::{
     PlaybackProvider, PlaybackState, PlaybackStatus, PlaybackTrack, PreviousAction,
     QueueExtensionTicket, ResolvedTrackInfo, RightSidebar, asio_drivers,
     deezer_extension::{self, ExtensionObserverKey},
-    engine::{
-        AudioEngine, AudioOutputTarget, RodioEngine, SeekCompletion, SeekOutcome,
-        asio_endpoint_matches_driver,
-    },
+    engine::{AudioEngine, AudioOutputTarget, RodioEngine, SeekCompletion, SeekOutcome},
     fade::{
         USER_FADE_FRAME, USER_FADE_SETTLE_TIMEOUT, UserFadeSupervisor, UserToggleFadeDecision,
         user_toggle_fade_decision,
@@ -44,7 +41,6 @@ use super::{
     listen_history::{
         DeezerListenSession, ListenHistorySignal, SoundCloudListenReport, deezer_next_media,
     },
-    output_devices,
     progressive::TimelineSuffixState,
     resolver::{ProgressCallback, ProgressUpdate, StreamResolver},
     standby::{self, ArmedStandby, PreparedSource, SinkProbe, StandbyPhase, WatchTick},
@@ -92,8 +88,11 @@ pub(crate) struct PlaybackModel {
     pending_output_resume: Option<OutputResume>,
     /// Detects a wedged output after the system wakes: when the sink position
     /// refuses to advance while playing, the reopen did not revive the
-    /// backend and the matching plain endpoint must take over.
+    /// backend and the selected output must be retried before pausing.
     wake_stall_probe: Option<WakeStallProbe>,
+    /// Reopen attempts left for the selected output after a wake; when they
+    /// run out, playback pauses rather than moving to another output.
+    wake_retries_left: u32,
     ai_client: Result<crate::search::SearchClient, String>,
     ai_enrichment_abort: Option<tokio::task::AbortHandle>,
     ai_enrichment_id: u64,
@@ -501,6 +500,7 @@ impl PlaybackModel {
             queued_output_request: None,
             pending_output_resume: None,
             wake_stall_probe: None,
+            wake_retries_left: 0,
             ai_client: crate::search::SearchClient::new().map_err(|error| error.message),
             ai_enrichment_abort: None,
             ai_enrichment_id: 0,

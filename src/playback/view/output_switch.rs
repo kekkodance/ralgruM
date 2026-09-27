@@ -30,6 +30,14 @@ fn needs_asio_bridge(current: &AudioOutputTarget, target: &AudioOutputTarget) ->
     }
 }
 
+/// Polls of the 250ms playback loop before a wake-stalled output counts as
+/// wedged; four seconds cover slow stream opens without firing otherwise.
+const WAKE_STALL_GRACE_POLLS: u32 = 16;
+/// Retries of the selected output after a wake before playback pauses.
+const WAKE_OUTPUT_RETRIES: u32 = 4;
+/// Delay between wake retries, giving USB audio time to re-enumerate.
+const WAKE_RETRY_DELAY: Duration = Duration::from_secs(3);
+
 impl PlaybackModel {
     pub(super) fn restore_output_position(&mut self, generation: u64, cx: &mut Context<Self>) {
         let Some(resume) = self
@@ -98,8 +106,9 @@ impl PlaybackModel {
     /// sleeping OS can leave an ASIO driver's buffer-switch interrupt dead
     /// while every layer above still reports the same target, so the switch
     /// must be forced even when the saved target matches the engine's. The
-    /// stall probe is armed so a backend that still refuses to move the
-    /// position falls back to a working endpoint.
+    /// output must never change: a failed reopen retries the same target,
+    /// and a backend that still refuses to advance pauses instead of
+    /// migrating playback to another device.
     pub(crate) fn reinitialize_audio_output_after_wake(
         &mut self,
         asio_mode: bool,
@@ -107,6 +116,7 @@ impl PlaybackModel {
         asio_driver: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        self.wake_retries_left = WAKE_OUTPUT_RETRIES;
         self.wake_stall_probe = Some(WakeStallProbe {
             last_position: self.state.position,
             poll_count: 0,
@@ -295,6 +305,23 @@ impl PlaybackModel {
                     }
                     Err(error) => {
                         diagnostics::event("WARN", format!("audio output switch failed: {error}"));
+                        if this.wake_retries_left > 0 {
+                            // A wake can race USB re-enumeration: the saved
+                            // output is briefly missing even though it comes
+                            // back moments later. Retry the same target
+                            // instead of surfacing a failure to the user.
+                            this.wake_retries_left -= 1;
+                            diagnostics::event(
+                                "WARN",
+                                format!(
+                                    "retrying the audio output after the wake ({})",
+                                    this.wake_retries_left
+                                ),
+                            );
+                            this.retry_wake_output(cx);
+                            cx.notify();
+                            return;
+                        }
                         this.sync_transport_after_fade_cancel();
                         crate::toast::push_global(
                             cx,
@@ -327,14 +354,11 @@ impl PlaybackModel {
 
     /// Verifies playback actually advanced after the wake-driven output
     /// reopen. A wedged backend keeps the position frozen even though every
-    /// layer above still reports a live stream, so after a grace window the
-    /// engine falls back to the plain endpoint matching the stuck driver
-    /// (or the system default). The ordinary switch path reloads the source
-    /// at the stalled position, so playback resumes where it froze.
+    /// layer above still reports a live stream. The selected output is
+    /// never abandoned: retries re-open the same target, and once they run
+    /// out playback pauses at the frozen position, waiting for the user
+    /// to choose an output.
     pub(super) fn check_wake_stall(&mut self, position: Duration, cx: &mut Context<Self>) -> bool {
-        // A quarter second per poll; several seconds of grace cover slow
-        // stream opens without ever firing on ordinary playback.
-        const GRACE_POLLS: u32 = 16;
         let Some(mut probe) = self.wake_stall_probe else {
             return false;
         };
@@ -342,30 +366,34 @@ impl PlaybackModel {
             return false;
         }
         if position != probe.last_position {
-            probe.last_position = position;
-            probe.poll_count = 0;
-            self.wake_stall_probe = Some(probe);
+            self.wake_stall_probe = None;
             return false;
         }
         probe.poll_count += 1;
         self.wake_stall_probe = Some(probe);
-        if probe.poll_count < GRACE_POLLS {
+        if probe.poll_count < WAKE_STALL_GRACE_POLLS {
             return false;
         }
         self.wake_stall_probe = None;
-        let driver_name =
-            self.engine
-                .as_ref()
-                .ok()
-                .and_then(|engine| match engine.output_target() {
-                    AudioOutputTarget::AsioDriver(name) => Some(name.clone()),
-                    _ => None,
-                });
+        if self.wake_retries_left > 0 {
+            self.wake_retries_left -= 1;
+            diagnostics::event(
+                "WARN",
+                format!(
+                    "playback stalled at {}ms after the system wake; retrying the selected \
+                     audio output ({})",
+                    position.as_millis(),
+                    self.wake_retries_left
+                ),
+            );
+            self.retry_wake_output(cx);
+            return true;
+        }
         diagnostics::event(
             "WARN",
             format!(
-                "playback stalled at {}ms after the system wake; switching away from the \
-                 unresponsive audio output",
+                "playback stalled at {}ms after the system wake; pausing on the selected \
+                 audio output",
                 position.as_millis()
             ),
         );
@@ -373,25 +401,49 @@ impl PlaybackModel {
             cx,
             crate::toast::ToastKind::Error,
             "The audio output stopped responding",
-            Some(
-                "Playback will continue on the fallback device; switch outputs to retry \
-                 this one."
-                    .into(),
-            ),
+            Some("Playback was paused. Pick a working output to continue.".into()),
         );
-        match driver_name {
-            Some(driver_name) => {
-                let fallback = output_devices::list_output_devices()
-                    .into_iter()
-                    .find(|device| asio_endpoint_matches_driver(device, &driver_name));
-                match fallback {
-                    Some(device) => self.set_audio_output(false, Some(device), None, cx),
-                    None => self.set_audio_output(false, None, None, cx),
-                }
-            }
-            None => self.set_audio_output(false, None, None, cx),
+        if let Some(playing) = self.state.toggle()
+            && playing
+        {
+            self.cancel_user_fade();
+            self.sync_transport_after_fade_cancel();
+            self.sync_discord();
+            cx.notify();
         }
         true
+    }
+
+    /// Re-arms the wake probe and re-opens the selected output target,
+    /// delayed to let USB audio re-enumerate after the wake, and without
+    /// ever substituting a different output.
+    fn retry_wake_output(&mut self, cx: &mut Context<Self>) {
+        self.wake_stall_probe = Some(WakeStallProbe {
+            last_position: self.state.position,
+            poll_count: 0,
+        });
+        let target = self
+            .engine
+            .as_ref()
+            .ok()
+            .map(|engine| engine.output_target().clone());
+        let Some(target) = target else {
+            return;
+        };
+        let (asio_mode, output_device, asio_driver) = match target {
+            AudioOutputTarget::AsioDriver(name) => (true, None, Some(name)),
+            AudioOutputTarget::Device(name) => (false, Some(name), None),
+            AudioOutputTarget::SystemDefault => (false, None, None),
+        };
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            executor.timer(WAKE_RETRY_DELAY).await;
+            this.update(cx, |this, cx| {
+                this.set_audio_output_with_reason(asio_mode, output_device, asio_driver, true, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 }
 
