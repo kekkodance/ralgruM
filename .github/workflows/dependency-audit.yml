@@ -23,12 +23,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Run cargo audit
         id: audit
         shell: bash
-        run: cargo audit --locked --json > cargo-audit.json
+        run: cargo audit --format json > cargo-audit.json
 
       - name: Upload audit report
         if: always()
