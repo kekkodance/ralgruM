@@ -28,7 +28,11 @@ jobs:
       - name: Run cargo audit
         id: audit
         shell: bash
-        run: cargo audit --format json > cargo-audit.json
+        run: |
+          cargo audit --format terminal
+          status=$?
+          cargo audit --format json > cargo-audit.json
+          exit $status
 
       - name: Upload audit report
         if: always()
