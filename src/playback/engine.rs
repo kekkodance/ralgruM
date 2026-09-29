@@ -177,6 +177,10 @@ pub(crate) struct RodioEngine {
     /// can crash inside its own teardown when the driver is wedged, so the
     /// wake path parks the old stream here instead of dropping it.
     retired_streams: Vec<OutputStream>,
+    /// Sinks that fed a parked, slept-through stream. Dropping a sink
+    /// signals its mixer to finish, and that final drain runs on the wedged
+    /// driver's callback thread, which can crash the process.
+    retired_sinks: Vec<Arc<Sink>>,
     /// True while the current stream has survived a system sleep. Any
     /// replacement then parks it instead of dropping it, wake-driven or
     /// not, because its teardown can crash inside the wedged driver.
@@ -211,6 +215,7 @@ impl RodioEngine {
         Ok(Self {
             stream,
             retired_streams: Vec::new(),
+            retired_sinks: Vec::new(),
             stream_slept_through: false,
             sink,
             retained_files: Vec::new(),
@@ -641,6 +646,9 @@ impl RodioEngine {
         let should_pause = should_pause_after_seek(resume_after, self.sink.is_paused());
         let volume = self.sink.volume();
         self.sink.stop();
+        if self.stream_slept_through {
+            self.retired_sinks.push(self.sink.clone());
+        }
         let sink = Arc::new(Sink::connect_new(self.stream.mixer()));
         sink.set_volume(volume);
         sink.append(self.wrap_source(source));
@@ -1217,6 +1225,11 @@ impl AudioEngine for RodioEngine {
         discard_progressive_seek(&mut self.progressive_seek);
         discard_progressive_seek(&mut self.standby_progressive_seek);
         self.sink.stop();
+        if self.stream_slept_through {
+            // Same crash concern as an output switch: dropping the old sink
+            // drains it on the slept-through driver's callback thread.
+            self.retired_sinks.push(self.sink.clone());
+        }
         self.sink = Arc::new(Sink::connect_new(self.stream.mixer()));
         self.sink.set_volume(volume);
         self.transport_gain.reset(1.0);
@@ -1421,11 +1434,14 @@ impl AudioEngine for RodioEngine {
         // Tearing down a slept-through ASIO stream can crash inside the
         // wedged driver, so park it instead of dropping it. A wake-driven
         // replacement always parks the old stream; later replacements
-        // decide from the tracked flag.
+        // decide from the tracked flag. The old sink is parked too: its
+        // drop would stop the mixer's keep-alive and the final drain runs
+        // on the same wedged driver's callback thread.
         let park_old = retire || self.stream_slept_through;
         if park_old {
             self.retired_streams
                 .push(std::mem::replace(&mut self.stream, stream));
+            self.retired_sinks.push(self.sink.clone());
         } else {
             self.stream = stream;
         }
