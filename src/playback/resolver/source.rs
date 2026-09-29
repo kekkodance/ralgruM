@@ -591,17 +591,36 @@ impl StreamResolver {
                     )
                     .await
                 }
-                DownloadVariant::Standard => self
+                DownloadVariant::Standard => match self
                     .resolve_soundcloud(
                         &track.id,
                         soundcloud_token.as_ref(),
                         &cancellation,
                         include_remote_size,
                         false,
-                        prefetched_track,
+                        prefetched_track.clone(),
                     )
                     .await
-                    .map(ResolvedSource::from_remote),
+                {
+                    Ok(source) => Ok(ResolvedSource::from_remote(source)),
+                    Err(error) if error == "Playback request cancelled" => Err(error),
+                    Err(error) => {
+                        // SoundCloud can list a progressive transcoding
+                        // whose endpoint rejects this access context; a
+                        // dead native standard stream falls back to
+                        // klickaud. A capability probe fabricates the row
+                        // instead of running the flow on their server.
+                        self.klickaud_standard_fallback(
+                            track,
+                            prefetched_track.as_ref(),
+                            capability_only,
+                            &cancellation,
+                            error,
+                        )
+                        .await
+                        .map(ResolvedSource::from_remote)
+                    }
+                },
                 _ => unreachable!(),
             }?;
             return Ok(source);
@@ -663,16 +682,30 @@ impl StreamResolver {
                             }
                         }
                     } else {
-                        self.resolve_soundcloud(
-                            &track.id,
-                            None,
-                            &cancellation,
-                            include_remote_size,
-                            false,
-                            prefetched_track.clone(),
-                        )
-                        .await
-                        .map(ResolvedSource::from_remote)
+                        match self
+                            .resolve_soundcloud(
+                                &track.id,
+                                None,
+                                &cancellation,
+                                include_remote_size,
+                                false,
+                                prefetched_track.clone(),
+                            )
+                            .await
+                        {
+                            Ok(source) => Ok(ResolvedSource::from_remote(source)),
+                            Err(error) if error == "Playback request cancelled" => Err(error),
+                            Err(error) => self
+                                .klickaud_standard_fallback(
+                                    track,
+                                    prefetched_track.as_ref(),
+                                    capability_only,
+                                    &cancellation,
+                                    error,
+                                )
+                                .await
+                                .map(ResolvedSource::from_remote),
+                        }
                     }
                 }
                 DownloadVariant::DeezerFlac

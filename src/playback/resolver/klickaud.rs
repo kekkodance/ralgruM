@@ -85,6 +85,38 @@ impl StreamResolver {
         }
     }
 
+    /// Last-resort standard download after the native SoundCloud stream
+    /// failed. A real click resolves through klickaud; a capability probe
+    /// fabricates the menu row instead of running the flow on their server.
+    /// The original error surfaces when klickaud cannot help either.
+    pub(super) async fn klickaud_standard_fallback(
+        &self,
+        track: &super::PlaybackTrack,
+        track_json: Option<&Value>,
+        capability_only: bool,
+        cancellation: &CancellationToken,
+        native_error: String,
+    ) -> Result<RemoteAudio, String> {
+        let attempted_and_failed = self
+            .klickaud_failures
+            .lock()
+            .is_ok_and(|failures| failures.contains(&track.id));
+        if attempted_and_failed {
+            return Err(native_error);
+        }
+        if capability_only {
+            return Ok(klickaud_placeholder_source(track));
+        }
+        match track_json.map(|track_json| self.resolve_klickaud(track, track_json, cancellation)) {
+            Some(result) => match result.await {
+                Ok(source) => Ok(source),
+                Err(error) if error == "Playback request cancelled" => Err(error),
+                Err(_) => Err(native_error),
+            },
+            None => Err(native_error),
+        }
+    }
+
     async fn klickaud_flow(
         &self,
         web_url: &str,
