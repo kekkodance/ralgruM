@@ -82,6 +82,10 @@ pub(crate) struct StreamResolver {
     /// Track ids whose klickaud resolution failed this session, so the
     /// download capability probe stops fabricating a standard row for them.
     klickaud_failures: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// Track ids resolved through klickaud this session. Their native
+    /// streams can be listed yet dead (the endpoints 404), so a re-resolve
+    /// goes straight back to klickaud instead of the normal chain.
+    klickaud_sources: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     #[cfg(test)]
     backend_resolve_override: Option<backend_tests::BackendResolveOverride>,
 }
@@ -457,6 +461,7 @@ impl StreamResolver {
                 resolved_source_cache: ResolvedSourceCache::new(),
                 source_resolve_flights: SourceResolveFlights::new(),
                 klickaud_failures: std::sync::Arc::new(std::sync::Mutex::default()),
+                klickaud_sources: std::sync::Arc::new(std::sync::Mutex::default()),
                 #[cfg(test)]
                 backend_resolve_override: None,
             })

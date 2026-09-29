@@ -54,6 +54,9 @@ impl StreamResolver {
             match self.klickaud_flow(&web_url, cancellation).await {
                 Ok(outcome) => {
                     crate::diagnostics::event("INFO", "klickaud resolve outcome=ready");
+                    if let Ok(mut sources) = self.klickaud_sources.lock() {
+                        sources.insert(track.id.clone());
+                    }
                     return Ok(klickaud_remote_audio(track, outcome.download_url));
                 }
                 Err(error) => {

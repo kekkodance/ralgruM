@@ -136,8 +136,13 @@ impl StreamResolver {
                     .fetch_soundcloud_track(&track.id, soundcloud_token.as_ref(), &cancellation)
                     .await
                     .ok();
+                let klickaud_before = self
+                    .klickaud_sources
+                    .lock()
+                    .is_ok_and(|sources| sources.contains(&track.id));
                 if let Some(track_json) = prefetched_track.as_ref()
-                    && (soundcloud_track_is_go_plus_gated(track_json)
+                    && (klickaud_before
+                        || soundcloud_track_is_go_plus_gated(track_json)
                         || soundcloud_track_has_no_playable_transcoding(track_json))
                 {
                     match self
@@ -475,8 +480,13 @@ impl StreamResolver {
             .fetch_soundcloud_track(&track.id, soundcloud_token.as_ref(), &cancellation)
             .await
             .ok();
+        let klickaud_before = self
+            .klickaud_sources
+            .lock()
+            .is_ok_and(|sources| sources.contains(&track.id));
         let go_plus_gated = prefetched_track.as_ref().is_some_and(|track_json| {
-            soundcloud_track_is_go_plus_gated(track_json)
+            klickaud_before
+                || soundcloud_track_is_go_plus_gated(track_json)
                 || soundcloud_track_has_no_playable_transcoding(track_json)
         });
         if go_plus_gated && capability_only && variant == DownloadVariant::Standard {
