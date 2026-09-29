@@ -79,6 +79,9 @@ pub(crate) struct StreamResolver {
     limiter: ResolveLimiter,
     resolved_source_cache: ResolvedSourceCache<ResolvedSource>,
     source_resolve_flights: SourceResolveFlights<ResolvedSource>,
+    /// Track ids whose klickaud resolution failed this session, so the
+    /// download capability probe stops fabricating a standard row for them.
+    klickaud_failures: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     #[cfg(test)]
     backend_resolve_override: Option<backend_tests::BackendResolveOverride>,
 }
@@ -183,7 +186,7 @@ impl ResolvedSource {
 
 impl SourceCacheValue for ResolvedSource {
     fn is_cacheable(&self) -> bool {
-        matches!(self.data, SourceData::Remote(_) | SourceData::Hls(_))
+        matches!(self.data, SourceData::Remote { .. } | SourceData::Hls(_))
             || matches!(&self.data, SourceData::Backend(source) if source.is_cacheable())
     }
 }
@@ -334,7 +337,7 @@ impl ResolvedSource {
 
 fn cache_key(source: &ResolvedSource) -> Option<String> {
     source.cache_identity.clone().or_else(|| {
-        let SourceData::Remote(url) = &source.data else {
+        let SourceData::Remote { url, .. } = &source.data else {
             return None;
         };
         Some(match source.deezer_track_id.as_deref() {
@@ -394,7 +397,13 @@ fn stable_cache_identity(
 
 #[derive(Clone)]
 enum SourceData {
-    Remote(String),
+    Remote {
+        url: String,
+        /// Referer the remote host requires on every media fetch. Sources
+        /// served by hosts that check it (klickaud's CDN) fail with 403
+        /// when it is missing, while the ordinary providers ignore it.
+        referer: Option<&'static str>,
+    },
     Hls(Box<HlsDescriptor>),
     Backend(BackendSource),
     Inline(Vec<u8>),
@@ -403,6 +412,7 @@ enum SourceData {
 mod crypto;
 mod flac_coverage;
 mod format;
+mod klickaud;
 mod playback;
 mod providers;
 mod range;
@@ -417,10 +427,12 @@ use format::{
     sniff_soundcloud_original_format, soundcloud_format_from_media_headers, soundcloud_format_name,
     soundcloud_original_bitrate, soundcloud_original_head_can_fallback,
     soundcloud_playback_transcodings, soundcloud_track_authorization,
-    soundcloud_transcoding_bitrate, soundcloud_transcodings, transcoding_format,
-    validate_audio_output, validate_media_response_url, validate_progressive_prefix,
-    validate_soundcloud_stream_url, validate_soundcloud_transcoding_url,
+    soundcloud_track_is_go_plus_gated, soundcloud_transcoding_bitrate, soundcloud_transcodings,
+    transcoding_format, validate_audio_output, validate_media_response_url,
+    validate_progressive_prefix, validate_soundcloud_stream_url,
+    validate_soundcloud_transcoding_url,
 };
+use klickaud::klickaud_placeholder_source;
 use range::{
     aligned_range, cacheable_size, content_range_total, inline_range, prefetch_range, ranged_body,
     read_response_range, trim_range, validate_download_range_response,
@@ -444,6 +456,7 @@ impl StreamResolver {
                 limiter,
                 resolved_source_cache: ResolvedSourceCache::new(),
                 source_resolve_flights: SourceResolveFlights::new(),
+                klickaud_failures: std::sync::Arc::new(std::sync::Mutex::default()),
                 #[cfg(test)]
                 backend_resolve_override: None,
             })
@@ -554,6 +567,16 @@ fn response_cookies(response: &Response) -> String {
         .filter_map(|value| value.split(';').next())
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+fn apply_referer(
+    request: reqwest::RequestBuilder,
+    referer: Option<&'static str>,
+) -> reqwest::RequestBuilder {
+    match referer {
+        Some(referer) => request.header(header::REFERER, referer),
+        None => request,
+    }
 }
 
 async fn response_json(response: Response, stage: &'static str) -> Result<Value, String> {

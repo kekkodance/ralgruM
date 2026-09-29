@@ -172,7 +172,10 @@ impl StreamResolver {
         let format_name = format.label().to_owned();
         let declared_bitrate = soundcloud_original_bitrate(&value, format);
         Ok(RemoteAudio {
-            data: SourceData::Remote(url.into()),
+            data: SourceData::Remote {
+                url: url.into(),
+                referer: None,
+            },
             size,
             deezer_track_id: None,
             is_soundcloud: true,
@@ -692,7 +695,10 @@ impl StreamResolver {
             ),
         );
         Ok(RemoteAudio {
-            data: SourceData::Remote(url.into()),
+            data: SourceData::Remote {
+                url: url.into(),
+                referer: None,
+            },
             size,
             deezer_track_id: Some(identity.source_track_id.clone()),
             format,
@@ -820,7 +826,13 @@ impl StreamResolver {
                 } else {
                     0
                 };
-                (SourceData::Remote(stream_url), size)
+                (
+                    SourceData::Remote {
+                        url: stream_url,
+                        referer: None,
+                    },
+                    size,
+                )
             };
             if cancellation.is_cancelled() {
                 return Err("Playback request cancelled".into());
@@ -1075,7 +1087,7 @@ impl StreamResolver {
         W: DownloadOutput,
     {
         let mut downloaded = 0;
-        let remote_url = match remote.data {
+        let (remote_url, remote_referer) = match remote.data {
             SourceData::Inline(bytes) => {
                 if bytes.len() as u64 > MAX_AUDIO_SIZE {
                     return Err("The download is too large".into());
@@ -1100,7 +1112,7 @@ impl StreamResolver {
                     .map_err(|_| "The playback buffer could not be finalized".to_string())?;
                 return Ok(());
             }
-            SourceData::Remote(url) => url,
+            SourceData::Remote { url, referer } => (url, referer),
             SourceData::Hls(descriptor) => {
                 return soundcloud_hls::download(
                     &self.client,
@@ -1130,11 +1142,14 @@ impl StreamResolver {
                 let end = (start + RANGE_CHUNK - 1).min(remote.size - 1);
                 let response =
                     send_with_retry("media.range", RequestClass::Media, cancellation, || {
-                        self.client
-                            .get(&remote_url)
-                            .header(header::USER_AGENT, BROWSER_USER_AGENT)
-                            .header(header::RANGE, format!("bytes={start}-{end}"))
-                            .header(header::ACCEPT_ENCODING, "identity")
+                        apply_referer(
+                            self.client
+                                .get(&remote_url)
+                                .header(header::USER_AGENT, BROWSER_USER_AGENT)
+                                .header(header::RANGE, format!("bytes={start}-{end}"))
+                                .header(header::ACCEPT_ENCODING, "identity"),
+                            remote_referer,
+                        )
                     })
                     .await?;
                 validate_media_response_url(response.url(), remote.is_soundcloud)?;
@@ -1181,11 +1196,14 @@ impl StreamResolver {
             }
         } else {
             let response = send_with_retry("media.full", RequestClass::Media, cancellation, || {
-                self.client
-                    .get(&remote_url)
-                    .header(header::USER_AGENT, BROWSER_USER_AGENT)
-                    .header(header::RANGE, "bytes=0-")
-                    .header(header::ACCEPT_ENCODING, "identity")
+                apply_referer(
+                    self.client
+                        .get(&remote_url)
+                        .header(header::USER_AGENT, BROWSER_USER_AGENT)
+                        .header(header::RANGE, "bytes=0-")
+                        .header(header::ACCEPT_ENCODING, "identity"),
+                    remote_referer,
+                )
             })
             .await?;
             validate_media_response_url(response.url(), remote.is_soundcloud)?;

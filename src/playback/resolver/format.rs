@@ -55,6 +55,27 @@ pub(super) fn validate_soundcloud_stream_url(url: &reqwest::Url) -> Result<(), S
     }
 }
 
+/// A Go+ track is fully gated for this access context when SoundCloud marks
+/// it with the SNIP policy and every transcoding comes back snipped. The
+/// `snipped` flag is per access context: with a Go+ subscriber's OAuth token
+/// the same call returns un-snipped transcodings and playback proceeds
+/// natively, so this gate is the entire subscription check. The original
+/// durations must never be compared here.
+pub(super) fn soundcloud_track_is_go_plus_gated(track: &Value) -> bool {
+    if track.get("policy").and_then(Value::as_str) != Some("SNIP") {
+        return false;
+    }
+    track
+        .pointer("/media/transcodings")
+        .and_then(Value::as_array)
+        .is_some_and(|transcodings| {
+            !transcodings.is_empty()
+                && transcodings
+                    .iter()
+                    .all(|transcoding| transcoding.get("snipped") == Some(&Value::Bool(true)))
+        })
+}
+
 // Logical SoundCloud identity and Murglar/Deezer media transport are intentionally separate.
 pub(super) fn validate_media_response_url(
     url: &reqwest::Url,

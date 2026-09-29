@@ -482,7 +482,10 @@ impl StreamResolver {
                     ),
                 );
                 ResolvedSource {
-                    data: SourceData::Remote("about:offline-cached".to_owned()),
+                    data: SourceData::Remote {
+                        url: "about:offline-cached".to_owned(),
+                        referer: None,
+                    },
                     size: cached.total,
                     deezer_track_id: (track.provider == PlaybackProvider::Deezer)
                         .then(|| track.id.clone()),
@@ -730,14 +733,14 @@ impl StreamResolver {
         let initial_buffered_fraction = match &source.data {
             SourceData::Hls(descriptor) => descriptor.buffered_fraction(1),
             SourceData::Backend(source) => source.metadata().initial_buffered_fraction,
-            SourceData::Remote(_) | SourceData::Inline(_) => None,
+            SourceData::Remote { .. } | SourceData::Inline(_) => None,
         };
         let duration = (!track.duration.is_zero())
             .then_some(track.duration)
             .or_else(|| match &source.data {
                 SourceData::Hls(descriptor) => descriptor.duration(),
                 SourceData::Backend(source) => source.metadata().duration,
-                SourceData::Remote(_) | SourceData::Inline(_) => None,
+                SourceData::Remote { .. } | SourceData::Inline(_) => None,
             });
         let front_buffer = (buffer.path().to_path_buf(), reader.completion());
         let timeline_seek_session: Option<Arc<dyn TimelineSeekSession>> = match &source.data {
@@ -761,7 +764,7 @@ impl StreamResolver {
                         Some(front_buffer.clone()),
                     )
                 }),
-            SourceData::Remote(url) => self.progressive_range_seek_session(
+            SourceData::Remote { url, .. } => self.progressive_range_seek_session(
                 url,
                 &source,
                 total,
@@ -1256,7 +1259,7 @@ impl StreamResolver {
         }
         cache.promote_prefetch(&key, size).await;
         let remote_url = match &source.data {
-            SourceData::Remote(url) => Some(url.as_str()),
+            SourceData::Remote { url, .. } => Some(url.as_str()),
             SourceData::Backend(_) | SourceData::Hls(_) | SourceData::Inline(_) => None,
         };
         crate::diagnostics::event(
@@ -1669,7 +1672,7 @@ impl StreamResolver {
             }
             return Ok(());
         }
-        let SourceData::Remote(url) = &source.data else {
+        let SourceData::Remote { url, .. } = &source.data else {
             return Ok(());
         };
         let response = send_with_retry(
@@ -1770,21 +1773,24 @@ impl StreamResolver {
                 .await
                 .map_err(|error| error.message)?,
             SourceData::Hls(_) => return Ok(()),
-            SourceData::Remote(url) => {
+            SourceData::Remote { url, referer } => {
                 let (request_start, request_end) = aligned_range(start, end, size);
                 let response = send_with_retry(
                     "media.prefetch_range",
                     RequestClass::Media,
                     cancellation,
                     || {
-                        self.client
-                            .get(url)
-                            .header(header::USER_AGENT, BROWSER_USER_AGENT)
-                            .header(
-                                header::RANGE,
-                                format!("bytes={request_start}-{request_end}"),
-                            )
-                            .header(header::ACCEPT_ENCODING, "identity")
+                        apply_referer(
+                            self.client
+                                .get(url)
+                                .header(header::USER_AGENT, BROWSER_USER_AGENT)
+                                .header(
+                                    header::RANGE,
+                                    format!("bytes={request_start}-{request_end}"),
+                                )
+                                .header(header::ACCEPT_ENCODING, "identity"),
+                            *referer,
+                        )
                     },
                 )
                 .await?;

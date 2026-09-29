@@ -987,7 +987,10 @@ async fn direct_deezer_progressive_sources_attach_range_seek_sessions() {
     let cancellation = CancellationToken::new();
     let url = "https://cdnt-stream.dzcdn.net/media/42/file";
     let source = |format: AudioFormat| ResolvedSource {
-        data: SourceData::Remote(url.into()),
+        data: SourceData::Remote {
+            url: url.into(),
+            referer: None,
+        },
         size: 0,
         deezer_track_id: Some("42".into()),
         is_soundcloud: false,

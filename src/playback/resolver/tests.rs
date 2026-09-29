@@ -498,7 +498,10 @@ fn source_cache_provenance_keeps_direct_fallback_out_of_murglar_key() {
         service_url: String::new(),
     };
     let direct = cache_test_source(
-        SourceData::Remote("https://cdn.example.test/direct".into()),
+        SourceData::Remote {
+            url: "https://cdn.example.test/direct".into(),
+            referer: None,
+        },
         stable_cache_identity(
             PlaybackProvider::Deezer,
             "42",
@@ -545,7 +548,10 @@ async fn murglar_eligible_playback_reuses_a_cached_direct_fallback() {
         service_url: String::new(),
     };
     let source = cache_test_source(
-        SourceData::Remote("https://cdn.example.test/direct".into()),
+        SourceData::Remote {
+            url: "https://cdn.example.test/direct".into(),
+            referer: None,
+        },
         stable_cache_identity(
             PlaybackProvider::Deezer,
             &track.id,
@@ -578,7 +584,10 @@ async fn murglar_eligible_playback_reuses_a_cached_direct_fallback() {
 fn clearing_resolved_sources_prevents_cross_account_reuse() {
     let resolver = StreamResolver::new().unwrap();
     let source = cache_test_source(
-        SourceData::Remote("https://cdn.example.test/audio".into()),
+        SourceData::Remote {
+            url: "https://cdn.example.test/audio".into(),
+            referer: None,
+        },
         "source-cache-test".into(),
     );
     resolver
@@ -605,7 +614,10 @@ fn clearing_resolved_sources_prevents_cross_account_reuse() {
 fn stale_resolution_cannot_reinsert_after_account_clear() {
     let resolver = StreamResolver::new().unwrap();
     let source = cache_test_source(
-        SourceData::Remote("https://cdn.example.test/audio".into()),
+        SourceData::Remote {
+            url: "https://cdn.example.test/audio".into(),
+            referer: None,
+        },
         "stale-source".into(),
     );
     let stale_epoch = resolver.resolved_source_cache.epoch();
@@ -994,23 +1006,35 @@ fn soundcloud_cache_identity_ignores_signed_url_but_separates_variants() {
         "FLAC",
     );
     let first = cache_key(&cache_test_source(
-        SourceData::Remote("https://cdn.example/track?expires=1".into()),
+        SourceData::Remote {
+            url: "https://cdn.example/track?expires=1".into(),
+            referer: None,
+        },
         standard.clone(),
     ));
     let second = cache_key(&cache_test_source(
-        SourceData::Remote("https://cdn.example/track?expires=2".into()),
+        SourceData::Remote {
+            url: "https://cdn.example/track?expires=2".into(),
+            referer: None,
+        },
         standard,
     ));
     assert_eq!(first, second);
     assert_ne!(
         first,
         cache_key(&cache_test_source(
-            SourceData::Remote("https://cdn.example/track?expires=3".into()),
+            SourceData::Remote {
+                url: "https://cdn.example/track?expires=3".into(),
+                referer: None
+            },
             hq,
         ))
     );
     let source = cache_test_source(
-        SourceData::Remote("https://cdnt-stream.dzcdn.net/media/file.flac".into()),
+        SourceData::Remote {
+            url: "https://cdnt-stream.dzcdn.net/media/file.flac".into(),
+            referer: None,
+        },
         stable_cache_identity(
             PlaybackProvider::SoundCloud,
             "track-42",
@@ -1026,7 +1050,10 @@ fn soundcloud_cache_identity_ignores_signed_url_but_separates_variants() {
 #[test]
 fn playback_source_label_prefers_logical_soundcloud_over_decryption_metadata() {
     let soundcloud_murglar = ResolvedSource {
-        data: SourceData::Remote("https://cdnt-stream.dzcdn.net/media/42/file.flac".into()),
+        data: SourceData::Remote {
+            url: "https://cdnt-stream.dzcdn.net/media/42/file.flac".into(),
+            referer: None,
+        },
         size: 0,
         deezer_track_id: Some("42".into()),
         is_soundcloud: true,
@@ -1045,7 +1072,10 @@ fn playback_source_label_prefers_logical_soundcloud_over_decryption_metadata() {
     assert_eq!(playback_source_label(&soundcloud_murglar), "soundcloud");
 
     let deezer = ResolvedSource {
-        data: SourceData::Remote("https://cdnt-stream.dzcdn.net/media/42/file.flac".into()),
+        data: SourceData::Remote {
+            url: "https://cdnt-stream.dzcdn.net/media/42/file.flac".into(),
+            referer: None,
+        },
         size: 0,
         deezer_track_id: Some("42".into()),
         is_soundcloud: false,

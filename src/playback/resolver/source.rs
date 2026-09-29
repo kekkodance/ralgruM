@@ -132,13 +132,24 @@ impl StreamResolver {
                 }
             }
             PlaybackProvider::SoundCloud => {
-                let prefetched_track = if backend.is_some() {
-                    self.fetch_soundcloud_track(&track.id, soundcloud_token.as_ref(), &cancellation)
+                let prefetched_track = self
+                    .fetch_soundcloud_track(&track.id, soundcloud_token.as_ref(), &cancellation)
+                    .await
+                    .ok();
+                if let Some(track_json) = prefetched_track.as_ref()
+                    && soundcloud_track_is_go_plus_gated(track_json)
+                {
+                    match self
+                        .resolve_klickaud(track, track_json, &cancellation)
                         .await
-                        .ok()
-                } else {
-                    None
-                };
+                    {
+                        Ok(source) => return Ok(ResolvedSource::from_remote(source)),
+                        Err(error) if error == "Playback request cancelled" => {
+                            return Err(error);
+                        }
+                        Err(_) => {}
+                    }
+                }
                 if track.downloadable
                     && let Some(token) = soundcloud_token.as_ref()
                     && let Ok(source) = self
@@ -210,7 +221,7 @@ impl StreamResolver {
         }
         match &source.data {
             SourceData::Inline(bytes) => Ok(bytes.len() as u64),
-            SourceData::Remote(url) => Ok(self
+            SourceData::Remote { url, .. } => Ok(self
                 .probe_remote_size(url, cancellation, source.is_soundcloud)
                 .await
                 .unwrap_or(0)),
@@ -459,6 +470,54 @@ impl StreamResolver {
         // can lag behind the actual download endpoint, so the capability
         // probe must validate the path itself instead of trusting the
         // `downloadable` or `progressive` hints.
+        let prefetched_track = self
+            .fetch_soundcloud_track(&track.id, soundcloud_token.as_ref(), &cancellation)
+            .await
+            .ok();
+        let go_plus_gated = prefetched_track
+            .as_ref()
+            .is_some_and(soundcloud_track_is_go_plus_gated);
+        if go_plus_gated && capability_only && variant == DownloadVariant::Standard {
+            // The capability probe must not run the klickaud flow (a full
+            // server-side decrypt on their infrastructure). The menu row is
+            // constructed statically; the real resolution happens on click.
+            // If klickaud already failed for this track this session, let
+            // the normal probe outcome stand instead.
+            let attempted_and_failed = self
+                .klickaud_failures
+                .lock()
+                .is_ok_and(|failures| failures.contains(&track.id));
+            if !attempted_and_failed {
+                return Ok(ResolvedSource::from_remote(klickaud_placeholder_source(
+                    track,
+                )));
+            }
+        }
+        if go_plus_gated
+            && matches!(variant, DownloadVariant::Standard | DownloadVariant::Best)
+            && !capability_only
+        {
+            // A gated track has no genuine standard stream, so the klickaud
+            // source shares the standard cache identity and a completed
+            // download is reused without re-running the flow.
+            let attempted = if let Some(cache) = self.cache.as_ref() {
+                cache
+                    .complete_download_variant(track, DownloadVariant::Standard, &cancellation)
+                    .await
+                    .is_some()
+            } else {
+                false
+            };
+            if !attempted
+                && let Some(track_json) = prefetched_track.as_ref()
+                && let Ok(source) = self
+                    .resolve_klickaud(track, track_json, &cancellation)
+                    .await
+            {
+                return Ok(ResolvedSource::from_remote(source));
+            }
+            self.record_klickaud_failure(track);
+        }
         if matches!(
             variant,
             DownloadVariant::Original | DownloadVariant::Murglar | DownloadVariant::Standard
@@ -496,7 +555,7 @@ impl StreamResolver {
                         &cancellation,
                         include_remote_size,
                         false,
-                        None,
+                        prefetched_track,
                     )
                     .await
                     .map(ResolvedSource::from_remote),
@@ -535,17 +594,44 @@ impl StreamResolver {
                     )
                     .await
                 }
-                DownloadVariant::Standard => self
-                    .resolve_soundcloud(
-                        &track.id,
-                        None,
-                        &cancellation,
-                        include_remote_size,
-                        false,
-                        None,
-                    )
-                    .await
-                    .map(ResolvedSource::from_remote),
+                DownloadVariant::Standard => {
+                    if go_plus_gated
+                        && !capability_only
+                        && let Some(track_json) = prefetched_track.as_ref()
+                    {
+                        match self
+                            .resolve_klickaud(track, track_json, &cancellation)
+                            .await
+                        {
+                            Ok(source) => Ok(ResolvedSource::from_remote(source)),
+                            Err(error) if error == "Playback request cancelled" => Err(error),
+                            Err(_) => {
+                                self.record_klickaud_failure(track);
+                                self.resolve_soundcloud(
+                                    &track.id,
+                                    None,
+                                    &cancellation,
+                                    include_remote_size,
+                                    false,
+                                    prefetched_track.clone(),
+                                )
+                                .await
+                                .map(ResolvedSource::from_remote)
+                            }
+                        }
+                    } else {
+                        self.resolve_soundcloud(
+                            &track.id,
+                            None,
+                            &cancellation,
+                            include_remote_size,
+                            false,
+                            prefetched_track.clone(),
+                        )
+                        .await
+                        .map(ResolvedSource::from_remote)
+                    }
+                }
                 DownloadVariant::DeezerFlac
                 | DownloadVariant::DeezerMp3_320
                 | DownloadVariant::DeezerMp3_128 => {
