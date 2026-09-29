@@ -89,7 +89,7 @@ impl StreamResolver {
                     return Err("Playback request cancelled".into());
                 }
                 match outcome {
-                    MediaResolveOutcome::Source(source) => ResolvedSource::from_backend(source),
+                    MediaResolveOutcome::Source(source) => Ok(ResolvedSource::from_backend(source)),
                     MediaResolveOutcome::Unavailable | MediaResolveOutcome::FallbackToDirect(_) => {
                         let fallback = self
                             .resolve_deezer_backend_fallback_id(
@@ -102,11 +102,11 @@ impl StreamResolver {
                             .await?;
                         match fallback {
                             MediaResolveOutcome::Source(source) => {
-                                ResolvedSource::from_backend(source)
+                                Ok(ResolvedSource::from_backend(source))
                             }
                             MediaResolveOutcome::Unavailable
                             | MediaResolveOutcome::FallbackToDirect(_) => {
-                                ResolvedSource::from_remote(
+                                Ok(ResolvedSource::from_remote(
                                     self.resolve_deezer(
                                         &track.id,
                                         deezer_arl.as_ref(),
@@ -115,7 +115,7 @@ impl StreamResolver {
                                         include_remote_size,
                                     )
                                     .await?,
-                                )
+                                ))
                             }
                             MediaResolveOutcome::RefreshSource(error) => return Err(error),
                             MediaResolveOutcome::Cancelled => {
@@ -167,7 +167,7 @@ impl StreamResolver {
                         )
                         .await
                 {
-                    ResolvedSource::from_remote(source)
+                    Ok(ResolvedSource::from_remote(source))
                 } else {
                     let outcome = self
                         .resolve_backend(
@@ -181,24 +181,55 @@ impl StreamResolver {
                             include_remote_size,
                         )
                         .await;
-                    match outcome {
-                        MediaResolveOutcome::Source(source) => ResolvedSource::from_backend(source),
-                        MediaResolveOutcome::Unavailable
-                        | MediaResolveOutcome::FallbackToDirect(_) => ResolvedSource::from_remote(
-                            self.resolve_soundcloud(
-                                &track.id,
-                                soundcloud_token.as_ref(),
-                                &cancellation,
-                                include_remote_size,
-                                true,
-                                prefetched_track,
-                            )
-                            .await?,
-                        ),
-                        MediaResolveOutcome::RefreshSource(error)
-                        | MediaResolveOutcome::Fatal(error) => return Err(error),
-                        MediaResolveOutcome::Cancelled => {
-                            return Err("Playback request cancelled".into());
+                    let normal = 'normal: {
+                        match outcome {
+                            MediaResolveOutcome::Source(source) => {
+                                break 'normal Ok(ResolvedSource::from_backend(source));
+                            }
+                            MediaResolveOutcome::Unavailable
+                            | MediaResolveOutcome::FallbackToDirect(_) => {
+                                break 'normal self
+                                    .resolve_soundcloud(
+                                        &track.id,
+                                        soundcloud_token.as_ref(),
+                                        &cancellation,
+                                        include_remote_size,
+                                        true,
+                                        prefetched_track.clone(),
+                                    )
+                                    .await
+                                    .map(ResolvedSource::from_remote);
+                            }
+                            MediaResolveOutcome::RefreshSource(error)
+                            | MediaResolveOutcome::Fatal(error) => break 'normal Err(error),
+                            MediaResolveOutcome::Cancelled => {
+                                break 'normal Err("Playback request cancelled".to_string());
+                            }
+                        }
+                    };
+                    // SoundCloud can list transcodings whose streaming
+                    // endpoints reject this access context, so a native
+                    // failure falls back to klickaud before giving up.
+                    match normal {
+                        Ok(source) => Ok(source),
+                        Err(error)
+                            if error == "Playback request cancelled"
+                                || cancellation.is_cancelled() =>
+                        {
+                            Err(error)
+                        }
+                        Err(error) => {
+                            if let Some(track_json) = prefetched_track.as_ref() {
+                                match self
+                                    .resolve_klickaud(track, track_json, &cancellation)
+                                    .await
+                                {
+                                    Ok(source) => Ok(ResolvedSource::from_remote(source)),
+                                    Err(_) => Err(error),
+                                }
+                            } else {
+                                Err(error)
+                            }
                         }
                     }
                 }
@@ -208,7 +239,7 @@ impl StreamResolver {
         if cancellation.is_cancelled() {
             return Err("Playback request cancelled".into());
         }
-        Ok(resolved)
+        resolved
     }
 
     /// Returns a useful total size for context-menu metadata without reading
