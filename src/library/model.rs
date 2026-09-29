@@ -179,6 +179,8 @@ pub(crate) struct Track {
     pub artwork: String,
     pub explicit: bool,
     pub ai_generated: bool,
+    /// SoundCloud Go+ gated track; playback resolves through klickaud.
+    pub go_plus: bool,
     /// Provider-supplied public web URL (SoundCloud permalink). Deezer links
     /// are derived from the numeric id instead.
     pub service_url: String,

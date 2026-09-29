@@ -269,6 +269,7 @@ fn queue_actions_only_enable_valid_reordering_and_provider_links() {
         progressive: false,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     assert_eq!(
@@ -327,6 +328,7 @@ fn queue_track_entities_carry_navigation_and_link_data() {
         progressive: false,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: "https://soundcloud.com/artist/song".into(),
     });
     assert_eq!(entity.kind, EntityKind::Track);

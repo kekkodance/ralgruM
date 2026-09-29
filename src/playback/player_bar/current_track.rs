@@ -164,6 +164,7 @@ pub(super) fn render_current(
     // appear together with the title instead of popping in after loading.
     let show_ai = track.is_some_and(|track| track.ai_generated);
     let show_explicit = track.is_some_and(|track| track.explicit);
+    let show_go_plus = track.is_some_and(|track| track.go_plus);
     // Fixed side widths only on desktop layouts; narrow rows stretch, so there
     // is no cheap width to compare against for overflow tooltips there. The
     // compact heart lives outside this row and does not reserve text width.
@@ -226,8 +227,9 @@ pub(super) fn render_current(
                         .child(title.to_owned()),
                     title,
                     text_width.map(|width| {
-                        let badge_width =
-                            if show_explicit { 19. } else { 0. } + if show_ai { 23. } else { 0. };
+                        let badge_width = if show_explicit { 19. } else { 0. }
+                            + if show_ai { 23. } else { 0. }
+                            + if show_go_plus { 31. } else { 0. };
                         text_fits(
                             window,
                             title,
@@ -246,6 +248,12 @@ pub(super) fn render_current(
                 .when(show_ai, |this| {
                     this.child(crate::music_ui::player_badge(
                         crate::music_ui::PlayerBadge::Ai,
+                        2.,
+                    ))
+                })
+                .when(show_go_plus, |this| {
+                    this.child(crate::music_ui::player_badge(
+                        crate::music_ui::PlayerBadge::GoPlus,
                         2.,
                     ))
                 }),
@@ -468,10 +476,14 @@ pub(super) fn current_text_intrinsic_width(
     artist: &str,
     show_explicit: bool,
     show_ai: bool,
+    show_go_plus: bool,
 ) -> f32 {
     // Content badges reserve their footprints next to the title: the explicit
-    // pill is 14px wide and the AI pill 18px, each with a 5px gap.
-    let badge_width = if show_explicit { 19. } else { 0. } + if show_ai { 23. } else { 0. };
+    // pill is 14px wide, the AI pill 18px, and the Go+ pill 26px, each with a
+    // 5px gap.
+    let badge_width = if show_explicit { 19. } else { 0. }
+        + if show_ai { 23. } else { 0. }
+        + if show_go_plus { 31. } else { 0. };
     current_text_intrinsic_width_from_measurements(
         text_measure_width(window, title, 14., FontWeight::SEMIBOLD),
         text_measure_width(window, artist, 12., FontWeight::NORMAL),

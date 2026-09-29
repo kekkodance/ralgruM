@@ -39,6 +39,9 @@ pub(crate) struct PlaybackTrack {
     /// Provider-supplied public web URL (SoundCloud permalink). Deezer links
     /// are derived from the numeric id when a link is needed.
     pub(crate) service_url: String,
+    /// SoundCloud Go+ gated in this access context; playback resolves the
+    /// full track through the klickaud fallback instead of the snippet.
+    pub(crate) go_plus: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -106,6 +109,7 @@ impl PlaybackTrack {
             progressive: track.progressive,
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
             service_url: track.service_url.clone(),
         }
     }
@@ -126,6 +130,7 @@ impl PlaybackTrack {
             progressive: false,
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
             service_url: track.service_url.clone(),
         }
     }

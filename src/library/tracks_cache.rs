@@ -62,6 +62,8 @@ struct StoredTrack {
     explicit: bool,
     #[serde(default)]
     ai_generated: bool,
+    #[serde(default)]
+    go_plus: bool,
     service_url: String,
 }
 
@@ -272,6 +274,7 @@ impl From<&Track> for StoredTrack {
             artwork: track.artwork.clone(),
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
             service_url: track.service_url.clone(),
         }
     }
@@ -296,6 +299,7 @@ impl From<StoredTrack> for Track {
             artwork: track.artwork,
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
             service_url: track.service_url,
         }
     }
@@ -482,6 +486,7 @@ mod tests {
                 artwork: "https://example.test/cover.jpg".into(),
                 explicit: true,
                 ai_generated: true,
+                go_plus: false,
                 service_url: String::new(),
             },
             Track {

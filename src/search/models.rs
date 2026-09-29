@@ -156,6 +156,9 @@ pub(crate) struct Track {
     pub(crate) source: Provider,
     pub(crate) explicit: bool,
     pub(crate) ai_generated: bool,
+    /// SoundCloud Go+ gated track: the access context only unlocks the
+    /// snippet, so playback resolves through the klickaud fallback.
+    pub(crate) go_plus: bool,
     pub(crate) favorite: Option<bool>,
     /// Provider-supplied public web URL. SoundCloud fills this from the
     /// permalink; Deezer links are derived from the numeric id instead.

@@ -75,6 +75,8 @@ struct StoredItem {
     explicit: bool,
     #[serde(default)]
     ai_generated: bool,
+    #[serde(default)]
+    go_plus: bool,
     service_url: String,
 }
 
@@ -101,6 +103,7 @@ pub(crate) struct LocalTrack {
     pub(crate) artwork: String,
     pub(crate) explicit: bool,
     pub(crate) ai_generated: bool,
+    pub(crate) go_plus: bool,
     pub(crate) service_url: String,
 }
 
@@ -127,6 +130,7 @@ impl LocalTrack {
             artwork: self.artwork,
             explicit: self.explicit,
             ai_generated: self.ai_generated,
+            go_plus: self.go_plus,
             service_url: self.service_url,
         }
     }
@@ -147,6 +151,7 @@ impl From<&LocalTrack> for super::model::Track {
             artwork: track.artwork.clone(),
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
             service_url: track.service_url.clone(),
         }
     }
@@ -170,6 +175,7 @@ impl From<&crate::playback::PlaybackTrack> for LocalTrack {
             artwork: track.artwork.clone(),
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
             service_url: track.service_url.clone(),
         }
     }
@@ -212,6 +218,7 @@ impl TryFrom<StoredItem> for LocalTrack {
             artwork: item.artwork,
             explicit: item.explicit,
             ai_generated: item.ai_generated,
+            go_plus: item.go_plus,
             service_url: item.service_url,
         })
     }
@@ -559,6 +566,7 @@ mod tests {
             artwork: "artwork".into(),
             explicit: false,
             ai_generated: false,
+            go_plus: false,
             service_url: "https://example.test/track".into(),
         }
     }
@@ -621,6 +629,7 @@ mod tests {
             progressive: true,
             explicit: true,
             ai_generated: true,
+            go_plus: false,
             service_url: "https://soundcloud.example/track".into(),
         };
         let local = LocalTrack::from(&playback);

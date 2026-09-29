@@ -403,6 +403,7 @@ fn capability_variants_follow_credentials_and_provider_metadata() {
         progressive: false,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     assert_eq!(
@@ -495,6 +496,7 @@ fn source_cache_provenance_keeps_direct_fallback_out_of_murglar_key() {
         progressive: false,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let direct = cache_test_source(
@@ -545,6 +547,7 @@ async fn murglar_eligible_playback_reuses_a_cached_direct_fallback() {
         progressive: false,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let source = cache_test_source(
@@ -649,6 +652,7 @@ fn arl_only_capability_probe_avoids_failed_high_quality_paths() {
         progressive: false,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let variants = StreamResolver::capability_variants(&track, true, false, false);
@@ -1221,6 +1225,7 @@ fn soundcloud_track_with_artists(
         progressive: false,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     }
 }
@@ -2223,6 +2228,7 @@ async fn cancellation_stops_before_provider_work() {
                 duration: Duration::ZERO,
                 explicit: false,
                 ai_generated: false,
+                go_plus: false,
                 service_url: String::new(),
             },
             None,

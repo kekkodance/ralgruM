@@ -148,6 +148,7 @@ mod tests {
             progressive: true,
             explicit: false,
             ai_generated: false,
+            go_plus: false,
             service_url: String::new(),
         }
     }

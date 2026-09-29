@@ -1744,6 +1744,7 @@ fn track(value: &Value) -> Track {
                 == Some(true)
             || title.to_ascii_lowercase().contains("explicit"),
         ai_generated: false,
+        go_plus: value.get("policy").and_then(Value::as_str) == Some("SNIP"),
         service_url: crate::search::soundcloud_service_url(value),
     }
 }

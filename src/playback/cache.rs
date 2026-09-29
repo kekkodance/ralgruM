@@ -76,6 +76,8 @@ struct CachedTrack {
     explicit: bool,
     #[serde(default)]
     ai_generated: bool,
+    #[serde(default)]
+    go_plus: bool,
     service_url: String,
     cache_key: String,
     total: Option<u64>,
@@ -132,6 +134,7 @@ impl CachedTrack {
             progressive: track.progressive,
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
             service_url: track.service_url.clone(),
             cache_key: cache_key.to_owned(),
             total,
@@ -164,6 +167,7 @@ impl CachedTrack {
             progressive: self.progressive,
             explicit: self.explicit,
             ai_generated: self.ai_generated,
+            go_plus: self.go_plus,
             service_url: self.service_url,
         }
     }
@@ -1438,6 +1442,7 @@ mod tests {
             progressive: true,
             explicit: true,
             ai_generated: false,
+            go_plus: false,
             service_url: "https://soundcloud.example/artist/title".into(),
         }
     }

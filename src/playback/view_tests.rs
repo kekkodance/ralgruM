@@ -117,6 +117,7 @@ fn background_prefetch_is_preference_gated_and_uses_the_next_track() {
         duration: Duration::ZERO,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     });
     state.replace(tracks.into(), 0);
@@ -319,6 +320,7 @@ fn progressive_download_progress_updates_buffered_time_after_load() {
         duration: Duration::ZERO,
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let generation = state.replace(vec![track], 0).unwrap();
@@ -428,6 +430,7 @@ fn explicit_buffered_fraction_updates_without_a_byte_total() {
         duration: Duration::from_secs(20),
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let generation = state.replace(vec![track], 0).unwrap();
@@ -475,6 +478,7 @@ fn pending_timeline_seek_keeps_front_and_suffix_ranges_separate() {
         duration: Duration::from_secs(10),
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let generation = state.replace(vec![track], 0).unwrap();
@@ -565,6 +569,7 @@ fn landed_suffix_and_front_progress_keep_the_indicator_honest() {
         duration: Duration::from_secs(10),
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let generation = state.replace(vec![track], 0).unwrap();
@@ -702,6 +707,7 @@ fn stale_download_progress_cannot_update_a_new_generation() {
         duration: Duration::from_secs(10),
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let first = state.replace(vec![track("first")], 0).unwrap();
@@ -769,6 +775,7 @@ fn auto_skip_logic_bounds_consecutive_failures() {
             duration: Duration::from_secs(10),
             explicit: false,
             ai_generated: false,
+            go_plus: false,
             service_url: String::new(),
         })
         .collect();
@@ -812,6 +819,7 @@ fn enqueue_actions_auto_play_when_playback_status_is_ended() {
         duration: Duration::from_secs(10),
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
     let _gen = state.replace(vec![track0], 0).unwrap();
@@ -832,6 +840,7 @@ fn enqueue_actions_auto_play_when_playback_status_is_ended() {
         duration: Duration::from_secs(10),
         explicit: false,
         ai_generated: false,
+        go_plus: false,
         service_url: String::new(),
     };
 

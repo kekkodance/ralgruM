@@ -1044,6 +1044,7 @@ pub(crate) struct TrackRowDisplay {
 pub(crate) struct TrackRowLabels {
     pub(crate) explicit: bool,
     pub(crate) ai_generated: bool,
+    pub(crate) go_plus: bool,
 }
 
 pub(crate) struct TrackArtistNavigation {
@@ -1181,9 +1182,10 @@ pub(crate) fn track_row_with_action(
                                 .truncate()
                                 .child(title.to_owned()),
                         )
-                        .when(labels.explicit || labels.ai_generated, |this| {
-                            this.child(track_content_labels(labels))
-                        }),
+                        .when(
+                            labels.explicit || labels.ai_generated || labels.go_plus,
+                            |this| this.child(track_content_labels(labels)),
+                        ),
                 )
                 .child(track_artist_line(
                     index,
@@ -1386,10 +1388,27 @@ pub(crate) fn track_content_labels(labels: TrackRowLabels) -> Div {
         .when(labels.ai_generated, |this| {
             this.child(ai_content_badge_with_top(2.))
         })
+        .when(labels.go_plus, |this| {
+            this.child(go_plus_badge_with_top(2.))
+        })
 }
 
 pub(crate) fn explicit_badge() -> Stateful<Div> {
     content_badge("E", 14., DANGER, 0xef444466, 0xef444426, "Explicit", 2., 0.)
+}
+
+pub(crate) fn go_plus_badge_with_top(top: f32) -> Stateful<Div> {
+    // SoundCloud's Go+ brand orange.
+    content_badge(
+        "GO+",
+        26.,
+        0xff5500,
+        0xff550066,
+        0xff550022,
+        "SoundCloud Go+ track",
+        top,
+        0.,
+    )
 }
 
 pub(crate) fn ai_content_badge() -> Stateful<Div> {
@@ -1429,12 +1448,23 @@ pub(crate) fn player_badge(label: PlayerBadge, top: f32) -> Stateful<Div> {
             top,
             -1.,
         ),
+        PlayerBadge::GoPlus => content_badge(
+            "GO+",
+            26.,
+            0xff5500,
+            0xff550066,
+            0xff550022,
+            "SoundCloud Go+ track",
+            top,
+            -1.,
+        ),
     }
 }
 
 pub(crate) enum PlayerBadge {
     Explicit,
     Ai,
+    GoPlus,
 }
 
 #[allow(clippy::too_many_arguments)]

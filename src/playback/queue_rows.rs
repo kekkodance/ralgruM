@@ -225,6 +225,7 @@ fn queue_content_labels(track: &PlaybackTrack) -> TrackRowLabels {
     TrackRowLabels {
         explicit: track.explicit,
         ai_generated: track.ai_generated,
+        go_plus: track.go_plus,
     }
 }
 
@@ -324,6 +325,7 @@ mod tests {
             TrackRowLabels {
                 explicit: true,
                 ai_generated: true,
+                go_plus: false,
             }
         );
     }

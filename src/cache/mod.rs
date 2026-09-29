@@ -356,6 +356,7 @@ fn render_cache_row(
         crate::music_ui::TrackRowLabels {
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
         },
         playing.row(index),
         None,

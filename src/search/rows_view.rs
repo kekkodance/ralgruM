@@ -402,6 +402,7 @@ fn render_track_item(
         crate::music_ui::TrackRowLabels {
             explicit: track.explicit,
             ai_generated: track.ai_generated,
+            go_plus: track.go_plus,
         },
         row_playing,
         None,

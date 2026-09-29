@@ -164,6 +164,7 @@ pub(crate) fn track(value: &Value) -> Track {
             .or_else(|| value.get("ai_generated"))
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        go_plus: false,
         // Deezer track links are derived from the numeric id.
         service_url: String::new(),
     }

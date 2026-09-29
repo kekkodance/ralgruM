@@ -1281,6 +1281,7 @@ fn search_track(track: SearchTrack) -> Track {
         artwork: track.artwork,
         explicit: track.explicit,
         ai_generated: track.ai_generated,
+        go_plus: track.go_plus,
         service_url: track.service_url,
         ..Track::default()
     }

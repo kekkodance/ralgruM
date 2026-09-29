@@ -313,6 +313,7 @@ impl Render for PlaybackView {
         // width math sees the badges during loading too.
         let show_explicit_badge = current.as_ref().is_some_and(|track| track.explicit);
         let show_ai_badge = current.as_ref().is_some_and(|track| track.ai_generated);
+        let show_go_plus_badge = current.as_ref().is_some_and(|track| track.go_plus);
         let intrinsic_text_width = (!narrow && favorite_key.is_some()).then(|| {
             current_text_intrinsic_width(
                 window,
@@ -320,6 +321,7 @@ impl Render for PlaybackView {
                 &rendered_artist_for_motion,
                 show_explicit_badge,
                 show_ai_badge,
+                show_go_plus_badge,
             )
         });
         let text_width_visual = intrinsic_text_width.map(|intrinsic| {

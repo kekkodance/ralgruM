@@ -448,6 +448,7 @@ mod tests {
                     duration: Duration::from_secs(60),
                     explicit: false,
                     ai_generated: false,
+                    go_plus: false,
                     service_url: String::new(),
                 }],
                 0,

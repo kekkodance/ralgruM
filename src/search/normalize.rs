@@ -275,6 +275,7 @@ fn deezer_track(value: &Value) -> Track {
                 .or_else(|| value.get("ai_generated")),
         )
         .unwrap_or(false),
+        go_plus: false,
         favorite: boolean(
             value
                 .get("IS_FAVORITE")
@@ -380,6 +381,7 @@ fn soundcloud_track(value: &Value) -> Track {
                 .and_then(Value::as_bool)
                 == Some(true)
             || title.to_ascii_lowercase().contains("explicit"),
+        go_plus: value.get("policy").and_then(Value::as_str) == Some("SNIP"),
         ai_generated: false,
         favorite: boolean(
             value
@@ -734,11 +736,18 @@ mod tests {
             "duration": 30000, "full_duration": 251035
         }));
         assert_eq!(item.duration, 251);
+        assert!(item.go_plus);
 
         let missing_full = soundcloud_track(&json!({
             "id": 12, "title": "Track", "policy": "SNIP", "duration": 30000
         }));
         assert_eq!(missing_full.duration, 30);
+        assert!(missing_full.go_plus);
+
+        let monetize = soundcloud_track(&json!({
+            "id": 13, "title": "Track", "policy": "MONETIZE", "duration": 30000
+        }));
+        assert!(!monetize.go_plus);
     }
 
     #[test]
