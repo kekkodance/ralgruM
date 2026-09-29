@@ -308,11 +308,20 @@ fn soundcloud_track(value: &Value) -> Track {
         .or((!username.trim().is_empty()).then_some(username.as_str()))
         .or((!full_name.trim().is_empty()).then_some(full_name.as_str()))
         .unwrap_or("Unknown Artist");
-    let duration_ms = number(value.get("duration"));
+    // A Go+ gated track reports the snippet duration in `duration` and the
+    // real length in `full_duration`; playback resolves the full track, so
+    // the real length is the playable one for those.
+    let full_duration_ms = number(value.get("full_duration"));
+    let gated = value.get("policy").and_then(Value::as_str) == Some("SNIP");
+    let duration_ms = if gated && full_duration_ms > 0 {
+        full_duration_ms
+    } else {
+        number(value.get("duration"))
+    };
     let duration_ms = if duration_ms > 0 {
         duration_ms
     } else {
-        number(value.get("full_duration"))
+        full_duration_ms
     };
     let user_id = string(value.pointer("/user/id"));
     let uploader_name = if !username.trim().is_empty() {
@@ -716,6 +725,20 @@ mod tests {
             "id": 10, "title": "Track", "duration": 0, "full_duration": 90000
         }));
         assert_eq!(fallback.duration, 90);
+    }
+
+    #[test]
+    fn soundcloud_go_plus_tracks_use_the_full_duration() {
+        let item = soundcloud_track(&json!({
+            "id": 11, "title": "Track", "policy": "SNIP",
+            "duration": 30000, "full_duration": 251035
+        }));
+        assert_eq!(item.duration, 251);
+
+        let missing_full = soundcloud_track(&json!({
+            "id": 12, "title": "Track", "policy": "SNIP", "duration": 30000
+        }));
+        assert_eq!(missing_full.duration, 30);
     }
 
     #[test]
