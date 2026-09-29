@@ -164,9 +164,14 @@ impl StreamResolver {
             RequestClass::Provider,
             cancellation,
             || {
-                klickaud_post(session, format!("{KLICKAUD_ORIGIN}/download.php"), &body)
-                    .header(header::REFERER, KLICKAUD_EN17_REFERER)
-                    .header(header::COOKIE, cookies)
+                klickaud_post(
+                    session,
+                    format!("{KLICKAUD_ORIGIN}/download.php"),
+                    &body,
+                    "application/x-www-form-urlencoded",
+                )
+                .header(header::REFERER, KLICKAUD_EN17_REFERER)
+                .header(header::COOKIE, cookies)
             },
         )
         .await?;
@@ -216,6 +221,7 @@ impl StreamResolver {
                     session,
                     format!("{KLICKAUD_ORIGIN}/sse_capability.php"),
                     &body,
+                    "application/json",
                 )
                 .header(header::REFERER, KLICKAUD_DOWNLOAD_REFERER)
                 .header(header::COOKIE, cookies)
@@ -335,17 +341,19 @@ fn klickaud_get(session: &Client, url: String) -> RequestBuilder {
     )
 }
 
-fn klickaud_post(session: &Client, url: String, body: &str) -> RequestBuilder {
+fn klickaud_post(
+    session: &Client,
+    url: String,
+    body: &str,
+    content_type: &'static str,
+) -> RequestBuilder {
     session
         .request(Method::POST, url)
         .header(
             header::USER_AGENT,
             HeaderValue::from_static(KLICKAUD_USER_AGENT),
         )
-        .header(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/x-www-form-urlencoded"),
-        )
+        .header(header::CONTENT_TYPE, content_type)
         .body(body.to_owned())
 }
 
