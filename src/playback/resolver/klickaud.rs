@@ -12,6 +12,7 @@ use super::{
     AudioFormat, RemoteAudio, SourceData, SourceVariant, response_cookies, stable_cache_identity,
 };
 use crate::playback::retry::{RequestClass, send_with_retry};
+use crate::search::merge_cookie_parts;
 
 const KLICKAUD_ORIGIN: &str = "https://www.klickaud.org";
 const KLICKAUD_REFERER: &str = "https://www.klickaud.org/";
@@ -94,13 +95,16 @@ impl StreamResolver {
             .build()
             .map_err(|_| "The klickaud session could not be created".to_string())?;
 
-        let (csrf_token, cookies) = self.klickaud_csrf(&session, cancellation).await?;
-        let (grant, mode) = self
-            .klickaud_grant(&session, web_url, &csrf_token, &cookies, cancellation)
+        let (csrf_token, csrf_cookies) = self.klickaud_csrf(&session, cancellation).await?;
+        let ((grant, mode), grant_cookies) = self
+            .klickaud_grant(&session, web_url, &csrf_token, &csrf_cookies, cancellation)
             .await?;
         if mode != "worker" {
             return Err(format!("klickaud downloadMode={mode} is unsupported"));
         }
+        // download.php sets a flow cookie the later endpoints require, so
+        // the session cookies accumulate across every step.
+        let cookies = merge_cookie_parts(&csrf_cookies, &grant_cookies);
         let capability = self
             .klickaud_capability(&session, &grant, web_url, &cookies, cancellation)
             .await?;
@@ -153,7 +157,7 @@ impl StreamResolver {
         csrf_token: &str,
         cookies: &str,
         cancellation: &CancellationToken,
-    ) -> Result<(String, String), String> {
+    ) -> Result<((String, String), String), String> {
         let body = format!(
             "value={}&csrf_token={}",
             urlencoding_min(web_url),
@@ -188,6 +192,7 @@ impl StreamResolver {
                 response.status()
             ));
         }
+        let grant_cookies = response_cookies(&response);
         let html = response
             .text()
             .await
@@ -196,7 +201,7 @@ impl StreamResolver {
             .ok_or_else(|| "klickaud did not provide a grant".to_string())?;
         let mode = extract_html_assignment(&html, "downloadMode").unwrap_or_default();
         crate::diagnostics::event("INFO", format!("klickaud grant acquired mode={mode}"));
-        Ok((grant, mode))
+        Ok(((grant, mode), grant_cookies))
     }
 
     async fn klickaud_capability(
@@ -501,6 +506,31 @@ impl SseParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "live network probe for manual klickaud verification"]
+    async fn live_klickaud_flow_reaches_a_download_url() {
+        let resolver = StreamResolver::new().unwrap();
+        let track = test_track();
+        let track_json = serde_json::json!({
+            "policy": "SNIP",
+            "permalink_url": "https://soundcloud.com/ladygaga/glamorous-life",
+            "media": {"transcodings": [{"snipped": true}]},
+        });
+        let cancellation = CancellationToken::new();
+        match resolver
+            .resolve_klickaud(&track, &track_json, &cancellation)
+            .await
+        {
+            Ok(source) => {
+                let SourceData::Remote { url, .. } = source.data else {
+                    panic!("expected remote source");
+                };
+                assert!(url.starts_with("https://dl.klickaud.org/"), "url: {url}");
+            }
+            Err(error) => panic!("klickaud flow failed: {error}"),
+        }
+    }
     use crate::playback::resolver::soundcloud_track_is_go_plus_gated;
     use crate::playback::{PlaybackProvider, PlaybackTrack};
 
