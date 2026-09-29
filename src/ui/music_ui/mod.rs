@@ -1398,9 +1398,10 @@ pub(crate) fn explicit_badge() -> Stateful<Div> {
 }
 
 pub(crate) fn go_plus_badge_with_top(top: f32) -> Stateful<Div> {
-    // SoundCloud's Go+ brand orange.
+    // SoundCloud's Go+ brand orange. The plus glyph sits below the caps'
+    // optical band in this weight, so it is lifted separately.
     content_badge(
-        "GO+",
+        "GO",
         26.,
         0xff5500,
         0xff550066,
@@ -1409,6 +1410,7 @@ pub(crate) fn go_plus_badge_with_top(top: f32) -> Stateful<Div> {
         top,
         0.,
     )
+    .child(div().relative().top(px(-1.)).child("+"))
 }
 
 pub(crate) fn ai_content_badge() -> Stateful<Div> {
@@ -1449,7 +1451,7 @@ pub(crate) fn player_badge(label: PlayerBadge, top: f32) -> Stateful<Div> {
             -1.,
         ),
         PlayerBadge::GoPlus => content_badge(
-            "GO+",
+            "GO",
             26.,
             0xff5500,
             0xff550066,
@@ -1457,7 +1459,8 @@ pub(crate) fn player_badge(label: PlayerBadge, top: f32) -> Stateful<Div> {
             "SoundCloud Go+ track",
             top,
             -1.,
-        ),
+        )
+        .child(div().relative().top(px(-1.)).child("+")),
     }
 }
 

@@ -137,7 +137,8 @@ impl StreamResolver {
                     .await
                     .ok();
                 if let Some(track_json) = prefetched_track.as_ref()
-                    && soundcloud_track_is_go_plus_gated(track_json)
+                    && (soundcloud_track_is_go_plus_gated(track_json)
+                        || soundcloud_track_has_no_playable_transcoding(track_json))
                 {
                     match self
                         .resolve_klickaud(track, track_json, &cancellation)
@@ -474,9 +475,10 @@ impl StreamResolver {
             .fetch_soundcloud_track(&track.id, soundcloud_token.as_ref(), &cancellation)
             .await
             .ok();
-        let go_plus_gated = prefetched_track
-            .as_ref()
-            .is_some_and(soundcloud_track_is_go_plus_gated);
+        let go_plus_gated = prefetched_track.as_ref().is_some_and(|track_json| {
+            soundcloud_track_is_go_plus_gated(track_json)
+                || soundcloud_track_has_no_playable_transcoding(track_json)
+        });
         if go_plus_gated && capability_only && variant == DownloadVariant::Standard {
             // The capability probe must not run the klickaud flow (a full
             // server-side decrypt on their infrastructure). The menu row is

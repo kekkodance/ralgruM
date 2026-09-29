@@ -427,10 +427,10 @@ use format::{
     sniff_soundcloud_original_format, soundcloud_format_from_media_headers, soundcloud_format_name,
     soundcloud_original_bitrate, soundcloud_original_head_can_fallback,
     soundcloud_playback_transcodings, soundcloud_track_authorization,
-    soundcloud_track_is_go_plus_gated, soundcloud_transcoding_bitrate, soundcloud_transcodings,
-    transcoding_format, validate_audio_output, validate_media_response_url,
-    validate_progressive_prefix, validate_soundcloud_stream_url,
-    validate_soundcloud_transcoding_url,
+    soundcloud_track_has_no_playable_transcoding, soundcloud_track_is_go_plus_gated,
+    soundcloud_transcoding_bitrate, soundcloud_transcodings, transcoding_format,
+    validate_audio_output, validate_media_response_url, validate_progressive_prefix,
+    validate_soundcloud_stream_url, validate_soundcloud_transcoding_url,
 };
 use klickaud::klickaud_placeholder_source;
 use range::{

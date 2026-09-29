@@ -101,6 +101,26 @@ pub(super) fn soundcloud_transcodings(transcodings: &[Value]) -> impl Iterator<I
     })
 }
 
+/// True when none of the track's transcodings can be played by the app:
+/// there is no progressive variant and no plain HLS variant the playback
+/// transcoder accepts. Some MONETIZE tracks are only served as encrypted
+/// HLS in this access context, which the app cannot decrypt.
+pub(super) fn soundcloud_track_has_no_playable_transcoding(track: &Value) -> bool {
+    let Some(transcodings) = track
+        .pointer("/media/transcodings")
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    !transcodings.is_empty()
+        && !transcodings.iter().any(|transcoding| {
+            soundcloud_transcodings(std::slice::from_ref(transcoding))
+                .next()
+                .is_some()
+                || is_soundcloud_hls_transcoding(transcoding)
+        })
+}
+
 pub(super) fn soundcloud_playback_transcodings(transcodings: &[Value]) -> Vec<&Value> {
     let mut hls = transcodings
         .iter()

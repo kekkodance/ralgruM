@@ -531,6 +531,47 @@ mod tests {
             Err(error) => panic!("klickaud flow failed: {error}"),
         }
     }
+
+    #[test]
+    fn no_playable_transcoding_detects_encrypted_only_tracks() {
+        use crate::playback::resolver::soundcloud_track_has_no_playable_transcoding;
+
+        let encrypted_only = serde_json::json!({
+            "policy": "MONETIZE",
+            "media": {"transcodings": [
+                {"format": {"protocol": "cbc-encrypted-hls", "mime_type": "audio/mp4"}, "preset": "aac_160k", "url": "https://api-v2.soundcloud.com/x"},
+                {"format": {"protocol": "hls", "mime_type": "audio/mpeg"}, "preset": "mp3_1_0", "url": "https://api-v2.soundcloud.com/x"},
+            ]},
+        });
+        assert!(soundcloud_track_has_no_playable_transcoding(
+            &encrypted_only
+        ));
+
+        let with_progressive = serde_json::json!({
+            "media": {"transcodings": [
+                {"format": {"protocol": "progressive", "mime_type": "audio/mpeg"}, "preset": "mp3_1_0", "url": "https://api-v2.soundcloud.com/x"},
+            ]},
+        });
+        assert!(!soundcloud_track_has_no_playable_transcoding(
+            &with_progressive
+        ));
+
+        let with_plain_hls = serde_json::json!({
+            "media": {"transcodings": [
+                {"format": {"protocol": "hls", "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""}, "preset": "aac_160k", "url": "https://api-v2.soundcloud.com/x"},
+            ]},
+        });
+        assert!(!soundcloud_track_has_no_playable_transcoding(
+            &with_plain_hls
+        ));
+
+        assert!(!soundcloud_track_has_no_playable_transcoding(
+            &serde_json::json!({"media": {"transcodings": []}})
+        ));
+        assert!(!soundcloud_track_has_no_playable_transcoding(
+            &serde_json::json!({})
+        ));
+    }
     use crate::playback::resolver::soundcloud_track_is_go_plus_gated;
     use crate::playback::{PlaybackProvider, PlaybackTrack};
 
