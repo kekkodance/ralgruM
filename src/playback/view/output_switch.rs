@@ -118,7 +118,25 @@ impl PlaybackModel {
         cx: &mut Context<Self>,
     ) {
         self.wake_retries_left = WAKE_OUTPUT_RETRIES;
-        if let Ok(engine) = self.engine.as_mut() {
+        if asio_driver.is_some() {
+            // The slept-through ASIO session's callback keeps firing into
+            // half-revived hardware, which is the clicking heard after a
+            // wake. Recycle the engine immediately so every callback is
+            // removed before anything else runs; the retry loop rebuilds a
+            // live session once the driver returns.
+            if let Ok(engine) = self.engine.as_mut() {
+                engine.recycle_for_driver_reload();
+            }
+            self.engine = Err("The audio output is being reloaded after the wake".into());
+            // No engine means no audio can advance. Pause the transport
+            // right away so the Discord presence and the media session do
+            // not keep projecting the track forward while the position is
+            // frozen.
+            if self.state.toggle().is_some_and(|playing| !playing) {
+                self.cancel_user_fade();
+                self.sync_discord();
+            }
+        } else if let Ok(engine) = self.engine.as_mut() {
             engine.mark_stream_slept_through();
         }
         self.wake_stall_probe = Some(WakeStallProbe {
