@@ -180,6 +180,18 @@ impl PlaybackModel {
         force_reopen: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.engine.is_err() {
+            // The engine was recycled after a wake (its driver object was
+            // poisoned). Rebuild it here exactly like startup does; without
+            // this, every subsequent switch silently early-returns and the
+            // retry chain dies with playback frozen in its previous state.
+            if let Some(engine) = rebuild_engine(&target, self.state.volume) {
+                self.engine = Ok(engine);
+            } else {
+                // Keep the failure visible so the wake retry chain continues.
+                return;
+            }
+        }
         self.pending_output_target = None;
         let Ok(engine) = self.engine.as_ref() else {
             return;
@@ -530,6 +542,23 @@ impl PlaybackModel {
         })
         .detach();
     }
+}
+
+/// Builds a fresh engine for the target the way app startup does. Used after
+/// a wake recycled the previous engine to unload its poisoned ASIO driver.
+fn rebuild_engine(target: &AudioOutputTarget, volume: f32) -> Option<RodioEngine> {
+    let engine = match RodioEngine::new(target.clone()) {
+        Ok(engine) => engine,
+        Err(error) => {
+            diagnostics::event(
+                "WARN",
+                format!("audio engine rebuild after wake failed: {error}"),
+            );
+            return None;
+        }
+    };
+    engine.set_volume(volume);
+    Some(engine)
 }
 
 #[cfg(test)]
