@@ -83,6 +83,9 @@ pub(crate) struct PlaybackModel {
     download_progress: Arc<Mutex<DownloadProgress>>,
     output_switch_epoch: u64,
     pending_output_target: Option<AudioOutputTarget>,
+    /// The output target the user last selected, kept so wake retries can
+    /// continue after the engine was recycled for an ASIO driver reload.
+    last_selected_output: Option<AudioOutputTarget>,
     asio_bridge_origin: Option<AudioOutputTarget>,
     queued_output_request: Option<(bool, Option<String>, Option<String>)>,
     pending_output_resume: Option<OutputResume>,
@@ -496,6 +499,7 @@ impl PlaybackModel {
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             output_switch_epoch: 0,
             pending_output_target: None,
+            last_selected_output: None,
             asio_bridge_origin: None,
             queued_output_request: None,
             pending_output_resume: None,

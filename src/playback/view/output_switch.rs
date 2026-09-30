@@ -152,6 +152,7 @@ impl PlaybackModel {
                 return;
             };
             this.update(cx, |this, cx| {
+                this.last_selected_output = Some(target.clone());
                 if this.output_switch_epoch == epoch {
                     this.begin_audio_output_switch(
                         target,
@@ -506,41 +507,41 @@ impl PlaybackModel {
         true
     }
 
-    /// Handles a failed wake-driven open: either schedules the next retry or,
-    /// once the budget is spent, pauses playback on the selected output.
+    /// Handles a failed wake-driven open. The selected output is retried
+    /// indefinitely: some interfaces take minutes to re-enumerate their ASIO
+    /// driver after a system sleep, and abandoning the retry strands the
+    /// app on a dead session until a manual restart. The retries stay quiet
+    /// so they never interrupt the user.
     fn handle_wake_open_failure(&mut self, error: String, cx: &mut Context<Self>) {
         diagnostics::event("WARN", format!("audio output switch failed: {error}"));
         if self.wake_retries_left > 0 {
-            // A wake can race USB re-enumeration: the saved output is
-            // briefly missing even though it comes back moments later.
-            // Retry the same target instead of surfacing a failure to the
-            // user.
             self.wake_retries_left -= 1;
-            diagnostics::event(
-                "WARN",
-                format!(
-                    "retrying the audio output after the wake ({})",
-                    self.wake_retries_left
-                ),
+        } else {
+            // Budget spent: pause playback once, then keep polling the
+            // output so it recovers on its own when the driver returns.
+            self.wake_retries_left = 0;
+            self.wake_stall_probe = None;
+            if self.state.toggle().is_some_and(|playing| !playing) {
+                self.cancel_user_fade();
+                self.sync_transport_after_fade_cancel();
+                self.sync_discord();
+            }
+            crate::toast::push_global(
+                cx,
+                crate::toast::ToastKind::Error,
+                "The audio output could not be restored",
+                Some("Playback was paused. Pick a working output to continue.".into()),
             );
-            self.retry_wake_output(cx);
             cx.notify();
-            return;
         }
-        // The selected output never came back after the wake. Pause on it
-        // rather than migrating: the user picks when and where to continue.
-        self.wake_stall_probe = None;
-        if self.state.toggle().is_some_and(|playing| !playing) {
-            self.cancel_user_fade();
-            self.sync_transport_after_fade_cancel();
-            self.sync_discord();
-        }
-        crate::toast::push_global(
-            cx,
-            crate::toast::ToastKind::Error,
-            "The audio output could not be restored",
-            Some("Playback was paused. Pick a working output to continue.".into()),
+        diagnostics::event(
+            "WARN",
+            format!(
+                "retrying the audio output after the wake ({})",
+                self.wake_retries_left
+            ),
         );
+        self.retry_wake_output(cx);
         cx.notify();
     }
 
@@ -556,7 +557,15 @@ impl PlaybackModel {
             .engine
             .as_ref()
             .ok()
-            .map(|engine| engine.output_target().clone());
+            .map(|engine| engine.output_target().clone())
+            // The engine was dropped by a previous retry's recycle; keep
+            // retrying the output the user selected.
+            .or_else(|| {
+                self.engine
+                    .as_ref()
+                    .err()
+                    .and_then(|_| self.last_selected_output.clone())
+            });
         let Some(target) = target else {
             return;
         };
