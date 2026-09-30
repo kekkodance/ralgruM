@@ -104,6 +104,12 @@ pub(crate) trait AudioEngine {
     fn activate_standby(&mut self);
     fn sink_probe(&self) -> SinkProbe;
     fn owns_probe(&self, probe: &SinkProbe) -> bool;
+    /// Stops the engine and releases every ASIO stream it holds, including
+    /// the parked ones. Dropping the last stream is what lets the process
+    /// unload the ASIO driver so the next open performs the full load that
+    /// a fresh app launch does; that is the only way a USB re-enumeration
+    /// can be recovered from without a restart.
+    fn recycle_for_driver_reload(&mut self);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1533,6 +1539,14 @@ impl AudioEngine for RodioEngine {
     }
     fn owns_probe(&self, probe: &SinkProbe) -> bool {
         probe.is_sink(&self.sink)
+    }
+    fn recycle_for_driver_reload(&mut self) {
+        // The full recycle happens by dropping the engine value: its fields
+        // drop in declaration order, so every cpal stream (current and
+        // retired) removes its audio callback, and the final driver Arc
+        // drop performs ASIOExit so the driver fully reloads on the next
+        // open. This method exists so non-ASIO engines can stay sound.
+        self.stop();
     }
 }
 

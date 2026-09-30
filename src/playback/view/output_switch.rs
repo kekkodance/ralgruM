@@ -502,11 +502,24 @@ impl PlaybackModel {
         let Some(target) = target else {
             return;
         };
+        let is_asio = matches!(target, AudioOutputTarget::AsioDriver(_));
         let (asio_mode, output_device, asio_driver) = match target {
             AudioOutputTarget::AsioDriver(name) => (true, None, Some(name)),
             AudioOutputTarget::Device(name) => (false, Some(name), None),
             AudioOutputTarget::SystemDefault => (false, None, None),
         };
+        if is_asio {
+            // A slept-through ASIO driver object is poisoned in this process:
+            // USB re-enumeration invalidates its session, and every open
+            // through it keeps failing while a fresh process succeeds. Drop
+            // the entire engine so the last driver handle releases and ASIO
+            // exits; the reopen below then performs the full driver load a
+            // fresh app launch does.
+            if let Ok(engine) = self.engine.as_mut() {
+                engine.recycle_for_driver_reload();
+            }
+            self.engine = Err("The audio output is being reloaded after the wake".into());
+        }
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
             executor.timer(WAKE_RETRY_DELAY).await;
