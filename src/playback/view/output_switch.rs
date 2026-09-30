@@ -215,9 +215,25 @@ impl PlaybackModel {
         {
             engine.pause();
         }
-        // MiniFuse's ASIO driver opens reliably on the UI thread, where the
-        // previous stream is also destroyed. Decode on a worker afterwards.
-        let open_asio = if matches!(target, AudioOutputTarget::AsioDriver(_)) && !bridge_asio {
+        // MiniFuse's ASIO driver opens reliably on the UI thread during an
+        // ordinary switch, where the previous stream is also destroyed.
+        // Wake-driven reopens go to a blocking worker instead: while the USB
+        // interface re-enumerates, the open blocks for seconds, and doing
+        // that on the UI thread freezes the whole app across every retry.
+        let open_asio_task =
+            if matches!(target, AudioOutputTarget::AsioDriver(_)) && !bridge_asio && force_reopen {
+                let open_target = target.clone();
+                let open_reload = reload.clone();
+                Some(self.runtime.spawn_blocking(move || {
+                    RodioEngine::open_asio_output_switch(open_target, open_reload.as_ref())
+                }))
+            } else {
+                None
+            };
+        let open_asio = if matches!(target, AudioOutputTarget::AsioDriver(_))
+            && !bridge_asio
+            && open_asio_task.is_none()
+        {
             Some(RodioEngine::open_asio_output_switch(
                 target.clone(),
                 reload.as_ref(),
@@ -230,30 +246,51 @@ impl PlaybackModel {
             self.runtime
                 .spawn_blocking(move || RodioEngine::decode_output_reload(reload))
         });
-        let task = open_asio.is_none().then(|| {
-            self.runtime.spawn_blocking(move || {
+        let task_runtime = self.runtime.clone();
+        let reload_for_task = reload.clone();
+        let task = open_asio.is_none().then(move || {
+            task_runtime.spawn_blocking(move || {
                 if let Some(driver) = bridge_driver {
                     RodioEngine::prepare_asio_bridge(
                         &driver,
                         bridge_current_device.as_deref(),
-                        reload,
+                        reload_for_task,
                     )
                 } else {
-                    RodioEngine::prepare_output_switch(target, reload)
+                    RodioEngine::prepare_output_switch(target, reload_for_task)
                 }
             })
         });
+        let decode_runtime = self.runtime.clone();
         cx.spawn(async move |this, cx| {
-            let result = match open_asio {
-                Some(Ok(open)) => decode_task
-                    .unwrap()
+            let result = match open_asio_task {
+                Some(open_task) => match open_task
                     .await
-                    .map(|source| open.finish(source))
-                    .map_err(|_| "The output switch decoder stopped unexpectedly".into()),
-                Some(Err(error)) => Err(error),
-                None => task.unwrap().await.unwrap_or_else(|_| {
-                    Err("The output switch worker stopped unexpectedly".into())
-                }),
+                    .unwrap_or_else(|_| Err("The output switch worker stopped unexpectedly".into()))
+                {
+                    Ok(open) => {
+                        let decode_reload = reload.clone();
+                        decode_runtime
+                            .spawn_blocking(move || {
+                                RodioEngine::decode_output_reload(decode_reload)
+                            })
+                            .await
+                            .map(|source| open.finish(source))
+                            .map_err(|_| "The output switch decoder stopped unexpectedly".into())
+                    }
+                    Err(error) => Err(error),
+                },
+                None => match open_asio {
+                    Some(Ok(open)) => decode_task
+                        .unwrap()
+                        .await
+                        .map(|source| open.finish(source))
+                        .map_err(|_| "The output switch decoder stopped unexpectedly".into()),
+                    Some(Err(error)) => Err(error),
+                    None => task.unwrap().await.unwrap_or_else(|_| {
+                        Err("The output switch worker stopped unexpectedly".into())
+                    }),
+                },
             };
             this.update(cx, |this, cx| {
                 if this.output_switch_epoch != epoch {
