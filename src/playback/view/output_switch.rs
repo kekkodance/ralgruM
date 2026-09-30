@@ -185,11 +185,19 @@ impl PlaybackModel {
             // poisoned). Rebuild it here exactly like startup does; without
             // this, every subsequent switch silently early-returns and the
             // retry chain dies with playback frozen in its previous state.
-            if let Some(engine) = rebuild_engine(&target, self.state.volume) {
-                self.engine = Ok(engine);
-            } else {
-                // Keep the failure visible so the wake retry chain continues.
-                return;
+            match rebuild_engine(&target, self.state.volume) {
+                Some(engine) => self.engine = Ok(engine),
+                None => {
+                    // Feed the failure into the wake retry accounting so the
+                    // chain keeps trying until the device returns.
+                    if force_reopen {
+                        self.handle_wake_open_failure(
+                            "The audio engine could not be rebuilt after the wake".into(),
+                            cx,
+                        );
+                    }
+                    return;
+                }
             }
         }
         self.pending_output_target = None;
@@ -496,6 +504,44 @@ impl PlaybackModel {
         // time playback is requested rather than staying on the dead session.
         self.wake_retries_left = WAKE_OUTPUT_RETRIES;
         true
+    }
+
+    /// Handles a failed wake-driven open: either schedules the next retry or,
+    /// once the budget is spent, pauses playback on the selected output.
+    fn handle_wake_open_failure(&mut self, error: String, cx: &mut Context<Self>) {
+        diagnostics::event("WARN", format!("audio output switch failed: {error}"));
+        if self.wake_retries_left > 0 {
+            // A wake can race USB re-enumeration: the saved output is
+            // briefly missing even though it comes back moments later.
+            // Retry the same target instead of surfacing a failure to the
+            // user.
+            self.wake_retries_left -= 1;
+            diagnostics::event(
+                "WARN",
+                format!(
+                    "retrying the audio output after the wake ({})",
+                    self.wake_retries_left
+                ),
+            );
+            self.retry_wake_output(cx);
+            cx.notify();
+            return;
+        }
+        // The selected output never came back after the wake. Pause on it
+        // rather than migrating: the user picks when and where to continue.
+        self.wake_stall_probe = None;
+        if self.state.toggle().is_some_and(|playing| !playing) {
+            self.cancel_user_fade();
+            self.sync_transport_after_fade_cancel();
+            self.sync_discord();
+        }
+        crate::toast::push_global(
+            cx,
+            crate::toast::ToastKind::Error,
+            "The audio output could not be restored",
+            Some("Playback was paused. Pick a working output to continue.".into()),
+        );
+        cx.notify();
     }
 
     /// Re-arms the wake probe and re-opens the selected output target,

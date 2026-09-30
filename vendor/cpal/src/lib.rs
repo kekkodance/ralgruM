@@ -170,6 +170,12 @@ pub use platform::{
     SupportedInputConfigs, SupportedOutputConfigs, ALL_HOSTS,
 };
 pub use samples_formats::{FromSample, Sample, SampleFormat, SizedSample, I24, I48, U24, U48};
+
+/// Subscribes to ASIO driver message notifications, such as the driver's
+/// `kAsioResetRequest` after a system sleep invalidated its session.
+/// Only available with the `asio` feature on Windows.
+#[cfg(all(windows, feature = "asio"))]
+pub use crate::host::asio::{AsioDriverMessage, on_driver_message};
 use std::convert::TryInto;
 use std::ops::{Div, Mul};
 use std::time::Duration;

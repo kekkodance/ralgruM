@@ -214,9 +214,16 @@ pub(crate) struct RodioEngine {
     output_target: AudioOutputTarget,
 }
 
+/// Set when the ASIO driver asked the host to reset or resynchronize, which
+/// happens when a system sleep invalidates its session. The playback poll
+/// drains this and triggers the wake recovery path.
+pub(crate) static ASIO_DRIVER_RESET: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl RodioEngine {
     pub(crate) fn new(output_target: AudioOutputTarget) -> Result<Self, String> {
         let stream = Self::open_output_stream(&output_target)?;
+        Self::register_driver_reset_listener();
         let sink = Arc::new(Sink::connect_new(stream.mixer()));
         Ok(Self {
             stream,
@@ -241,6 +248,21 @@ impl RodioEngine {
             automation_gain: Arc::new(RampedGain::default()),
             output_target,
         })
+    }
+
+    /// Registers the process-global ASIO driver message listener exactly
+    /// once; the driver invokes it from its own thread when it needs a reset
+    /// or resync, such as after a system sleep.
+    fn register_driver_reset_listener() {
+        static REGISTER: std::sync::Once = std::sync::Once::new();
+        REGISTER.call_once(|| {
+            rodio::cpal::on_driver_message(std::sync::Arc::new(|message| match message {
+                rodio::cpal::AsioDriverMessage::ResetRequest
+                | rodio::cpal::AsioDriverMessage::ResyncRequest => {
+                    ASIO_DRIVER_RESET.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }));
+        });
     }
 
     fn open_output_stream(target: &AudioOutputTarget) -> Result<OutputStream, String> {

@@ -223,6 +223,50 @@ impl Device {
     }
 }
 
+/// Notification that the ASIO driver requested a host action, delivered
+/// through the driver's message callback (`kAsioResetRequest`,
+/// `kAsioResyncRequest`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AsioDriverMessage {
+    /// The driver asks the host to tear it down and re-initialize it, for
+    /// example after a system sleep invalidated its session.
+    ResetRequest,
+    /// The driver lost synchronization; the host should restart streaming.
+    ResyncRequest,
+}
+
+static DRIVER_MESSAGE_CALLBACKS: Mutex<Vec<Arc<dyn Fn(AsioDriverMessage) + Send + Sync>>> =
+    Mutex::new(Vec::new());
+
+/// Subscribes to ASIO driver messages. The callback is invoked from the
+/// driver's own thread; keep it cheap and non-blocking.
+pub fn on_driver_message(callback: Arc<dyn Fn(AsioDriverMessage) + Send + Sync>) {
+    DRIVER_MESSAGE_CALLBACKS.lock().unwrap().push(callback);
+}
+
+fn dispatch_driver_message(message: AsioDriverMessage) {
+    if let Ok(callbacks) = DRIVER_MESSAGE_CALLBACKS.lock() {
+        for callback in callbacks.iter() {
+            callback(message);
+        }
+    }
+}
+
+/// Registers the process-global driver message dispatcher so that
+/// `kAsioResetRequest` and `kAsioResyncRequest` reach the subscribers. Safe
+/// to call repeatedly; the registration is idempotent per driver.
+pub(crate) fn register_driver_message_dispatch(driver: &Arc<sys::Driver>) {
+    driver.add_message_callback(|selector| match selector {
+        sys::AsioMessageSelectors::kAsioResetRequest => {
+            dispatch_driver_message(AsioDriverMessage::ResetRequest)
+        }
+        sys::AsioMessageSelectors::kAsioResyncRequest => {
+            dispatch_driver_message(AsioDriverMessage::ResyncRequest)
+        }
+        _ => {}
+    });
+}
+
 impl Devices {
     pub fn new(asio: Arc<sys::Asio>) -> Result<Self, DevicesError> {
         let drivers = asio.driver_names().into_iter();
@@ -240,6 +284,10 @@ impl Iterator for Devices {
                 Some(name) => match self.asio.load_driver(&name) {
                     Ok(driver) => {
                         let driver = Arc::new(driver);
+                        // Forward driver-requested resets and resyncs to the
+                        // subscribers so a host can recover a session that
+                        // died across a system sleep.
+                        register_driver_message_dispatch(&driver);
                         // The driver is process-global, so its ASIO buffers
                         // are too: every Device handle for the same driver
                         // must share one stream slot. Without this, a

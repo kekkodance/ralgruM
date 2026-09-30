@@ -1420,6 +1420,36 @@ impl PlaybackModel {
                 }
             }
             PlaybackStatus::Playing | PlaybackStatus::Paused => {
+                if crate::playback::engine::ASIO_DRIVER_RESET
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    // The ASIO driver asked for a reset or resync, the
+                    // canonical recovery signal it sends after a system
+                    // sleep invalidated its session.
+                    diagnostics::event(
+                        "INFO",
+                        "ASIO driver requested a reset; reinitializing the audio output",
+                    );
+                    let saved = self
+                        .engine
+                        .as_ref()
+                        .ok()
+                        .map(|engine| engine.output_target().clone());
+                    if let Some(target) = saved {
+                        let (asio_mode, output_device, asio_driver) = match target {
+                            AudioOutputTarget::AsioDriver(name) => (true, None, Some(name)),
+                            AudioOutputTarget::Device(name) => (false, Some(name), None),
+                            AudioOutputTarget::SystemDefault => (false, None, None),
+                        };
+                        self.reinitialize_audio_output_after_wake(
+                            asio_mode,
+                            output_device,
+                            asio_driver,
+                            cx,
+                        );
+                    }
+                    cx.notify();
+                }
                 let (deferred_seek, position, ended, completion) = {
                     let Ok(engine) = self.engine.as_mut() else {
                         if buffered_changed || completed_audio_info {
