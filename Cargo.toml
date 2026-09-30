@@ -94,6 +94,12 @@ strip = true
 gpui = { path = "vendor/gpui" }
 # Keep this small Windows backend patch until GPUI handles stale atlas batches upstream.
 gpui_windows = { path = "vendor/gpui_windows" }
+[patch.crates-io]
+# Vendored cpal (0.16.0) with one fix: every ASIO Device handle shares the
+# driver's stream slot, so reopening an ASIO output reuses the existing
+# buffers instead of disposing them under a live audio callback, which
+# crashed the process with a use-after-free on the driver's audio thread.
+cpal = { path = "vendor/cpal" }
 
 [workspace]
 # The vendored gpui joins the workspace so `cargo test -p gpui --lib` can run
