@@ -34,8 +34,9 @@ fn needs_asio_bridge(current: &AudioOutputTarget, target: &AudioOutputTarget) ->
 /// wedged; four seconds cover slow stream opens without firing otherwise.
 const WAKE_STALL_GRACE_POLLS: u32 = 16;
 /// Retries of the selected output after a wake before playback pauses.
-const WAKE_OUTPUT_RETRIES: u32 = 4;
-/// Delay between wake retries, giving USB audio time to re-enumerate.
+const WAKE_OUTPUT_RETRIES: u32 = 10;
+/// Delay between wake retries, giving USB audio time to re-enumerate. USB
+/// interfaces can take half a minute to come back after a system sleep.
 const WAKE_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 impl PlaybackModel {
@@ -441,6 +442,10 @@ impl PlaybackModel {
             self.sync_discord();
             cx.notify();
         }
+        // USB interfaces can re-enumerate long after the wake retries are
+        // spent. Give the selected output one more chance window the next
+        // time playback is requested rather than staying on the dead session.
+        self.wake_retries_left = WAKE_OUTPUT_RETRIES;
         true
     }
 
