@@ -91,12 +91,12 @@ impl FavoriteController {
                 })
             }
         };
-        let favorites = self.favorites.clone();
+        let favorites = self.favorites.downgrade();
         cx.spawn(async move |_, cx| {
             let result = task
                 .await
                 .unwrap_or_else(|_| Err("Favorite request failed".into()));
-            favorites.update(cx, |favorites, cx| {
+            let _ = favorites.update(cx, |favorites, cx| {
                 if let Err(ref error) = result {
                     crate::toast::push_global(
                         cx,
@@ -183,12 +183,12 @@ impl LibraryView {
                 .runtime
                 .spawn(async move { client.load_favorite_catalog(arl, saved_user_id, kind).await });
             self.set_favorite_catalog_cancel(kind, generation, task.abort_handle());
-            let favorites = self.favorites.clone();
+            let favorites = self.favorites.downgrade();
             cx.spawn(async move |this, cx| {
                 let ids = task.await.ok().and_then(Result::ok);
                 this.update(cx, |this, cx| {
                     this.clear_favorite_catalog_cancel(kind, generation);
-                    favorites.update(cx, |favorites, _| {
+                    let _ = favorites.update(cx, |favorites, _| {
                         favorites.finish_catalog_load(
                             crate::search::Provider::Deezer,
                             kind,
@@ -245,13 +245,13 @@ impl LibraryView {
             }
         };
 
-        let favorites = self.favorites.clone();
+        let favorites = self.favorites.downgrade();
         cx.spawn(async move |this, cx| {
             let result = task.await.ok().and_then(Result::ok);
             let resolved = result
                 .as_ref()
                 .map(|page| page_contains_favorite(page, key.kind, &key.id));
-            favorites.update(cx, |favorites, _| {
+            let _ = favorites.update(cx, |favorites, _| {
                 favorites.finish_resolve(&key, resolved);
             });
             this.update(cx, |_, cx| cx.notify()).ok();
