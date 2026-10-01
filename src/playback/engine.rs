@@ -1501,6 +1501,15 @@ impl AudioEngine for RodioEngine {
             }
             self.stream = Some(stream);
             self.retired_sinks.push(self.sink.clone());
+        } else if let Some(old) = self.stream.take() {
+            // A healthy stream's COM release must run on the owner thread,
+            // and it must finish before the new stream's session takes over
+            // the same driver, or the shared interface state is torn down
+            // mid-open and both sessions click or die.
+            self.stream = Some(stream);
+            if matches!(self.output_target, AudioOutputTarget::AsioDriver(_)) {
+                crate::playback::asio_thread::drop_asio_streams(vec![old]);
+            }
         } else {
             self.stream = Some(stream);
         }

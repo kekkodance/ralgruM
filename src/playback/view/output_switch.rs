@@ -130,7 +130,7 @@ impl PlaybackModel {
             // ASIO owner thread before the OS freezes all threads, or the
             // Apartment-threaded driver DLL is left half-exited and every
             // later load fails until restart.
-            crate::playback::asio_thread::drop_asio_streams_blocking(streams);
+            crate::playback::asio_thread::drop_asio_streams(streams);
         }
         // Silence the transport projection until the wake restores playback.
         if self.state.toggle().is_some_and(|playing| !playing) {

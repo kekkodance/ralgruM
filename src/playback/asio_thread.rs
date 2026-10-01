@@ -2,17 +2,17 @@
 //!
 //! The MiniFuse ASIO driver DLL is registered with
 //! `ThreadingModel = Apartment`: it is an STA COM server whose object only
-//! works correctly when created, used, and released from one thread that
-//! has initialized COM. Opening the driver from arbitrary tokio blocking
-//! workers (no COM apartment) fails instantly, and releasing it from a
-//! thread other than its creator wedges the DLL for the rest of the
-//! process: every later load returns "could not be loaded" until restart.
+//! works reliably when created and released from one COM-initialized
+//! thread. Opening the driver from arbitrary tokio blocking workers (no
+//! COM apartment) fails instantly, and releasing it from a thread other
+//! than its creator wedges the DLL for the rest of the process: every
+//! later load returns "could not be loaded" until restart.
 //!
-//! Every ASIO COM operation (open stream, drop stream/engine) therefore
-//! runs here, on the single dedicated thread created at first use. The
-//! thread initializes COM with `CoInitializeEx(STA)` and pumps its message
-//! queue while idle, as STA threads that host Apartment-threaded objects
-//! must.
+//! Every ASIO COM operation (open stream, drop stream) therefore runs
+//! here, on the single dedicated thread created at first use. The thread
+//! initializes COM with `CoInitializeEx(STA)`. It never pumps window
+//! messages: the reference implementation works without pumping, and a
+//! message loop here would swallow messages the driver posts to itself.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
@@ -25,11 +25,11 @@ enum AsioRequest {
         /// Reports the opened stream back to the caller.
         reply: Sender<Result<rodio::OutputStream, String>>,
     },
-    /// Drops streams on the owner thread so their COM release happens there.
-    Drop { streams: Vec<rodio::OutputStream> },
-    /// Drops streams and acknowledges completion for callers that must know
-    /// the release finished, such as the system-suspend teardown.
-    DropAndAck {
+    /// Drops streams on the owner thread and acknowledges completion. Every
+    /// teardown is synchronous: the next open on the same physical interface
+    /// must not race the COM release, and the system-suspend teardown must
+    /// finish before the OS freezes all threads.
+    Drop {
         streams: Vec<rodio::OutputStream>,
         ack: Sender<()>,
     },
@@ -85,27 +85,12 @@ fn owner_thread(receiver: Receiver<AsioRequest>) {
                 let result = open_stream_on_this_thread(&driver);
                 let _ = reply.send(result);
             }
-            AsioRequest::Drop { streams } => {
-                drop(streams);
-            }
-            AsioRequest::DropAndAck { streams, ack } => {
+            AsioRequest::Drop { streams, ack } => {
                 drop(streams);
                 let _ = ack.send(());
             }
         }
-        // STA threads that create Apartment COM objects must pump messages
-        // so the objects can marshal calls when other threads touch them.
-        pump_messages();
     }
-}
-
-/// Drains any pending window messages without blocking. STA threads that
-/// create Apartment COM objects must pump so the objects can marshal calls.
-#[cfg(windows)]
-fn pump_messages() {
-    use windows::Win32::UI::WindowsAndMessaging::{MSG, PM_REMOVE, PeekMessageW};
-    let mut msg = MSG::default();
-    unsafe { while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {} }
 }
 
 /// Opens the ASIO output stream on the calling (owner) thread.
@@ -136,20 +121,14 @@ pub(crate) fn open_asio_stream(driver: &str) -> Result<rodio::OutputStream, Stri
         .map_err(|_| "The ASIO owner thread stopped unexpectedly".to_string())?
 }
 
-/// Drops ASIO output streams on the dedicated owner thread, moving their
-/// COM release there. Returns immediately; the drop order is preserved
-/// relative to other requests on the owner thread.
+/// Drops ASIO output streams on the dedicated owner thread and blocks until
+/// the COM release completed. Every teardown is synchronous: the next open
+/// on the same physical interface must not race the release, and the
+/// system-suspend teardown must finish before the OS freezes all threads or
+/// the Apartment-threaded driver DLL is left half-exited.
 pub(crate) fn drop_asio_streams(streams: Vec<rodio::OutputStream>) {
-    let _ = owner_sender().send(AsioRequest::Drop { streams });
-}
-
-/// Drops ASIO output streams on the owner thread and blocks until the COM
-/// release completed. System suspend needs this: the teardown must finish
-/// before the OS freezes all threads, or the DLL is left half-exited and
-/// every later load fails until restart.
-pub(crate) fn drop_asio_streams_blocking(streams: Vec<rodio::OutputStream>) {
     let (ack_tx, ack_rx) = channel();
-    let request = AsioRequest::DropAndAck {
+    let request = AsioRequest::Drop {
         streams,
         ack: ack_tx,
     };
