@@ -398,6 +398,23 @@ impl RodioEngine {
         self.stream.take()
     }
 
+    /// Takes the retained playback buffer files out of the engine. The
+    /// suspend teardown drops the engine, which would delete the temp files
+    /// backing the in-flight track and leave the wake reload a dangling
+    /// path. The caller keeps them alive until the wake install adopted
+    /// them into the rebuilt engine.
+    pub(crate) fn take_retained_files(&mut self) -> Vec<tempfile::NamedTempFile> {
+        std::mem::take(&mut self.retained_files)
+    }
+
+    /// Takes ownership of playback buffer files rescued across a system
+    /// sleep, keeping them alive with the engine that plays from them.
+    pub(crate) fn adopt_retained_files(&mut self, files: Vec<tempfile::NamedTempFile>) {
+        for file in files {
+            self.retain_playback_file(file);
+        }
+    }
+
     /// Removes every stream from the engine for the system-suspend teardown,
     /// so their COM release can run on the ASIO owner thread before the OS
     /// freezes all threads. The engine stays usable as a paused shell.

@@ -136,6 +136,7 @@ impl PlaybackModel {
             std::mem::replace(&mut self.engine, Err("released for sleep".into()))
         {
             engine.recycle_for_driver_reload();
+            self.wake_retained_files = engine.take_retained_files();
             let streams = engine.take_asio_streams_for_suspend();
             // Blocking: the COM release and ASIOExit must complete on the
             // ASIO owner thread before the OS freezes all threads, or the
@@ -548,6 +549,10 @@ impl PlaybackModel {
                             .as_mut()
                             .unwrap()
                             .set_output(prepared, force_reopen);
+                        let rescued_files = std::mem::take(&mut this.wake_retained_files);
+                        if let Ok(engine) = this.engine.as_mut() {
+                            engine.adopt_retained_files(rescued_files);
+                        }
                         diagnostics::event(
                             "INFO",
                             format!(

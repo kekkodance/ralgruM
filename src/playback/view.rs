@@ -87,7 +87,10 @@ pub(crate) struct PlaybackModel {
     /// wake recovery so the post-wake session resumes instead of sitting
     /// paused with the transport stuck at the frozen position.
     playing_at_suspend: bool,
-    /// The in-flight source reload captured when a wake recycles the engine.
+    /// Playback buffer files rescued from the engine released for system
+    /// sleep; the wake rebuild adopts them so the reload path still has a
+    /// live file to decode from.
+    wake_retained_files: Vec<tempfile::NamedTempFile>,
     /// The rebuilt engine is a fresh shell with no source state, so without
     /// this snapshot the post-wake install would decode nothing and the
     /// empty sink would read as a finished track.
@@ -510,6 +513,7 @@ impl PlaybackModel {
             pending_output_target: None,
             playing_at_suspend: false,
             wake_reload_spec: None,
+            wake_retained_files: Vec::new(),
             last_selected_output: None,
             asio_bridge_origin: None,
             queued_output_request: None,
