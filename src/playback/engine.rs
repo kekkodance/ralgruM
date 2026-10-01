@@ -1541,7 +1541,7 @@ impl AudioEngine for RodioEngine {
         // engine is a freshly rebuilt shell: its sink is empty because the
         // previous session died, not because nothing was playing. Install
         // the source then too.
-        let recovered_shell = retire && self.sink.is_paused() && self.sink.empty();
+        let recovered_shell = retire && self.sink.empty();
         if let Some(source) = source.filter(|_| had_source || recovered_shell) {
             // The positioned install recreates the sink on the new stream
             // through the same path a completed-buffer seek uses, rebasing

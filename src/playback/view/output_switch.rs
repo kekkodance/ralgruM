@@ -125,6 +125,13 @@ impl PlaybackModel {
             .as_ref()
             .ok()
             .and_then(|engine| engine.output_reload_spec());
+        diagnostics::event(
+            "INFO",
+            format!(
+                "suspend reload spec captured: {}",
+                self.wake_reload_spec.is_some()
+            ),
+        );
         if let Ok(mut engine) =
             std::mem::replace(&mut self.engine, Err("released for sleep".into()))
         {
