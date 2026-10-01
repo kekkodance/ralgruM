@@ -100,6 +100,10 @@ gpui_windows = { path = "vendor/gpui_windows" }
 # buffers instead of disposing them under a live audio callback, which
 # crashed the process with a use-after-free on the driver's audio thread.
 cpal = { path = "vendor/cpal" }
+# Vendored asio-sys (0.2.6) with one fix: driver teardown always removes the
+# C++ singleton entry, so a driver whose hardware vanished across a system
+# sleep can be reloaded instead of failing until the app restarts.
+asio-sys = { path = "vendor/asio-sys" }
 
 [workspace]
 # The vendored gpui joins the workspace so `cargo test -p gpui --lib` can run
