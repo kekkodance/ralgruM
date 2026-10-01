@@ -425,7 +425,7 @@ impl PlaybackModel {
         });
         let task_runtime = self.runtime.clone();
         let reload_for_task = reload.clone();
-        let task = open_asio.is_none().then(move || {
+        let task = (open_asio.is_none() && reused_asio_stream.is_none()).then(move || {
             task_runtime.spawn_blocking(move || {
                 if let Some(driver) = bridge_driver {
                     RodioEngine::prepare_asio_bridge(
