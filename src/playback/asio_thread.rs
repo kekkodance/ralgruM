@@ -13,7 +13,7 @@
 //! initializes COM with `CoInitializeEx(STA)`. It never pumps window
 //! messages: the reference implementation works without pumping, and a
 //! message loop here would swallow messages the driver posts to itself.
-
+use rodio::cpal::traits::DeviceTrait;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
@@ -95,22 +95,38 @@ fn owner_thread(receiver: Receiver<AsioRequest>) {
     }
 }
 
-/// Opens the ASIO output stream on the calling (owner) thread.
+/// Opens the ASIO output stream on the calling (owner) thread, logging the
+/// driver's live config.
 #[cfg(windows)]
 fn open_stream_on_this_thread(driver: &str) -> Result<rodio::OutputStream, String> {
     let device = crate::playback::asio_drivers::find_asio_driver(driver)?;
-    rodio::OutputStreamBuilder::from_device(device)
+    let config = device.default_output_config().ok();
+    let stream = rodio::OutputStreamBuilder::from_device(device)
         .and_then(|builder| {
             builder
                 .with_error_callback(crate::playback::engine::log_output_stream_error)
                 .open_stream_or_fallback()
         })
-        .map_err(|error| format!("The ASIO driver \"{driver}\" could not be opened: {error}"))
+        .map_err(|error| format!("The ASIO driver \"{driver}\" could not be opened: {error}"))?;
+    if let Some(config) = config {
+        crate::diagnostics::event(
+            "INFO",
+            format!(
+                "ASIO driver \"{driver}\" opened at {} Hz, {} channels, sample format {}",
+                config.sample_rate().0,
+                config.channels(),
+                config.sample_format(),
+            ),
+        );
+    }
+    Ok(stream)
 }
 
-/// Opens an ASIO output stream on the dedicated owner thread. Blocks the
-/// caller until the open finishes or fails.
-pub(crate) fn open_asio_stream(driver: &str) -> Result<rodio::OutputStream, String> {
+/// Opens an ASIO output stream on the dedicated owner thread, logging the
+/// driver's live config there. Blocks the caller until the open finishes
+/// or fails. No other thread may enumerate ASIO drivers while a session is
+/// live: the driver is process-global and a concurrent load poisons it.
+pub(crate) fn open_asio_stream_logged(driver: &str) -> Result<rodio::OutputStream, String> {
     let (reply_tx, reply_rx) = channel();
     owner_sender()
         .send(AsioRequest::Open {
@@ -147,7 +163,7 @@ mod tests {
     fn asio_thread_handles_requests_without_asio_drivers() {
         // Without the MiniFuse driver installed (CI), an open must return
         // a clean error instead of hanging or panicking.
-        let result = open_asio_stream("Definitely Not Installed ASIO Driver");
+        let result = open_asio_stream_logged("Definitely Not Installed ASIO Driver");
         assert!(result.is_err());
     }
 }

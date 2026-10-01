@@ -314,24 +314,11 @@ impl RodioEngine {
         // The open runs on the dedicated ASIO owner thread: the MiniFuse
         // driver is an Apartment-threaded COM server that only loads from a
         // COM-initialized thread and only releases cleanly on the thread
-        // that created it.
-        let stream = crate::playback::asio_thread::open_asio_stream(name)?;
-        let config = rodio::cpal::host_from_id(rodio::cpal::HostId::Asio)
-            .ok()
-            .and_then(|host| host.default_output_device())
-            .and_then(|device| device.default_output_config().ok());
-        if let Some(config) = config {
-            diagnostics::event(
-                "INFO",
-                format!(
-                    "ASIO driver \"{name}\" opened at {} Hz, {} channels, sample format {}",
-                    config.sample_rate().0,
-                    config.channels(),
-                    config.sample_format(),
-                ),
-            );
-        }
-        Ok(stream)
+        // that created it. The config is logged from the same request so no
+        // other thread ever touches the driver enumeration while a session
+        // is live: a concurrent load attempt poisons the process-global
+        // driver state and the fresh session never advances.
+        crate::playback::asio_thread::open_asio_stream_logged(name)
     }
 
     /// A complete file can be decoded for a device switch without changing
