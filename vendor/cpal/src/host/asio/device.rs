@@ -40,11 +40,14 @@ fn shared_driver_state() -> &'static Mutex<HashMap<String, SharedDriverState>> {
 }
 
 struct SharedDriverState {
-    /// Identity of the driver instance the buffers belong to. A slot
-    /// surviving a full driver unload (a device switch or a system sleep)
-    /// must not be reused: the next load would skip ASIOCreateBuffers and
-    /// start the driver against freed buffers.
-    driver: Arc<sys::Driver>,
+    /// Identity of the driver instance the buffers belong to. Only identity
+    /// is kept, never a strong reference: the map must not extend the
+    /// driver's life or the final unload would never run and every later
+    /// load would fail with the driver still registered as current. A slot
+    /// left over from a previous load of the driver is discarded on lookup:
+    /// its buffers died with that instance, and reusing them would skip
+    /// ASIOCreateBuffers and start the fresh driver against freed memory.
+    driver_instance: DriverInstanceId,
     asio_streams: Arc<Mutex<sys::AsioStreams>>,
     current_buffer_index: Arc<AtomicI32>,
 }
@@ -55,7 +58,7 @@ fn driver_key(driver: &Arc<sys::Driver>) -> String {
 
 fn fresh_shared_driver_state(driver: &Arc<sys::Driver>) -> SharedDriverState {
     SharedDriverState {
-        driver: driver.clone(),
+        driver_instance: DriverInstanceId(driver.instance_id()),
         asio_streams: Arc::new(Mutex::new(sys::AsioStreams {
             input: None,
             output: None,
@@ -64,29 +67,27 @@ fn fresh_shared_driver_state(driver: &Arc<sys::Driver>) -> SharedDriverState {
     }
 }
 
+/// Raw driver-instance identity. Only compared for equality, never
+/// dereferenced, so it is safe to move across threads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DriverInstanceId(*const std::ffi::c_void);
+
+unsafe impl Send for DriverInstanceId {}
+
 /// Returns the shared stream slot for the driver, creating it on first use.
 /// Every Device handle for the same driver gets the same slot, so buffer
-/// lifetimes stay tied to the process-global driver instead of a Device. A
-/// slot left over from a previous load of the driver is discarded: its
-/// buffers died with that instance, and reusing them would skip
-/// ASIOCreateBuffers and start the fresh driver against freed memory.
+/// lifetimes stay tied to the process-global driver instead of a Device.
 fn shared_asio_streams(driver: &Arc<sys::Driver>) -> Arc<Mutex<sys::AsioStreams>> {
     let mut state = shared_driver_state().lock().unwrap();
-    match state.entry(driver_key(driver)) {
-        std::collections::hash_map::Entry::Occupied(entry)
-            if Arc::ptr_eq(&entry.get().driver, driver) => {}
-        std::collections::hash_map::Entry::Occupied(mut entry) => {
-            *entry.get_mut() = fresh_shared_driver_state(driver);
-        }
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            entry.insert(fresh_shared_driver_state(driver));
-        }
-    }
-    state
-        .get(&driver.name().to_owned())
-        .expect("slot just ensured")
-        .asio_streams
-        .clone()
+    let entry = state
+        .entry(driver_key(driver))
+        .and_modify(|entry| {
+            if entry.driver_instance.0 != driver.instance_id() {
+                *entry = fresh_shared_driver_state(driver);
+            }
+        })
+        .or_insert_with(|| fresh_shared_driver_state(driver));
+    entry.asio_streams.clone()
 }
 
 /// Clears the shared stream slot for the driver. Callers that fully unloaded
@@ -106,21 +107,15 @@ pub fn clear_shared_asio_streams(driver_name: &str) {
 /// discarding state left over from a previous load of the driver.
 fn shared_current_buffer_index(driver: &Arc<sys::Driver>) -> Arc<AtomicI32> {
     let mut state = shared_driver_state().lock().unwrap();
-    match state.entry(driver_key(driver)) {
-        std::collections::hash_map::Entry::Occupied(entry)
-            if Arc::ptr_eq(&entry.get().driver, driver) => {}
-        std::collections::hash_map::Entry::Occupied(mut entry) => {
-            *entry.get_mut() = fresh_shared_driver_state(driver);
-        }
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            entry.insert(fresh_shared_driver_state(driver));
-        }
-    }
-    state
-        .get(&driver.name().to_owned())
-        .expect("slot just ensured")
-        .current_buffer_index
-        .clone()
+    let entry = state
+        .entry(driver_key(driver))
+        .and_modify(|entry| {
+            if entry.driver_instance.0 != driver.instance_id() {
+                *entry = fresh_shared_driver_state(driver);
+            }
+        })
+        .or_insert_with(|| fresh_shared_driver_state(driver));
+    entry.current_buffer_index.clone()
 }
 
 /// All available devices.

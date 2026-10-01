@@ -69,14 +69,16 @@ fn owner_sender() -> Sender<AsioRequest> {
 /// The owner thread body: initializes COM and serves requests forever.
 #[cfg(windows)]
 fn owner_thread(receiver: Receiver<AsioRequest>) {
-    // Apartment model: the driver DLL requires an STA, matching the thread
-    // that CoCreateInstance runs on. The result is ignored because COM may
-    // already be initialized for this thread (RPC_E_CHANGED_MODE), which is
-    // fine: the apartment is then already the right shape.
+    // Multithreaded apartment: the reference implementation loads the
+    // driver from a plain, never-pumping thread (implicit MTA) and works,
+    // while an STA that blocks in recv() without pumping leaves
+    // Apartment-marked internal objects without a working apartment. MTA
+    // objects never need the initializing thread to pump. The result is
+    // ignored because COM may already be initialized for this thread.
     unsafe {
         let _ = windows::Win32::System::Com::CoInitializeEx(
             None,
-            windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+            windows::Win32::System::Com::COINIT_MULTITHREADED,
         );
     }
     while let Ok(request) = receiver.recv() {

@@ -447,6 +447,13 @@ impl Driver {
         &self.inner.name
     }
 
+    /// Identity of this handle's underlying driver instance. Handles from
+    /// the same load share it; a fresh load after a full unload produces a
+    /// different one.
+    pub fn instance_id(&self) -> *const std::ffi::c_void {
+        std::sync::Arc::as_ptr(&self.inner) as *const std::ffi::c_void
+    }
+
     /// Returns the number of input and output channels available on the driver.
     pub fn channels(&self) -> Result<Channels, AsioError> {
         let mut ins: c_long = 0;
