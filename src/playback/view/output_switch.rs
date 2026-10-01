@@ -110,16 +110,24 @@ impl PlaybackModel {
     /// output must never change: a failed reopen retries the same target,
     /// and a backend that still refuses to advance pauses instead of
     /// migrating playback to another device.
-    /// Releases the audio output before the system sleeps. Called while the
-    /// driver still works, so the teardown is clean: no callback survives
-    /// into dead hardware, and the shared ASIO stream slot is cleared so the
-    /// wake path performs a genuinely fresh open.
+    /// Releases the audio output before the system sleeps. The teardown must
+    /// happen while the driver still works: a surviving callback would fire
+    /// into dead hardware, and the shared ASIO stream slot must be cleared so
+    /// the wake path performs a genuinely fresh open. The COM lifecycle of the
+    /// driver stays on the blocking-pool threads that open it: releasing the
+    /// in-proc COM object from the UI thread, which lives in a different COM
+    /// apartment, can wedge the DLL for the rest of the process.
     pub(crate) fn suspend_audio_output_for_sleep(&mut self, cx: &mut Context<Self>) {
         self.wake_stall_probe = None;
-        if let Ok(engine) = self.engine.as_mut() {
+        let runtime = self.runtime.clone();
+        if let Ok(mut engine) =
+            std::mem::replace(&mut self.engine, Err("released for sleep".into()))
+        {
             engine.recycle_for_driver_reload();
+            runtime.spawn_blocking(move || drop(engine));
+            // The task must outlive this call: dropping its handle would
+            // abort the teardown mid-DLL-exit, wedging the driver.
         }
-        self.engine = Err("The audio output was released for system sleep".into());
         // Silence the transport projection until the wake restores playback.
         if self.state.toggle().is_some_and(|playing| !playing) {
             self.cancel_user_fade();
