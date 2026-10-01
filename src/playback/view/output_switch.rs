@@ -125,13 +125,6 @@ impl PlaybackModel {
             .as_ref()
             .ok()
             .and_then(|engine| engine.output_reload_spec());
-        diagnostics::event(
-            "INFO",
-            format!(
-                "suspend reload spec captured: {}",
-                self.wake_reload_spec.is_some()
-            ),
-        );
         if let Ok(mut engine) =
             std::mem::replace(&mut self.engine, Err("released for sleep".into()))
         {
@@ -227,12 +220,6 @@ impl PlaybackModel {
             self.queued_output_request = Some((asio_mode, output_device, asio_driver));
             return;
         }
-        diagnostics::event(
-            "INFO",
-            format!(
-                "output switch requested: force={force_reopen} driver={asio_driver:?} device={output_device:?}"
-            ),
-        );
         self.output_switch_epoch = self.output_switch_epoch.wrapping_add(1);
         let epoch = self.output_switch_epoch;
         let saved_device = output_device.clone();
@@ -274,14 +261,6 @@ impl PlaybackModel {
         force_reopen: bool,
         cx: &mut Context<Self>,
     ) {
-        diagnostics::event(
-            "INFO",
-            format!(
-                "output switch begin: epoch={epoch} force={force_reopen} engine_err={} sink_empty={}",
-                self.engine.is_err(),
-                self.engine.as_ref().is_ok_and(AudioEngine::sink_empty),
-            ),
-        );
         if self.engine.is_err() && force_reopen {
             // The engine was recycled after a wake (its driver object was
             // poisoned). Rebuilding opens the ASIO driver, which blocks for
@@ -383,16 +362,6 @@ impl PlaybackModel {
         // this driver: opening another against the same process-global
         // driver shares its buffers with parked sessions and kills both.
         // Take the live stream and prepare the switch onto it instead.
-        diagnostics::event(
-            "INFO",
-            format!(
-                "output switch preparing: engine_target={:?} requested={target:?}",
-                self.engine
-                    .as_ref()
-                    .ok()
-                    .map(|engine| engine.output_target().clone()),
-            ),
-        );
         let reused_asio_stream = if matches!(target, AudioOutputTarget::AsioDriver(_))
             && !bridge_asio
             && force_reopen
@@ -467,14 +436,6 @@ impl PlaybackModel {
                     .unwrap()
                     .await
                     .map(|source| {
-                        diagnostics::event(
-                            "INFO",
-                            format!(
-                                "wake reuse decode: source_present={} duration={:?} position={reused_position:?}",
-                                source.is_some(),
-                                source.as_ref().and_then(|src| src.total_duration()),
-                            ),
-                        );
                         OpenOutputSwitch::new_reused(stream, reused_position, reused_target)
                             .finish(source)
                     })
