@@ -163,6 +163,11 @@ impl PlaybackModel {
             // wake. Recycle the engine immediately so every callback is
             // removed before anything else runs; the retry loop rebuilds a
             // live session once the driver returns.
+            self.wake_reload_spec = self
+                .engine
+                .as_ref()
+                .ok()
+                .and_then(|engine| engine.output_reload_spec());
             if let Ok(engine) = self.engine.as_mut() {
                 engine.recycle_for_driver_reload();
             }
@@ -339,7 +344,9 @@ impl PlaybackModel {
             AudioOutputTarget::Device(name) => Some(name.clone()),
             _ => None,
         };
-        let reload = engine.output_reload_spec();
+        let reload = engine
+            .output_reload_spec()
+            .or_else(|| self.wake_reload_spec.take());
         let had_reload = reload.is_some();
         let probe = engine.sink_probe();
         let generation = self.state.generation;

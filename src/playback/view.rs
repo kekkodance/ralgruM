@@ -87,6 +87,11 @@ pub(crate) struct PlaybackModel {
     /// wake recovery so the post-wake session resumes instead of sitting
     /// paused with the transport stuck at the frozen position.
     playing_at_suspend: bool,
+    /// The in-flight source reload captured when a wake recycles the engine.
+    /// The rebuilt engine is a fresh shell with no source state, so without
+    /// this snapshot the post-wake install would decode nothing and the
+    /// empty sink would read as a finished track.
+    wake_reload_spec: Option<crate::playback::engine::OutputReloadSpec>,
     /// The output target the user last selected, kept so wake retries can
     /// continue after the engine was recycled for an ASIO driver reload.
     last_selected_output: Option<AudioOutputTarget>,
@@ -504,6 +509,7 @@ impl PlaybackModel {
             output_switch_epoch: 0,
             pending_output_target: None,
             playing_at_suspend: false,
+            wake_reload_spec: None,
             last_selected_output: None,
             asio_bridge_origin: None,
             queued_output_request: None,
