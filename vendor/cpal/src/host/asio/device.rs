@@ -40,6 +40,11 @@ fn shared_driver_state() -> &'static Mutex<HashMap<String, SharedDriverState>> {
 }
 
 struct SharedDriverState {
+    /// Identity of the driver instance the buffers belong to. A slot
+    /// surviving a full driver unload (a device switch or a system sleep)
+    /// must not be reused: the next load would skip ASIOCreateBuffers and
+    /// start the driver against freed buffers.
+    driver: Arc<sys::Driver>,
     asio_streams: Arc<Mutex<sys::AsioStreams>>,
     current_buffer_index: Arc<AtomicI32>,
 }
@@ -48,20 +53,38 @@ fn driver_key(driver: &Arc<sys::Driver>) -> String {
     driver.name().to_owned()
 }
 
+fn fresh_shared_driver_state(driver: &Arc<sys::Driver>) -> SharedDriverState {
+    SharedDriverState {
+        driver: driver.clone(),
+        asio_streams: Arc::new(Mutex::new(sys::AsioStreams {
+            input: None,
+            output: None,
+        })),
+        current_buffer_index: Arc::new(AtomicI32::new(-1)),
+    }
+}
+
 /// Returns the shared stream slot for the driver, creating it on first use.
 /// Every Device handle for the same driver gets the same slot, so buffer
-/// lifetimes stay tied to the process-global driver instead of a Device.
+/// lifetimes stay tied to the process-global driver instead of a Device. A
+/// slot left over from a previous load of the driver is discarded: its
+/// buffers died with that instance, and reusing them would skip
+/// ASIOCreateBuffers and start the fresh driver against freed memory.
 fn shared_asio_streams(driver: &Arc<sys::Driver>) -> Arc<Mutex<sys::AsioStreams>> {
     let mut state = shared_driver_state().lock().unwrap();
+    match state.entry(driver_key(driver)) {
+        std::collections::hash_map::Entry::Occupied(entry)
+            if Arc::ptr_eq(&entry.get().driver, driver) => {}
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            *entry.get_mut() = fresh_shared_driver_state(driver);
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(fresh_shared_driver_state(driver));
+        }
+    }
     state
-        .entry(driver_key(driver))
-        .or_insert_with(|| SharedDriverState {
-            asio_streams: Arc::new(Mutex::new(sys::AsioStreams {
-                input: None,
-                output: None,
-            })),
-            current_buffer_index: Arc::new(AtomicI32::new(-1)),
-        })
+        .get(&driver.name().to_owned())
+        .expect("slot just ensured")
         .asio_streams
         .clone()
 }
@@ -79,18 +102,23 @@ pub fn clear_shared_asio_streams(driver_name: &str) {
     }
 }
 
-/// Returns the shared silence-tracking buffer index for the driver.
+/// Returns the shared silence-tracking buffer index for the driver,
+/// discarding state left over from a previous load of the driver.
 fn shared_current_buffer_index(driver: &Arc<sys::Driver>) -> Arc<AtomicI32> {
     let mut state = shared_driver_state().lock().unwrap();
+    match state.entry(driver_key(driver)) {
+        std::collections::hash_map::Entry::Occupied(entry)
+            if Arc::ptr_eq(&entry.get().driver, driver) => {}
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            *entry.get_mut() = fresh_shared_driver_state(driver);
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(fresh_shared_driver_state(driver));
+        }
+    }
     state
-        .entry(driver_key(driver))
-        .or_insert_with(|| SharedDriverState {
-            asio_streams: Arc::new(Mutex::new(sys::AsioStreams {
-                input: None,
-                output: None,
-            })),
-            current_buffer_index: Arc::new(AtomicI32::new(-1)),
-        })
+        .get(&driver.name().to_owned())
+        .expect("slot just ensured")
         .current_buffer_index
         .clone()
 }
