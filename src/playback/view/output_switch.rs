@@ -199,25 +199,60 @@ impl PlaybackModel {
         force_reopen: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.engine.is_err() {
+        if self.engine.is_err() && force_reopen {
             // The engine was recycled after a wake (its driver object was
-            // poisoned). Rebuild it here exactly like startup does; without
-            // this, every subsequent switch silently early-returns and the
-            // retry chain dies with playback frozen in its previous state.
-            match rebuild_engine(&target, self.state.volume) {
-                Some(engine) => self.engine = Ok(engine),
-                None => {
-                    // Feed the failure into the wake retry accounting so the
-                    // chain keeps trying until the device returns.
-                    if force_reopen {
-                        self.handle_wake_open_failure(
-                            "The audio engine could not be rebuilt after the wake".into(),
-                            cx,
-                        );
+            // poisoned). Rebuilding opens the ASIO driver, which blocks for
+            // seconds while the device is missing, so the rebuild runs on a
+            // worker and this method is re-entered with the result. Without
+            // the rebuild, every subsequent switch silently early-returns
+            // and the retry chain dies with playback frozen.
+            let rebuild_target = target.clone();
+            let rebuild_volume = self.state.volume;
+            let rebuild_runtime = self.runtime.clone();
+            cx.spawn(async move |this, cx| {
+                let rebuilt = rebuild_runtime
+                    .spawn_blocking(move || rebuild_engine(&rebuild_target, rebuild_volume))
+                    .await
+                    .unwrap_or_else(|_| None);
+                this.update(cx, |this, cx| {
+                    match rebuilt {
+                        Some(engine) => {
+                            this.engine = Ok(engine);
+                            if let Some((asio_mode, output_device, asio_driver)) =
+                                this.queued_output_request.take()
+                            {
+                                this.set_audio_output(asio_mode, output_device, asio_driver, cx);
+                            } else if let Some(target) = this.last_selected_output.clone() {
+                                // Re-enter the switch path with the rebuilt
+                                // engine so the source reloads onto the fresh
+                                // sink, exactly like a wake retry without the
+                                // recycle this time.
+                                let (asio_mode, output_device, asio_driver) = match target {
+                                    AudioOutputTarget::AsioDriver(name) => (true, None, Some(name)),
+                                    AudioOutputTarget::Device(name) => (false, Some(name), None),
+                                    AudioOutputTarget::SystemDefault => (false, None, None),
+                                };
+                                this.set_audio_output_with_reason(
+                                    asio_mode,
+                                    output_device,
+                                    asio_driver,
+                                    true,
+                                    cx,
+                                );
+                            }
+                        }
+                        None => {
+                            this.handle_wake_open_failure(
+                                "The audio engine could not be rebuilt after the wake".into(),
+                                cx,
+                            );
+                        }
                     }
-                    return;
-                }
-            }
+                })
+                .ok();
+            })
+            .detach();
+            return;
         }
         self.pending_output_target = None;
         let Ok(engine) = self.engine.as_ref() else {
@@ -620,6 +655,12 @@ impl PlaybackModel {
 /// Builds a fresh engine for the target the way app startup does. Used after
 /// a wake recycled the previous engine to unload its poisoned ASIO driver.
 fn rebuild_engine(target: &AudioOutputTarget, volume: f32) -> Option<RodioEngine> {
+    if let AudioOutputTarget::AsioDriver(name) = target {
+        // The previous engine was recycled: the driver was fully unloaded, so
+        // its shared stream slot must be cleared or the rebuild would reuse
+        // the dead ASIO buffers.
+        rodio::cpal::clear_shared_asio_streams(name);
+    }
     let engine = match RodioEngine::new(target.clone()) {
         Ok(engine) => engine,
         Err(error) => {

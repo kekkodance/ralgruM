@@ -12,7 +12,7 @@ pub use self::stream::Stream;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use self::device::{AsioDriverMessage, on_driver_message};
+pub use self::device::{AsioDriverMessage, clear_shared_asio_streams, on_driver_message};
 mod device;
 mod stream;
 

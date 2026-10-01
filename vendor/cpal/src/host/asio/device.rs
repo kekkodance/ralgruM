@@ -66,6 +66,19 @@ fn shared_asio_streams(driver: &Arc<sys::Driver>) -> Arc<Mutex<sys::AsioStreams>
         .clone()
 }
 
+/// Clears the shared stream slot for the driver. Callers that fully unloaded
+/// the driver (teardown across a system sleep) must clear it so the next
+/// open re-creates the ASIO buffers instead of reusing dead ones.
+pub fn clear_shared_asio_streams(driver_name: &str) {
+    let mut state = shared_driver_state().lock().unwrap();
+    if let Some(entry) = state.get_mut(driver_name) {
+        if let Ok(mut streams) = entry.asio_streams.lock() {
+            streams.output = None;
+            streams.input = None;
+        }
+    }
+}
+
 /// Returns the shared silence-tracking buffer index for the driver.
 fn shared_current_buffer_index(driver: &Arc<sys::Driver>) -> Arc<AtomicI32> {
     let mut state = shared_driver_state().lock().unwrap();

@@ -175,7 +175,7 @@ pub use samples_formats::{FromSample, Sample, SampleFormat, SizedSample, I24, I4
 /// `kAsioResetRequest` after a system sleep invalidated its session.
 /// Only available with the `asio` feature on Windows.
 #[cfg(all(windows, feature = "asio"))]
-pub use crate::host::asio::{AsioDriverMessage, on_driver_message};
+pub use crate::host::asio::{AsioDriverMessage, clear_shared_asio_streams, on_driver_message};
 use std::convert::TryInto;
 use std::ops::{Div, Mul};
 use std::time::Duration;
