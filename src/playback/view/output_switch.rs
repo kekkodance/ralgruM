@@ -466,6 +466,14 @@ impl PlaybackModel {
                     .unwrap()
                     .await
                     .map(|source| {
+                        diagnostics::event(
+                            "INFO",
+                            format!(
+                                "wake reuse decode: source_present={} duration={:?} position={reused_position:?}",
+                                source.is_some(),
+                                source.as_ref().and_then(|src| src.total_duration()),
+                            ),
+                        );
                         OpenOutputSwitch::new_reused(stream, reused_position, reused_target)
                             .finish(source)
                     })
