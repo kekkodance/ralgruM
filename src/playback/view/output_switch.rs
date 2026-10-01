@@ -120,7 +120,7 @@ impl PlaybackModel {
     /// PBT_APMSUSPEND handlers are allowed to block briefly, and a clean
     /// ASIOExit plus COM Release on live hardware takes milliseconds.
     pub(crate) fn suspend_audio_output_for_sleep(&mut self, cx: &mut Context<Self>) {
-        self.wake_stall_probe = None;
+        self.playing_at_suspend = self.state.status == PlaybackStatus::Playing;
         if let Ok(mut engine) =
             std::mem::replace(&mut self.engine, Err("released for sleep".into()))
         {
@@ -485,7 +485,8 @@ impl PlaybackModel {
                 match result {
                     Ok(prepared) => {
                         let position = current.map_or(Duration::ZERO, AudioEngine::position);
-                        let playing = this.state.status == PlaybackStatus::Playing;
+                        let playing = force_reopen && this.playing_at_suspend
+                            || this.state.status == PlaybackStatus::Playing;
                         let switch = this
                             .engine
                             .as_mut()
@@ -501,8 +502,19 @@ impl PlaybackModel {
                                 });
                                 this.start(generation, cx);
                             }
-                        } else if !bridge_asio {
-                            this.sync_transport_after_fade_cancel();
+                        } else {
+                            // A wake recovery restored a live session:
+                            // bring the transport back to what it was
+                            // before the suspend handler paused it, so the
+                            // recovered session plays instead of sitting
+                            // paused at the frozen position.
+                            if force_reopen && this.playing_at_suspend {
+                                this.state.status = PlaybackStatus::Playing;
+                                this.playing_at_suspend = false;
+                            }
+                            if !bridge_asio {
+                                this.sync_transport_after_fade_cancel();
+                            }
                         }
                         if bridge_asio {
                             this.set_audio_output(asio_mode, output_device, asio_driver, cx);

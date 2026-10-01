@@ -83,6 +83,10 @@ pub(crate) struct PlaybackModel {
     download_progress: Arc<Mutex<DownloadProgress>>,
     output_switch_epoch: u64,
     pending_output_target: Option<AudioOutputTarget>,
+    /// Whether playback was live when the system suspended, restored by the
+    /// wake recovery so the post-wake session resumes instead of sitting
+    /// paused with the transport stuck at the frozen position.
+    playing_at_suspend: bool,
     /// The output target the user last selected, kept so wake retries can
     /// continue after the engine was recycled for an ASIO driver reload.
     last_selected_output: Option<AudioOutputTarget>,
@@ -499,6 +503,7 @@ impl PlaybackModel {
             download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             output_switch_epoch: 0,
             pending_output_target: None,
+            playing_at_suspend: false,
             last_selected_output: None,
             asio_bridge_origin: None,
             queued_output_request: None,
