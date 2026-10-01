@@ -147,6 +147,15 @@ impl PlaybackModel {
         asio_driver: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        // A wake and the driver's own reset request can both arrive while a
+        // recovery switch is already in flight. Recreating the engine then
+        // would tear down the very session the pending switch is rebuilding,
+        // and the overlapping teardown and load crash inside the driver.
+        // One recovery at a time; the in-flight switch completes or fails
+        // on its own and re-arms the retry chain if needed.
+        if self.pending_output_target.is_some() || self.wake_stall_probe.is_some() {
+            return;
+        }
         self.wake_retries_left = WAKE_OUTPUT_RETRIES;
         if asio_driver.is_some() {
             // The slept-through ASIO session's callback keeps firing into
