@@ -128,6 +128,7 @@ fn open_stream_on_this_thread(driver: &str) -> Result<rodio::OutputStream, Strin
 /// live: the driver is process-global and a concurrent load poisons it.
 pub(crate) fn open_asio_stream_logged(driver: &str) -> Result<rodio::OutputStream, String> {
     let (reply_tx, reply_rx) = channel();
+    let trace = std::backtrace::Backtrace::force_capture();
     owner_sender()
         .send(AsioRequest::Open {
             driver: driver.to_string(),
@@ -136,7 +137,11 @@ pub(crate) fn open_asio_stream_logged(driver: &str) -> Result<rodio::OutputStrea
         .map_err(|_| "The ASIO owner thread stopped unexpectedly".to_string())?;
     reply_rx
         .recv()
-        .map_err(|_| "The ASIO owner thread stopped unexpectedly".to_string())?
+        .map_err(|_| "The ASIO owner thread stopped unexpectedly".to_string())
+        .inspect(|stream| {
+            let _ = stream;
+            crate::diagnostics::event("INFO", format!("ASIO open caller stack:\n{trace}"));
+        })?
 }
 
 /// Drops ASIO output streams on the dedicated owner thread and blocks until

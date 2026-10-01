@@ -213,6 +213,7 @@ impl PlaybackModel {
                 "output switch requested: force={force_reopen} driver={asio_driver:?} device={output_device:?}"
             ),
         );
+        self.output_switch_epoch = self.output_switch_epoch.wrapping_add(1);
         let epoch = self.output_switch_epoch;
         let saved_device = output_device.clone();
         let saved_driver = asio_driver.clone();
