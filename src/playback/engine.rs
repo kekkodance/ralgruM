@@ -102,6 +102,7 @@ pub(crate) trait AudioEngine {
     fn skip_to_standby(&mut self);
     fn activate_standby(&mut self);
     fn sink_probe(&self) -> SinkProbe;
+    fn sink_empty(&self) -> bool;
     fn owns_probe(&self, probe: &SinkProbe) -> bool;
     /// Stops the engine and releases every ASIO stream it holds, including
     /// the parked ones. Dropping the last stream is what lets the process
@@ -160,6 +161,18 @@ pub(crate) struct OpenOutputSwitch {
 }
 
 impl OpenOutputSwitch {
+    pub(crate) fn new_reused(
+        stream: OutputStream,
+        position: Duration,
+        target: AudioOutputTarget,
+    ) -> Self {
+        Self {
+            stream,
+            position,
+            target,
+        }
+    }
+
     pub(crate) fn finish(self, source: Option<DecodedSource>) -> PreparedOutputSwitch {
         PreparedOutputSwitch {
             stream: self.stream,
@@ -167,6 +180,12 @@ impl OpenOutputSwitch {
             position: self.position,
             target: self.target,
         }
+    }
+}
+
+impl OutputReloadSpec {
+    pub(crate) fn position(&self) -> Duration {
+        self.position
     }
 }
 
@@ -367,6 +386,16 @@ impl RodioEngine {
             position: reload.map_or(Duration::ZERO, |spec| spec.position),
             target,
         })
+    }
+
+    /// Takes the current stream out of the engine for reuse as the target
+    /// of a switch. A freshly rebuilt wake engine already owns a live ASIO
+    /// session on the selected driver; opening a second one against the
+    /// same process-global driver shares its buffers and races the parked
+    /// first session's callbacks, leaving both dead at 0:00. Reusing the
+    /// live stream keeps exactly one session per driver.
+    pub(crate) fn take_stream_for_switch(&mut self) -> Option<OutputStream> {
+        self.stream.take()
     }
 
     /// Removes every stream from the engine for the system-suspend teardown,
@@ -1593,6 +1622,9 @@ impl AudioEngine for RodioEngine {
     }
     fn sink_probe(&self) -> SinkProbe {
         SinkProbe::new(self.sink.clone())
+    }
+    fn sink_empty(&self) -> bool {
+        self.sink.empty()
     }
     fn owns_probe(&self, probe: &SinkProbe) -> bool {
         probe.is_sink(&self.sink)

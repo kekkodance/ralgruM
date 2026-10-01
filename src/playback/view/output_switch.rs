@@ -1,5 +1,5 @@
 use super::*;
-use crate::playback::engine::OutputSwitch;
+use crate::playback::engine::{OpenOutputSwitch, OutputReloadSpec, OutputSwitch};
 
 #[derive(Clone, Copy)]
 pub(super) struct OutputResume {
@@ -334,6 +334,21 @@ impl PlaybackModel {
         // Wake-driven reopens go to a blocking worker instead: while the USB
         // interface re-enumerates, the open blocks for seconds, and doing
         // that on the UI thread freezes the whole app across every retry.
+        // A freshly rebuilt wake engine already owns a live ASIO session on
+        // this driver: opening another against the same process-global
+        // driver shares its buffers with parked sessions and kills both.
+        // Take the live stream and prepare the switch onto it instead.
+        let reused_asio_stream = if matches!(target, AudioOutputTarget::AsioDriver(_))
+            && !bridge_asio
+            && force_reopen
+            && let Ok(engine) = self.engine.as_mut()
+            && *engine.output_target() == target
+            && engine.sink_empty()
+        {
+            engine.take_stream_for_switch()
+        } else {
+            None
+        };
         let open_asio_task =
             if matches!(target, AudioOutputTarget::AsioDriver(_)) && !bridge_asio && force_reopen {
                 let open_target = target.clone();
@@ -347,6 +362,7 @@ impl PlaybackModel {
         let open_asio = if matches!(target, AudioOutputTarget::AsioDriver(_))
             && !bridge_asio
             && open_asio_task.is_none()
+            && reused_asio_stream.is_none()
         {
             Some(RodioEngine::open_asio_output_switch(
                 target.clone(),
@@ -355,10 +371,21 @@ impl PlaybackModel {
         } else {
             None
         };
-        let decode_task = open_asio.as_ref().filter(|result| result.is_ok()).map(|_| {
+        let reused_position = reload
+            .as_ref()
+            .map_or(Duration::ZERO, OutputReloadSpec::position);
+        let reused_target = target.clone();
+        let decode_task = reused_asio_stream.is_some().then(|| {
             let reload = reload.clone();
             self.runtime
                 .spawn_blocking(move || RodioEngine::decode_output_reload(reload))
+        });
+        let decode_task = decode_task.or_else(|| {
+            open_asio.as_ref().filter(|result| result.is_ok()).map(|_| {
+                let reload = reload.clone();
+                self.runtime
+                    .spawn_blocking(move || RodioEngine::decode_output_reload(reload))
+            })
         });
         let task_runtime = self.runtime.clone();
         let reload_for_task = reload.clone();
@@ -377,34 +404,46 @@ impl PlaybackModel {
         });
         let decode_runtime = self.runtime.clone();
         cx.spawn(async move |this, cx| {
-            let result = match open_asio_task {
-                Some(open_task) => match open_task
+            let result = if let Some(stream) = reused_asio_stream {
+                decode_task
+                    .unwrap()
                     .await
-                    .unwrap_or_else(|_| Err("The output switch worker stopped unexpectedly".into()))
-                {
-                    Ok(open) => {
-                        let decode_reload = reload.clone();
-                        decode_runtime
-                            .spawn_blocking(move || {
-                                RodioEngine::decode_output_reload(decode_reload)
-                            })
+                    .map(|source| {
+                        OpenOutputSwitch::new_reused(stream, reused_position, reused_target)
+                            .finish(source)
+                    })
+                    .map_err(|_| "The output switch decoder stopped unexpectedly".into())
+            } else {
+                match open_asio_task {
+                    Some(open_task) => match open_task.await.unwrap_or_else(|_| {
+                        Err("The output switch worker stopped unexpectedly".into())
+                    }) {
+                        Ok(open) => {
+                            let decode_reload = reload.clone();
+                            decode_runtime
+                                .spawn_blocking(move || {
+                                    RodioEngine::decode_output_reload(decode_reload)
+                                })
+                                .await
+                                .map(|source| open.finish(source))
+                                .map_err(|_| {
+                                    "The output switch decoder stopped unexpectedly".into()
+                                })
+                        }
+                        Err(error) => Err(error),
+                    },
+                    None => match open_asio {
+                        Some(Ok(open)) => decode_task
+                            .unwrap()
                             .await
                             .map(|source| open.finish(source))
-                            .map_err(|_| "The output switch decoder stopped unexpectedly".into())
-                    }
-                    Err(error) => Err(error),
-                },
-                None => match open_asio {
-                    Some(Ok(open)) => decode_task
-                        .unwrap()
-                        .await
-                        .map(|source| open.finish(source))
-                        .map_err(|_| "The output switch decoder stopped unexpectedly".into()),
-                    Some(Err(error)) => Err(error),
-                    None => task.unwrap().await.unwrap_or_else(|_| {
-                        Err("The output switch worker stopped unexpectedly".into())
-                    }),
-                },
+                            .map_err(|_| "The output switch decoder stopped unexpectedly".into()),
+                        Some(Err(error)) => Err(error),
+                        None => task.unwrap().await.unwrap_or_else(|_| {
+                            Err("The output switch worker stopped unexpectedly".into())
+                        }),
+                    },
+                }
             };
             this.update(cx, |this, cx| {
                 if this.output_switch_epoch != epoch {
