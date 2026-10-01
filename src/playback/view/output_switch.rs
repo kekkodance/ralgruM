@@ -207,7 +207,12 @@ impl PlaybackModel {
             self.queued_output_request = Some((asio_mode, output_device, asio_driver));
             return;
         }
-        self.output_switch_epoch = self.output_switch_epoch.wrapping_add(1);
+        diagnostics::event(
+            "INFO",
+            format!(
+                "output switch requested: force={force_reopen} driver={asio_driver:?} device={output_device:?}"
+            ),
+        );
         let epoch = self.output_switch_epoch;
         let saved_device = output_device.clone();
         let saved_driver = asio_driver.clone();
@@ -248,6 +253,14 @@ impl PlaybackModel {
         force_reopen: bool,
         cx: &mut Context<Self>,
     ) {
+        diagnostics::event(
+            "INFO",
+            format!(
+                "output switch begin: epoch={epoch} force={force_reopen} engine_err={} sink_empty={}",
+                self.engine.is_err(),
+                self.engine.as_ref().is_ok_and(AudioEngine::sink_empty),
+            ),
+        );
         if self.engine.is_err() && force_reopen {
             // The engine was recycled after a wake (its driver object was
             // poisoned). Rebuilding opens the ASIO driver, which blocks for
@@ -347,6 +360,16 @@ impl PlaybackModel {
         // this driver: opening another against the same process-global
         // driver shares its buffers with parked sessions and kills both.
         // Take the live stream and prepare the switch onto it instead.
+        diagnostics::event(
+            "INFO",
+            format!(
+                "output switch preparing: engine_target={:?} requested={target:?}",
+                self.engine
+                    .as_ref()
+                    .ok()
+                    .map(|engine| engine.output_target().clone()),
+            ),
+        );
         let reused_asio_stream = if matches!(target, AudioOutputTarget::AsioDriver(_))
             && !bridge_asio
             && force_reopen
@@ -358,16 +381,19 @@ impl PlaybackModel {
         } else {
             None
         };
-        let open_asio_task =
-            if matches!(target, AudioOutputTarget::AsioDriver(_)) && !bridge_asio && force_reopen {
-                let open_target = target.clone();
-                let open_reload = reload.clone();
-                Some(self.runtime.spawn_blocking(move || {
-                    RodioEngine::open_asio_output_switch(open_target, open_reload.as_ref())
-                }))
-            } else {
-                None
-            };
+        let open_asio_task = if reused_asio_stream.is_none()
+            && matches!(target, AudioOutputTarget::AsioDriver(_))
+            && !bridge_asio
+            && force_reopen
+        {
+            let open_target = target.clone();
+            let open_reload = reload.clone();
+            Some(self.runtime.spawn_blocking(move || {
+                RodioEngine::open_asio_output_switch(open_target, open_reload.as_ref())
+            }))
+        } else {
+            None
+        };
         let open_asio = if matches!(target, AudioOutputTarget::AsioDriver(_))
             && !bridge_asio
             && open_asio_task.is_none()
@@ -492,6 +518,13 @@ impl PlaybackModel {
                             .as_mut()
                             .unwrap()
                             .set_output(prepared, force_reopen);
+                        diagnostics::event(
+                            "INFO",
+                            format!(
+                                "output switch install result: {switch:?} status={:?}",
+                                this.state.status
+                            ),
+                        );
                         this.standby = StandbyPhase::Idle;
                         if switch == OutputSwitch::SourceLost {
                             if let Some(generation) = this.state.reload_current_source() {

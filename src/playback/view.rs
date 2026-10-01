@@ -1522,6 +1522,10 @@ impl PlaybackModel {
                     self.standby = StandbyPhase::Idle;
                 }
                 if ended {
+                    diagnostics::event(
+                        "WARN",
+                        "playback ended detection fired after the wake; the sink is empty and unpaused",
+                    );
                     self.next(cx);
                     return;
                 }
