@@ -120,7 +120,11 @@ impl PlaybackModel {
     /// PBT_APMSUSPEND handlers are allowed to block briefly, and a clean
     /// ASIOExit plus COM Release on live hardware takes milliseconds.
     pub(crate) fn suspend_audio_output_for_sleep(&mut self, cx: &mut Context<Self>) {
-        self.playing_at_suspend = self.state.status == PlaybackStatus::Playing;
+        self.wake_reload_spec = self
+            .engine
+            .as_ref()
+            .ok()
+            .and_then(|engine| engine.output_reload_spec());
         if let Ok(mut engine) =
             std::mem::replace(&mut self.engine, Err("released for sleep".into()))
         {
@@ -163,11 +167,14 @@ impl PlaybackModel {
             // wake. Recycle the engine immediately so every callback is
             // removed before anything else runs; the retry loop rebuilds a
             // live session once the driver returns.
-            self.wake_reload_spec = self
+            if let Some(spec) = self
                 .engine
                 .as_ref()
                 .ok()
-                .and_then(|engine| engine.output_reload_spec());
+                .and_then(|engine| engine.output_reload_spec())
+            {
+                self.wake_reload_spec = Some(spec);
+            }
             if let Ok(engine) = self.engine.as_mut() {
                 engine.recycle_for_driver_reload();
             }
