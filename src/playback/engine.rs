@@ -23,7 +23,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics;
 
-use super::asio_drivers::find_asio_driver;
 use super::output_devices::find_output_device;
 use super::progressive::{
     LandedSuffixSource, ProgressiveCompletion, ProgressiveReader, TimelineSeekSession,
@@ -178,7 +177,7 @@ impl PreparedOutputSwitch {
 }
 
 pub(crate) struct RodioEngine {
-    stream: OutputStream,
+    stream: Option<OutputStream>,
     /// Streams replaced after a system wake. A slept-through ASIO session
     /// can crash inside its own teardown when the driver is wedged, so the
     /// wake path parks the old stream here instead of dropping it.
@@ -214,6 +213,21 @@ pub(crate) struct RodioEngine {
     output_target: AudioOutputTarget,
 }
 
+impl Drop for RodioEngine {
+    fn drop(&mut self) {
+        if matches!(self.output_target, AudioOutputTarget::AsioDriver(_)) {
+            // The ASIO streams (current and retired) must release their COM
+            // objects on the owner thread that created them, or the
+            // Apartment-threaded driver DLL wedges for the whole process.
+            let mut streams = std::mem::take(&mut self.retired_streams);
+            if let Some(stream) = self.stream.take() {
+                streams.push(stream);
+            }
+            crate::playback::asio_thread::drop_asio_streams(streams);
+        }
+    }
+}
+
 /// Set when the ASIO driver asked the host to reset or resynchronize, which
 /// happens when a system sleep invalidates its session. The playback poll
 /// drains this and triggers the wake recovery path.
@@ -226,7 +240,7 @@ impl RodioEngine {
         Self::register_driver_reset_listener();
         let sink = Arc::new(Sink::connect_new(stream.mixer()));
         Ok(Self {
-            stream,
+            stream: Some(stream),
             retired_streams: Vec::new(),
             retired_sinks: Vec::new(),
             stream_slept_through: false,
@@ -291,15 +305,15 @@ impl RodioEngine {
     /// process, so a different live ASIO stream makes the lookup fail; the
     /// caller then keeps the previous stream.
     fn open_asio_output_stream(name: &str) -> Result<OutputStream, String> {
-        let device = find_asio_driver(name)?;
-        let config = device.default_output_config().ok();
-        let stream = OutputStreamBuilder::from_device(device)
-            .and_then(|builder| {
-                builder
-                    .with_error_callback(log_output_stream_error)
-                    .open_stream_or_fallback()
-            })
-            .map_err(|error| format!("The ASIO driver \"{name}\" could not be opened: {error}"))?;
+        // The open runs on the dedicated ASIO owner thread: the MiniFuse
+        // driver is an Apartment-threaded COM server that only loads from a
+        // COM-initialized thread and only releases cleanly on the thread
+        // that created it.
+        let stream = crate::playback::asio_thread::open_asio_stream(name)?;
+        let config = rodio::cpal::host_from_id(rodio::cpal::HostId::Asio)
+            .ok()
+            .and_then(|host| host.default_output_device())
+            .and_then(|device| device.default_output_config().ok());
         if let Some(config) = config {
             diagnostics::event(
                 "INFO",
@@ -360,6 +374,17 @@ impl RodioEngine {
             position: reload.map_or(Duration::ZERO, |spec| spec.position),
             target,
         })
+    }
+
+    /// Removes every stream from the engine for the system-suspend teardown,
+    /// so their COM release can run on the ASIO owner thread before the OS
+    /// freezes all threads. The engine stays usable as a paused shell.
+    pub(crate) fn take_asio_streams_for_suspend(&mut self) -> Vec<OutputStream> {
+        let mut streams = std::mem::take(&mut self.retired_streams);
+        if let Some(stream) = self.stream.take() {
+            streams.push(stream);
+        }
+        streams
     }
 
     /// WASAPI stream opening and decoder positioning can block, so callers
@@ -677,7 +702,9 @@ impl RodioEngine {
         if self.stream_slept_through {
             self.retired_sinks.push(self.sink.clone());
         }
-        let sink = Arc::new(Sink::connect_new(self.stream.mixer()));
+        let sink = Arc::new(Sink::connect_new(
+            self.stream.as_ref().expect("stream present").mixer(),
+        ));
         sink.set_volume(volume);
         sink.append(self.wrap_source(source));
         if should_pause {
@@ -1023,7 +1050,7 @@ pub(crate) fn asio_endpoint_matches_driver(device: &str, driver: &str) -> bool {
         })
 }
 
-fn log_output_stream_error(error: rodio::cpal::StreamError) {
+pub(crate) fn log_output_stream_error(error: rodio::cpal::StreamError) {
     diagnostics::event("WARN", format!("audio output stream error: {error}"));
 }
 
@@ -1258,7 +1285,9 @@ impl AudioEngine for RodioEngine {
             // drains it on the slept-through driver's callback thread.
             self.retired_sinks.push(self.sink.clone());
         }
-        self.sink = Arc::new(Sink::connect_new(self.stream.mixer()));
+        self.sink = Arc::new(Sink::connect_new(
+            self.stream.as_ref().expect("stream present").mixer(),
+        ));
         self.sink.set_volume(volume);
         self.transport_gain.reset(1.0);
         crate::plugins::minimeters::tap::set_volume(volume);
@@ -1467,11 +1496,13 @@ impl AudioEngine for RodioEngine {
         // on the same wedged driver's callback thread.
         let park_old = retire || self.stream_slept_through;
         if park_old {
-            self.retired_streams
-                .push(std::mem::replace(&mut self.stream, stream));
+            if let Some(old) = self.stream.take() {
+                self.retired_streams.push(old);
+            }
+            self.stream = Some(stream);
             self.retired_sinks.push(self.sink.clone());
         } else {
-            self.stream = stream;
+            self.stream = Some(stream);
         }
         self.stream_slept_through = false;
 
@@ -1481,7 +1512,9 @@ impl AudioEngine for RodioEngine {
             // the position probe onto the reloaded source.
             self.install_progressive_source(source, position, None, Some(false), None);
         } else {
-            let sink = Arc::new(Sink::connect_new(self.stream.mixer()));
+            let sink = Arc::new(Sink::connect_new(
+                self.stream.as_ref().expect("stream present").mixer(),
+            ));
             sink.set_volume(self.sink.volume());
             if had_source {
                 // The buffer could not be reloaded. Keep the position probe

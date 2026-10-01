@@ -111,22 +111,26 @@ impl PlaybackModel {
     /// and a backend that still refuses to advance pauses instead of
     /// migrating playback to another device.
     /// Releases the audio output before the system sleeps. The teardown must
-    /// happen while the driver still works: a surviving callback would fire
-    /// into dead hardware, and the shared ASIO stream slot must be cleared so
-    /// the wake path performs a genuinely fresh open. The COM lifecycle of the
-    /// driver stays on the blocking-pool threads that open it: releasing the
-    /// in-proc COM object from the UI thread, which lives in a different COM
-    /// apartment, can wedge the DLL for the rest of the process.
+    /// run to completion while the driver and the hardware still work: a
+    /// surviving callback would fire into dead hardware, and the shared ASIO
+    /// stream slot must be cleared so the wake path performs a genuinely
+    /// fresh open. The reference implementation does this synchronously in
+    /// its suspend handler; deferring the drop lets Windows freeze threads
+    /// mid-DLL-exit, which wedges the driver for the rest of the process.
+    /// PBT_APMSUSPEND handlers are allowed to block briefly, and a clean
+    /// ASIOExit plus COM Release on live hardware takes milliseconds.
     pub(crate) fn suspend_audio_output_for_sleep(&mut self, cx: &mut Context<Self>) {
         self.wake_stall_probe = None;
-        let runtime = self.runtime.clone();
         if let Ok(mut engine) =
             std::mem::replace(&mut self.engine, Err("released for sleep".into()))
         {
             engine.recycle_for_driver_reload();
-            runtime.spawn_blocking(move || drop(engine));
-            // The task must outlive this call: dropping its handle would
-            // abort the teardown mid-DLL-exit, wedging the driver.
+            let streams = engine.take_asio_streams_for_suspend();
+            // Blocking: the COM release and ASIOExit must complete on the
+            // ASIO owner thread before the OS freezes all threads, or the
+            // Apartment-threaded driver DLL is left half-exited and every
+            // later load fails until restart.
+            crate::playback::asio_thread::drop_asio_streams_blocking(streams);
         }
         // Silence the transport projection until the wake restores playback.
         if self.state.toggle().is_some_and(|playing| !playing) {

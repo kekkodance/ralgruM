@@ -1,4 +1,5 @@
 pub(crate) mod asio_drivers;
+pub(crate) mod asio_thread;
 pub(crate) mod automation;
 mod cache;
 mod deezer_extension;
