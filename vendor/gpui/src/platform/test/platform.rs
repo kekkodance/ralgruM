@@ -535,6 +535,8 @@ impl Platform for TestPlatform {
 
     fn on_system_wake(&self, _callback: Box<dyn FnMut()>) {}
 
+    fn on_system_suspend(&self, _callback: Box<dyn FnMut()>) {}
+
     fn set_app_identity(&self, identifier: &str, name: &str) {
         self.system_notifications.borrow_mut().app_identity =
             Some((identifier.to_string().into(), name.to_string().into()));

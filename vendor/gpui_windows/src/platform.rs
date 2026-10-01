@@ -86,6 +86,7 @@ struct PlatformCallbacks {
     validate_app_menu_command: Cell<Option<Box<dyn FnMut(&dyn Action) -> bool>>>,
     keyboard_layout_change: Cell<Option<Box<dyn FnMut()>>>,
     system_wake: Cell<Option<Box<dyn FnMut()>>>,
+    system_suspend: Cell<Option<Box<dyn FnMut()>>>,
 }
 
 impl WindowsPlatformState {
@@ -685,6 +686,10 @@ impl Platform for WindowsPlatform {
 
     fn on_system_wake(&self, callback: Box<dyn FnMut()>) {
         self.inner.state.callbacks.system_wake.set(Some(callback));
+    }
+
+    fn on_system_suspend(&self, callback: Box<dyn FnMut()>) {
+        self.inner.state.callbacks.system_suspend.set(Some(callback));
         let mut notification = self.suspend_resume_notification.borrow_mut();
         if notification.is_none() {
             *notification = unsafe {
@@ -1166,6 +1171,9 @@ impl WindowsPlatformInner {
     }
 
     fn handle_power_broadcast(&self, wparam: WPARAM) -> Option<isize> {
+        if wparam.0 as u32 == PBT_APMSUSPEND {
+            self.with_callback(|callbacks| &callbacks.system_suspend, |callback| callback());
+        }
         if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC {
             self.with_callback(|callbacks| &callbacks.system_wake, |callback| callback());
         }

@@ -110,6 +110,24 @@ impl PlaybackModel {
     /// output must never change: a failed reopen retries the same target,
     /// and a backend that still refuses to advance pauses instead of
     /// migrating playback to another device.
+    /// Releases the audio output before the system sleeps. Called while the
+    /// driver still works, so the teardown is clean: no callback survives
+    /// into dead hardware, and the shared ASIO stream slot is cleared so the
+    /// wake path performs a genuinely fresh open.
+    pub(crate) fn suspend_audio_output_for_sleep(&mut self, cx: &mut Context<Self>) {
+        self.wake_stall_probe = None;
+        if let Ok(engine) = self.engine.as_mut() {
+            engine.recycle_for_driver_reload();
+        }
+        self.engine = Err("The audio output was released for system sleep".into());
+        // Silence the transport projection until the wake restores playback.
+        if self.state.toggle().is_some_and(|playing| !playing) {
+            self.cancel_user_fade();
+            self.sync_discord();
+        }
+        cx.notify();
+    }
+
     pub(crate) fn reinitialize_audio_output_after_wake(
         &mut self,
         asio_mode: bool,
@@ -143,7 +161,17 @@ impl PlaybackModel {
             last_position: self.state.position,
             poll_count: 0,
         });
-        self.set_audio_output_with_reason(asio_mode, output_device, asio_driver, true, cx);
+        // USB interfaces need 1.5-3 seconds after Windows wake to negotiate;
+        // the first reopen attempt is delayed so it does not burn instantly.
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            executor.timer(WAKE_RETRY_DELAY).await;
+            this.update(cx, |this, cx| {
+                this.set_audio_output_with_reason(asio_mode, output_device, asio_driver, true, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn set_audio_output_with_reason(

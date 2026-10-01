@@ -687,6 +687,28 @@ impl RalgrumApp {
             })
             .detach();
         }
+        {
+            // The reference implementation drops the ASIO session BEFORE the
+            // hardware sleeps: tearing down while the driver still works means
+            // no zombie callback fires into dead hardware (the clicking), and
+            // the wake path opens a genuinely fresh session. The engine is
+            // dropped here and rebuilt by the wake/retry machinery.
+            let shell = cx.entity().downgrade();
+            cx.on_system_suspend(move |cx| {
+                crate::diagnostics::event("INFO", "system suspending; releasing the audio output");
+                if let Some(shell) = shell.upgrade() {
+                    shell.update(cx, |this, cx| {
+                        let saved = this.settings.read(cx).saved();
+                        if saved.asio_mode {
+                            this.playback.update(cx, |playback, cx| {
+                                playback.suspend_audio_output_for_sleep(cx);
+                            });
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
         let saved = settings.read(cx).saved().clone();
         cx.set_reduce_motion(saved.motion_preference.is_reduced());
         let cache = settings.read(cx).cache.clone();
