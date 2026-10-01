@@ -216,14 +216,20 @@ pub(crate) struct RodioEngine {
 impl Drop for RodioEngine {
     fn drop(&mut self) {
         if matches!(self.output_target, AudioOutputTarget::AsioDriver(_)) {
-            // The ASIO streams (current and retired) must release their COM
-            // objects on the owner thread that created them, or the
+            // A stream that slept through a system sleep is wedged: its
+            // driver object is poisoned, and dropping its callbacks can
+            // fault inside the driver. Keep parked streams parked; they
+            // only die with the process. A healthy stream's COM release
+            // must run on the owner thread that created it, or the
             // Apartment-threaded driver DLL wedges for the whole process.
-            let mut streams = std::mem::take(&mut self.retired_streams);
-            if let Some(stream) = self.stream.take() {
-                streams.push(stream);
+            let mut streams = Vec::new();
+            if !self.stream_slept_through {
+                if let Some(stream) = self.stream.take() {
+                    streams.push(stream);
+                }
+                streams.append(&mut self.retired_streams);
+                crate::playback::asio_thread::drop_asio_streams(streams);
             }
-            crate::playback::asio_thread::drop_asio_streams(streams);
         }
     }
 }

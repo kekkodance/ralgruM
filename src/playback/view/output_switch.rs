@@ -568,6 +568,13 @@ impl PlaybackModel {
                     self.wake_retries_left
                 ),
             );
+            // A stream that plays nothing while unpaused is wedged exactly
+            // like a slept-through one: its driver's buffer switch is dead,
+            // and dropping it can fault inside the driver. Park it instead
+            // of letting the recycle below tear it down on a live path.
+            if let Ok(engine) = self.engine.as_mut() {
+                engine.mark_stream_slept_through();
+            }
             self.retry_wake_output(cx);
             return true;
         }
