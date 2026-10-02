@@ -156,9 +156,10 @@ impl PlaybackModel {
         // recovery switch is already in flight. Recreating the engine then
         // would tear down the very session the pending switch is rebuilding,
         // and the overlapping teardown and load crash inside the driver.
-        // One recovery at a time; the in-flight switch completes or fails
-        // on its own and re-arms the retry chain if needed.
-        if self.pending_output_target.is_some() || self.wake_stall_probe.is_some() {
+        // Only a genuinely in-flight switch blocks a new recovery: the stall
+        // probe stays armed for as long as the user plays nothing after a
+        // wake, and it must not swallow the next wake's recovery.
+        if self.pending_output_target.is_some() {
             return;
         }
         self.wake_retries_left = WAKE_OUTPUT_RETRIES;
