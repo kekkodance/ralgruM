@@ -202,8 +202,17 @@ pub trait Platform: 'static {
 
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>);
     fn on_reopen(&self, callback: Box<dyn FnMut()>);
-    fn on_system_wake(&self, callback: Box<dyn FnMut()>);
-    fn on_system_suspend(&self, callback: Box<dyn FnMut()>);
+    fn on_system_wake(&self, callback: Box<dyn FnMut()>) {
+        // Platforms without power notifications never fire this; the
+        // registration is dropped on the floor.
+        drop(callback);
+    }
+    /// Registers a callback invoked when the system is about to sleep.
+    /// Backends without power notifications (upstream Linux) keep the
+    /// default and simply never invoke the callback.
+    fn on_system_suspend(&self, callback: Box<dyn FnMut()>) {
+        drop(callback);
+    }
 
     // Mobile platform methods. On mobile the OS owns the application
     // lifecycle: apps are backgrounded, foregrounded, and killed at the
@@ -851,7 +860,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn minimize(&self);
 
     /// Pins or unpins the window above all non-topmost windows.
-    fn set_always_on_top(&self, always_on_top: bool);
+    /// Backends without the concept keep the default no-op.
+    fn set_always_on_top(&self, _always_on_top: bool) {}
     fn zoom(&self);
     fn toggle_fullscreen(&self);
     fn is_fullscreen(&self) -> bool;

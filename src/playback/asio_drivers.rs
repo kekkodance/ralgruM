@@ -1,7 +1,8 @@
-use rodio::cpal::traits::{DeviceTrait, HostTrait};
-
 use super::engine::AudioOutputTarget;
 use super::output_devices::sorted_deduped;
+
+#[cfg(windows)]
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
 /// Names of every installed ASIO driver, read straight from the registry
 /// without loading any driver. The list includes drivers whose hardware is
@@ -50,11 +51,6 @@ pub(crate) fn find_asio_driver(name: &str) -> Result<rodio::cpal::Device, String
         .into_iter()
         .find(|device| device.name().ok().as_deref() == Some(name))
         .ok_or_else(|| format!("The installed ASIO driver \"{name}\" could not be loaded"))
-}
-
-#[cfg(not(windows))]
-pub(crate) fn find_asio_driver(_name: &str) -> Result<rodio::cpal::Device, String> {
-    Err("ASIO is unavailable on this platform".into())
 }
 
 /// Maps the saved output selection onto an engine target. ASIO mode plays

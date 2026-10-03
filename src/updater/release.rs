@@ -67,7 +67,7 @@ pub(crate) async fn fetch_latest(client: &reqwest::Client) -> Result<Option<Rele
         .json::<GithubRelease>()
         .await
         .map_err(|error| format!("Could not read the GitHub release: {error}"))?;
-    parse_release(body, &current_version())
+    parse_release(body, &current_version(), super::platform::asset_name())
 }
 
 #[cfg(debug_assertions)]
@@ -91,7 +91,8 @@ fn fixture_release(candidate: &std::path::Path) -> Result<Release, String> {
     Ok(Release {
         version,
         asset_url: Url::parse(&format!(
-            "https://github.com/kekkodance/ralgruM/releases/download/{tag}/ralgruM.exe"
+            "https://github.com/kekkodance/ralgruM/releases/download/{tag}/{}",
+            super::platform::asset_name().unwrap_or("ralgruM.exe")
         ))
         .map_err(|error| error.to_string())?,
         page_url: Url::parse(&format!(
@@ -103,7 +104,11 @@ fn fixture_release(candidate: &std::path::Path) -> Result<Release, String> {
     })
 }
 
-fn parse_release(body: GithubRelease, current: &Version) -> Result<Option<Release>, String> {
+fn parse_release(
+    body: GithubRelease,
+    current: &Version,
+    asset_name: Option<&str>,
+) -> Result<Option<Release>, String> {
     if body.draft || body.prerelease {
         return Ok(None);
     }
@@ -113,30 +118,32 @@ fn parse_release(body: GithubRelease, current: &Version) -> Result<Option<Releas
     if version <= *current {
         return Ok(None);
     }
+    let name = asset_name
+        .ok_or("This platform has no update channel: the latest release has no matching asset")?;
     let asset = body
         .assets
         .iter()
-        .find(|asset| asset.name == "ralgruM.exe")
-        .ok_or_else(|| "The latest release has no ralgruM.exe asset".to_owned())?;
+        .find(|asset| asset.name == name)
+        .ok_or_else(|| format!("The latest release has no {name} asset"))?;
     if asset.size == 0 || asset.size > MAX_ASSET_BYTES {
-        return Err("The release executable has an invalid size".into());
+        return Err("The release asset has an invalid size".into());
     }
     let digest = parse_digest(
         asset
             .digest
             .as_deref()
-            .ok_or("The release executable has no SHA-256 digest")?,
+            .ok_or("The release asset has no SHA-256 digest")?,
     )?;
     let asset_url = Url::parse(&asset.browser_download_url)
-        .map_err(|_| "The release executable has an invalid URL".to_owned())?;
-    let expected = format!("/kekkodance/ralgruM/releases/download/{tag}/ralgruM.exe");
+        .map_err(|_| "The release asset has an invalid URL".to_owned())?;
+    let expected = format!("/kekkodance/ralgruM/releases/download/{tag}/{name}");
     if asset_url.scheme() != "https"
         || asset_url.host_str() != Some("github.com")
         || asset_url.path() != expected
         || asset_url.query().is_some()
         || asset_url.fragment().is_some()
     {
-        return Err("The release executable URL is outside the expected repository".into());
+        return Err("The release asset URL is outside the expected repository".into());
     }
     let page_url = Url::parse(&format!(
         "https://github.com/kekkodance/ralgruM/releases/tag/{tag}"
@@ -154,14 +161,14 @@ fn parse_release(body: GithubRelease, current: &Version) -> Result<Option<Releas
 fn parse_digest(value: &str) -> Result<[u8; 32], String> {
     let hex = value
         .strip_prefix("sha256:")
-        .ok_or("The release executable has no SHA-256 digest")?;
+        .ok_or("The release asset has no SHA-256 digest")?;
     if hex.len() != 64 {
-        return Err("The release executable SHA-256 digest is malformed".into());
+        return Err("The release asset SHA-256 digest is malformed".into());
     }
-    let mut result = [0; 32];
+    let mut result = [0_u8; 32];
     for (index, byte) in result.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)
-            .map_err(|_| "The release executable SHA-256 digest is malformed")?;
+            .map_err(|_| "The release asset SHA-256 digest is malformed")?;
     }
     Ok(result)
 }
@@ -170,13 +177,13 @@ fn parse_digest(value: &str) -> Result<[u8; 32], String> {
 mod tests {
     use super::*;
 
-    fn response(tag: &str, url: &str, digest: Option<&str>) -> GithubRelease {
+    fn response(tag: &str, asset: &str, url: &str, digest: Option<&str>) -> GithubRelease {
         GithubRelease {
             tag_name: tag.into(),
             draft: false,
             prerelease: false,
             assets: vec![GithubAsset {
-                name: "ralgruM.exe".into(),
+                name: asset.into(),
                 size: 47_000_000,
                 digest: digest.map(str::to_owned),
                 browser_download_url: url.into(),
@@ -184,38 +191,170 @@ mod tests {
         }
     }
 
+    /// The contract under test is that the running platform's own asset is
+    /// selected from a multi-asset release. The release body here carries both
+    /// Linux architectures plus a stray mismatched-arch asset to prove the
+    /// parser does not fall back to any AppImage it finds.
+    fn linux_release_body(tag: &str, digest: &str, chosen: &str) -> GithubRelease {
+        GithubRelease {
+            tag_name: tag.into(),
+            draft: false,
+            prerelease: false,
+            assets: [
+                "ralgruM-x86_64-linux.AppImage",
+                "ralgruM-aarch64-linux.AppImage",
+                "ralgruM-riscv64gc-linux.AppImage",
+            ]
+            .iter()
+            .map(|&name| GithubAsset {
+                // The chosen asset keeps the standard size while the decoys
+                // use a distinct one, so the assertions can tell exactly
+                // which entry the parser selected.
+                size: if name == chosen {
+                    47_000_000
+                } else {
+                    93_000_000
+                },
+                name: name.into(),
+                digest: Some(digest.to_owned()),
+                browser_download_url: format!(
+                    "https://github.com/kekkodance/ralgruM/releases/download/{tag}/{name}"
+                ),
+            })
+            .collect(),
+        }
+    }
+
     #[test]
     fn accepts_only_newer_stable_releases_with_the_expected_asset() {
         let digest = format!("sha256:{}", "ab".repeat(32));
-        let url = "https://github.com/kekkodance/ralgruM/releases/download/v0.6.0/ralgruM.exe";
+        let name = crate::updater::platform::asset_name()
+            .expect("the release channel exists on Windows and Linux");
+        let url = format!("https://github.com/kekkodance/ralgruM/releases/download/v0.6.0/{name}");
         let current = Version::parse("0.5.0").unwrap();
-        let release = parse_release(response("v0.6.0", url, Some(&digest)), &current)
-            .unwrap()
-            .unwrap();
+        let release = parse_release(
+            response("v0.6.0", name, &url, Some(&digest)),
+            &current,
+            Some(name),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(release.version, Version::parse("0.6.0").unwrap());
         assert_eq!(release.digest, [0xab; 32]);
-        assert!(
-            parse_release(response("v0.5.0", url, Some(&digest)), &current)
-                .unwrap()
-                .is_none()
+        assert_eq!(
+            release.asset_url.path(),
+            format!("/kekkodance/ralgruM/releases/download/v0.6.0/{name}")
         );
         assert!(
-            parse_release(response("v0.4.9", url, Some(&digest)), &current)
-                .unwrap()
-                .is_none()
+            parse_release(
+                response("v0.5.0", name, &url, Some(&digest)),
+                &current,
+                Some(name)
+            )
+            .unwrap()
+            .is_none()
         );
+        assert!(
+            parse_release(
+                response("v0.4.9", name, &url, Some(&digest)),
+                &current,
+                Some(name)
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn windows_releases_resolve_the_legacy_exe_asset() {
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        let url = "https://github.com/kekkodance/ralgruM/releases/download/v0.6.0/ralgruM.exe";
+        let current = Version::parse("0.5.0").unwrap();
+        let release = parse_release(
+            response("v0.6.0", "ralgruM.exe", url, Some(&digest)),
+            &current,
+            Some("ralgruM.exe"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(release.version, Version::parse("0.6.0").unwrap());
+        assert_eq!(
+            release.asset_url.path(),
+            "/kekkodance/ralgruM/releases/download/v0.6.0/ralgruM.exe"
+        );
+        // A Windows client must not match the AppImage entries of the same
+        // release; the asset find has to stay exact.
+        assert!(
+            parse_release(
+                response(
+                    "v0.6.0",
+                    "ralgruM-x86_64-linux.AppImage",
+                    "https://github.com/kekkodance/ralgruM/releases/download/v0.6.0/ralgruM-x86_64-linux.AppImage",
+                    Some(&digest)
+                ),
+                &current,
+                Some("ralgruM.exe")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn linux_releases_resolve_the_arch_appimage_asset() {
+        let digest = format!("sha256:{}", "cd".repeat(32));
+        let current = Version::parse("0.5.0").unwrap();
+        for (arch, name) in [
+            ("x86_64", "ralgruM-x86_64-linux.AppImage"),
+            ("aarch64", "ralgruM-aarch64-linux.AppImage"),
+        ] {
+            let release = parse_release(
+                linux_release_body("v0.6.0", &digest, name),
+                &current,
+                Some(name),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                release.asset_url.path(),
+                format!("/kekkodance/ralgruM/releases/download/v0.6.0/{name}")
+            );
+            // The parser must pick the exact asset entry for this
+            // architecture, not any other AppImage in the release.
+            assert_eq!(release.size, 47_000_000, "asset selection for {arch}");
+            assert_eq!(release.digest, [0xcd; 32]);
+        }
+    }
+
+    #[test]
+    fn unsupported_platforms_have_no_update_channel() {
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        let current = Version::parse("0.5.0").unwrap();
+        let error = parse_release(
+            linux_release_body("v0.6.0", &digest, "ralgruM-x86_64-linux.AppImage"),
+            &current,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("no update channel"));
     }
 
     #[test]
     fn refuses_missing_digest_and_foreign_download_url() {
         let current = Version::parse("0.5.0").unwrap();
+        let name = "ralgruM.exe";
         let url = "https://github.com/kekkodance/ralgruM/releases/download/v0.6.0/ralgruM.exe";
-        assert!(parse_release(response("v0.6.0", url, None), &current).is_err());
+        assert!(parse_release(response("v0.6.0", name, url, None), &current, Some(name)).is_err());
         let digest = format!("sha256:{}", "ab".repeat(32));
         assert!(
             parse_release(
-                response("v0.6.0", "https://example.com/ralgruM.exe", Some(&digest)),
-                &current
+                response(
+                    "v0.6.0",
+                    name,
+                    "https://example.com/ralgruM.exe",
+                    Some(&digest)
+                ),
+                &current,
+                Some(name)
             )
             .is_err()
         );
@@ -232,6 +371,7 @@ mod tests {
         let release = parse_release(
             response.json::<GithubRelease>().await.unwrap(),
             &Version::parse("0.0.0").unwrap(),
+            super::super::platform::asset_name(),
         )
         .unwrap()
         .unwrap();

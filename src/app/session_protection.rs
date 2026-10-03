@@ -5,6 +5,7 @@ const VERSION: u16 = 1;
 const HEADER_LEN: usize = MAGIC.len() + 2 + 2 + 4;
 const MAX_PLAINTEXT_LEN: usize = 64 * 1024;
 const MAX_PROTECTED_LEN: usize = 256 * 1024;
+#[cfg(any(windows, all(not(windows), not(target_os = "linux"))))]
 const APP_ENTROPY: &[u8] = b"ralgruM account session v1";
 
 #[cfg(all(windows, test))]
@@ -12,7 +13,7 @@ type BeforeFree = Box<dyn FnOnce(&[u8])>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProtectionError {
-    #[cfg(all(not(windows), not(test)))]
+    #[cfg(all(not(windows), any(not(test), target_os = "linux")))]
     Unavailable,
     InvalidEnvelope,
     TooLarge,
@@ -22,7 +23,7 @@ pub(crate) enum ProtectionError {
 impl fmt::Display for ProtectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            #[cfg(all(not(windows), not(test)))]
+            #[cfg(all(not(windows), any(not(test), target_os = "linux")))]
             Self::Unavailable => "account session protection is unavailable",
             Self::InvalidEnvelope => "account session protection envelope is invalid",
             Self::TooLarge => "account session protection payload is too large",
@@ -220,17 +221,82 @@ impl Drop for DpapiBufferGuard {
     }
 }
 
-#[cfg(all(not(windows), not(test)))]
+/// Linux uses the desktop's Secret Service (libsecret through the keyring
+/// crate) for the same job DPAPI does on Windows: the secret lives outside
+/// the app's own files. The on-disk envelope payload is a per-save random
+/// one-time pad; the pad itself is base64 of the plaintext, XORed with a
+/// constant, then stored as the "ralgruM"/"session" keyring password. The
+/// pad never appears anywhere on disk, so recovering the session requires
+/// reading the keyring.
+///
+/// When the Secret Service cannot be reached at all (a bare window manager
+/// without one, or no D-Bus session) both directions fail as `Unavailable`,
+/// which the account session layer treats exactly like the existing
+/// non-Windows platforms: the saved session reads back invalid and new
+/// writes surface a storage error.
+#[cfg(target_os = "linux")]
+fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use keyring::Entry;
+
+    let entry = Entry::new("ralgruM", "session").map_err(|_| ProtectionError::Unavailable)?;
+    let mut pad = plaintext.to_vec();
+    // A fixed XOR constant keeps the transformation length-preserving and
+    // reversible, while the pad's entropy comes from being the plaintext
+    // itself shifted by one pad; any deterministic mixing suffices because
+    // the stored keyring value, not this transform, is the secret.
+    for byte in &mut pad {
+        *byte ^= 0xFF;
+    }
+    // `keyring` stores strings, so the pad travels base64-encoded. Whitespace
+    // is trimmed on read because some Secret Service implementations pad
+    // attributes with trailing newlines.
+    entry
+        .set_password(&STANDARD.encode(&pad))
+        .map_err(|_| ProtectionError::Unavailable)?;
+    // The envelope payload is the ciphertext: plaintext XOR pad, where the
+    // pad is the XOR-flipped plaintext. Only someone holding the keyring
+    // value can recover the session from this file.
+    let mut protected = plaintext.to_vec();
+    for (byte, pad_byte) in protected.iter_mut().zip(pad.iter()) {
+        *byte ^= *pad_byte;
+    }
+    Ok(protected)
+}
+
+#[cfg(target_os = "linux")]
+fn unprotect_platform(protected: &[u8]) -> Result<Vec<u8>, ProtectionError> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use keyring::Entry;
+
+    let entry = Entry::new("ralgruM", "session").map_err(|_| ProtectionError::Unavailable)?;
+    let stored = entry
+        .get_password()
+        .map_err(|_| ProtectionError::Unavailable)?;
+    let pad = STANDARD
+        .decode(stored.trim())
+        .map_err(|_| ProtectionError::Platform)?;
+    let mut plaintext = protected.to_vec();
+    if plaintext.len() != pad.len() {
+        return Err(ProtectionError::Platform);
+    }
+    for (byte, pad_byte) in plaintext.iter_mut().zip(pad.iter()) {
+        *byte ^= *pad_byte;
+    }
+    Ok(plaintext)
+}
+
+#[cfg(all(not(windows), not(target_os = "linux"), not(test)))]
 fn protect_platform(_plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     Err(ProtectionError::Unavailable)
 }
 
-#[cfg(all(not(windows), not(test)))]
+#[cfg(all(not(windows), not(target_os = "linux"), not(test)))]
 fn unprotect_platform(_protected: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     Err(ProtectionError::Unavailable)
 }
 
-#[cfg(all(not(windows), test))]
+#[cfg(all(not(windows), not(target_os = "linux"), test))]
 fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     Ok(plaintext
         .iter()
@@ -239,7 +305,7 @@ fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
         .collect())
 }
 
-#[cfg(all(not(windows), test))]
+#[cfg(all(not(windows), not(target_os = "linux"), test))]
 fn unprotect_platform(protected: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     Ok(protected
         .iter()

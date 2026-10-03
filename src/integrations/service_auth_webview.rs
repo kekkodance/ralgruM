@@ -14,21 +14,227 @@ pub(crate) struct MobileAuthorization {
     pub(crate) verifier: String,
 }
 
-#[cfg(windows)]
-mod platform {
+/// Helpers shared by every platform backend of the sign-in webview: the
+/// service endpoint constants, the login timeouts, the PKCE plumbing, the
+/// cookie jar harvesting rules, and the private browser profile lifecycle.
+/// Platform modules only contribute the native window and event loop; they
+/// call into this module for everything else so both backends stay in
+/// behavioral lockstep.
+mod shared {
     use std::{
         collections::HashMap,
-        num::NonZeroIsize,
         path::{Path, PathBuf},
-        sync::{Mutex, OnceLock, mpsc},
-        time::{Duration, Instant, SystemTime},
+        time::{Duration, SystemTime},
     };
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
     use sha2::{Digest, Sha256};
     use url::Url;
     use uuid::Uuid;
+
+    use crate::service_auth::Service;
+
+    pub(super) const DEEZER_LOGIN_URL: &str =
+        "https://www.deezer.com/login?redirect_type=page&redirect_link=%2Faccount%2F";
+    pub(super) const DEEZER_COOKIE_URL: &str = "https://www.deezer.com/";
+    pub(super) const SOUNDCLOUD_LOGIN_URL: &str = "https://soundcloud.com/signin";
+    pub(super) const SOUNDCLOUD_COOKIE_URL: &str = "https://soundcloud.com/";
+    pub(super) const SOUNDCLOUD_MOBILE_COOKIE_URL: &str = "https://api-mobile.soundcloud.com/";
+    pub(super) const SOUNDCLOUD_AUTHORIZE_URL: &str = "https://secure.soundcloud.com/authorize";
+    pub(super) const SOUNDCLOUD_MOBILE_CLIENT_ID: &str = "SSdQ80vM8nLPhbDBylHl2JFK6ElhBr9B";
+    pub(super) const SOUNDCLOUD_MOBILE_REDIRECT_URI: &str = "sc://auth";
+    pub(super) const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
+    pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+    pub(super) const COOKIE_CONSENT_REJECTION_SCRIPT: &str =
+        include_str!("service_auth_cookie_consent.js");
+
+    pub(super) fn login_url(service: Service) -> &'static str {
+        match service {
+            Service::Deezer => DEEZER_LOGIN_URL,
+            Service::SoundCloud => SOUNDCLOUD_LOGIN_URL,
+        }
+    }
+
+    pub(super) fn cookie_url(service: Service) -> &'static str {
+        match service {
+            Service::Deezer => DEEZER_COOKIE_URL,
+            Service::SoundCloud => SOUNDCLOUD_COOKIE_URL,
+        }
+    }
+
+    pub(super) fn cookie_name(service: Service) -> &'static str {
+        match service {
+            Service::Deezer => "arl",
+            Service::SoundCloud => "oauth_token",
+        }
+    }
+
+    pub(super) fn navigation_allowed(raw_url: &str) -> bool {
+        Url::parse(raw_url)
+            .map(|url| matches!(url.scheme(), "https" | "about"))
+            .unwrap_or(false)
+    }
+
+    pub(super) fn is_soundcloud_redirect(raw_url: &str) -> bool {
+        Url::parse(raw_url)
+            .map(|url| url.scheme() == "sc" && url.host_str() == Some("auth"))
+            .unwrap_or(false)
+    }
+
+    pub(super) fn pkce_pair() -> (String, String) {
+        let verifier = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        (verifier, challenge)
+    }
+
+    pub(super) fn soundcloud_authorize_url(challenge: &str, state: &str) -> Result<String, String> {
+        let mut url = Url::parse(SOUNDCLOUD_AUTHORIZE_URL).map_err(|error| error.to_string())?;
+        url.query_pairs_mut()
+            .append_pair("client_id", SOUNDCLOUD_MOBILE_CLIENT_ID)
+            .append_pair("redirect_uri", SOUNDCLOUD_MOBILE_REDIRECT_URI)
+            .append_pair("response_type", "code")
+            .append_pair("code_challenge", challenge)
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("state", state)
+            .append_pair("display", "popup");
+        Ok(url.into())
+    }
+
+    pub(super) fn soundcloud_authorization_code(
+        raw_url: &str,
+        expected_state: &str,
+    ) -> Result<String, String> {
+        let url = Url::parse(raw_url).map_err(|_| "SoundCloud returned an invalid redirect.")?;
+        let parameters = url.query_pairs().collect::<HashMap<_, _>>();
+        if parameters.get("state").map(|value| value.as_ref()) != Some(expected_state) {
+            return Err("SoundCloud returned an invalid mobile authorization state.".into());
+        }
+        parameters
+            .get("code")
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "SoundCloud did not return a mobile authorization code.".into())
+    }
+
+    impl Service {
+        pub(super) fn display_name(self) -> &'static str {
+            match self {
+                Self::Deezer => "Deezer",
+                Self::SoundCloud => "SoundCloud",
+            }
+        }
+    }
+
+    const PROFILE_CLEANUP_RETRIES: usize = 60;
+    const PROFILE_CLEANUP_DELAY: Duration = Duration::from_millis(100);
+    pub(super) const AUTH_PROFILE_PREFIX: &str = "ralgrum-auth-";
+    const AUTH_PROFILE_ROOT_DIR_NAME: &str = "auth-profiles";
+    // A crashed sign-in cannot run its scheduled cleanup, so the sweep on the
+    // next sign-in removes the abandoned profiles instead. The threshold
+    // dwarfs the sign-in timeout and cleanup retries, which keeps a live
+    // sign-in in another process out of the sweep's reach.
+    pub(super) const AUTH_PROFILE_SWEEP_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+    pub(super) fn schedule_profile_cleanup(profile_path: PathBuf) {
+        let fallback_path = profile_path.clone();
+        let worker = std::thread::Builder::new()
+            .name("ralgrum-auth-profile-cleanup".into())
+            .spawn(move || cleanup_profile(profile_path));
+        if worker.is_err() {
+            // The profile is private and uniquely named, so a synchronous
+            // best-effort fallback is safe if the process cannot start a worker.
+            cleanup_profile(fallback_path);
+        }
+    }
+
+    fn cleanup_profile(profile_path: PathBuf) {
+        std::thread::sleep(PROFILE_CLEANUP_DELAY);
+        for attempt in 0..PROFILE_CLEANUP_RETRIES {
+            match std::fs::remove_dir_all(&profile_path) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(error) if attempt + 1 < PROFILE_CLEANUP_RETRIES => {
+                    drop(error);
+                    std::thread::sleep(PROFILE_CLEANUP_DELAY);
+                }
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Creates the sign-in browser profile under the app-owned cache root.
+    pub(super) fn open_auth_profile() -> Result<tempfile::TempDir, std::io::Error> {
+        open_auth_profile_in(
+            &auth_profile_root(),
+            &std::env::temp_dir(),
+            SystemTime::now(),
+        )
+    }
+
+    fn auth_profile_root() -> PathBuf {
+        crate::paths::cache_dir().join(AUTH_PROFILE_ROOT_DIR_NAME)
+    }
+
+    /// Creates a uniquely named profile directory under `root`, sweeping
+    /// `root` and `legacy_root` first so profiles abandoned by crashed
+    /// sign-ins do not outlive the next sign-in attempt.
+    pub(super) fn open_auth_profile_in(
+        root: &Path,
+        legacy_root: &Path,
+        now: SystemTime,
+    ) -> Result<tempfile::TempDir, std::io::Error> {
+        sweep_stale_auth_profiles(legacy_root, now);
+        std::fs::create_dir_all(root)?;
+        sweep_stale_auth_profiles(root, now);
+        tempfile::Builder::new()
+            .prefix(AUTH_PROFILE_PREFIX)
+            .tempdir_in(root)
+    }
+
+    /// Best-effort removal of sign-in profiles under `root` that have been
+    /// untouched for AUTH_PROFILE_SWEEP_AGE as of `now`. Only directories
+    /// carrying the profile prefix are removed, so unrelated entries and live
+    /// sign-ins in other processes always survive.
+    fn sweep_stale_auth_profiles(root: &Path, now: SystemTime) {
+        // The sweep is a crash backstop, so an unreadable or missing root
+        // simply ends it without failing the sign-in.
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(AUTH_PROFILE_PREFIX)
+            {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .ok()
+                .filter(|metadata| metadata.is_dir())
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age >= AUTH_PROFILE_SWEEP_AGE);
+            if stale {
+                // A locked entry is retried by the next sign-in's sweep.
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
+    use std::{
+        num::NonZeroIsize,
+        sync::{Mutex, OnceLock, mpsc},
+        time::{Duration, Instant},
+    };
+    use uuid::Uuid;
+
     use windows::{
         Win32::{
             Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -49,21 +255,13 @@ mod platform {
 
     use crate::search::DEEZER_USER_AGENT;
 
+    use super::shared::{
+        COOKIE_CONSENT_REJECTION_SCRIPT, DEEZER_COOKIE_URL, LOGIN_TIMEOUT, POLL_INTERVAL,
+        SOUNDCLOUD_MOBILE_COOKIE_URL, cookie_name, cookie_url, is_soundcloud_redirect, login_url,
+        navigation_allowed, open_auth_profile, pkce_pair, schedule_profile_cleanup,
+        soundcloud_authorization_code, soundcloud_authorize_url,
+    };
     use super::{BrowserCredentials, MobileAuthorization, Service};
-
-    const DEEZER_LOGIN_URL: &str =
-        "https://www.deezer.com/login?redirect_type=page&redirect_link=%2Faccount%2F";
-    const DEEZER_COOKIE_URL: &str = "https://www.deezer.com/";
-    const SOUNDCLOUD_LOGIN_URL: &str = "https://soundcloud.com/signin";
-    const SOUNDCLOUD_COOKIE_URL: &str = "https://soundcloud.com/";
-    const SOUNDCLOUD_MOBILE_COOKIE_URL: &str = "https://api-mobile.soundcloud.com/";
-    const SOUNDCLOUD_AUTHORIZE_URL: &str = "https://secure.soundcloud.com/authorize";
-    const SOUNDCLOUD_MOBILE_CLIENT_ID: &str = "SSdQ80vM8nLPhbDBylHl2JFK6ElhBr9B";
-    const SOUNDCLOUD_MOBILE_REDIRECT_URI: &str = "sc://auth";
-    const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
-    const POLL_INTERVAL: Duration = Duration::from_millis(500);
-
-    const COOKIE_CONSENT_REJECTION_SCRIPT: &str = include_str!("service_auth_cookie_consent.js");
 
     struct ComApartment;
 
@@ -396,102 +594,9 @@ mod platform {
         }
     }
 
-    const PROFILE_CLEANUP_RETRIES: usize = 60;
-    const PROFILE_CLEANUP_DELAY: Duration = Duration::from_millis(100);
-    const AUTH_PROFILE_PREFIX: &str = "ralgrum-auth-";
-    const AUTH_PROFILE_ROOT_DIR_NAME: &str = "auth-profiles";
-    // A crashed sign-in cannot run its scheduled cleanup, so the sweep on the
-    // next sign-in removes the abandoned profiles instead. The threshold
-    // dwarfs the sign-in timeout and cleanup retries, which keeps a live
-    // sign-in in another process out of the sweep's reach.
-    const AUTH_PROFILE_SWEEP_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-
-    fn schedule_profile_cleanup(profile_path: PathBuf) {
-        let fallback_path = profile_path.clone();
-        let worker = std::thread::Builder::new()
-            .name("ralgrum-auth-profile-cleanup".into())
-            .spawn(move || cleanup_profile(profile_path));
-        if worker.is_err() {
-            // The profile is private and uniquely named, so a synchronous
-            // best-effort fallback is safe if the process cannot start a worker.
-            cleanup_profile(fallback_path);
-        }
-    }
-
-    fn cleanup_profile(profile_path: PathBuf) {
-        std::thread::sleep(PROFILE_CLEANUP_DELAY);
-        for attempt in 0..PROFILE_CLEANUP_RETRIES {
-            match std::fs::remove_dir_all(&profile_path) {
-                Ok(()) => return,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-                Err(error) if attempt + 1 < PROFILE_CLEANUP_RETRIES => {
-                    drop(error);
-                    std::thread::sleep(PROFILE_CLEANUP_DELAY);
-                }
-                Err(_) => return,
-            }
-        }
-    }
-
-    /// Creates the sign-in browser profile under the app-owned cache root.
-    fn open_auth_profile() -> Result<tempfile::TempDir, std::io::Error> {
-        open_auth_profile_in(
-            &auth_profile_root(),
-            &std::env::temp_dir(),
-            SystemTime::now(),
-        )
-    }
-
-    fn auth_profile_root() -> PathBuf {
-        crate::paths::cache_dir().join(AUTH_PROFILE_ROOT_DIR_NAME)
-    }
-
-    /// Creates a uniquely named profile directory under `root`, sweeping
-    /// `root` and `legacy_root` first so profiles abandoned by crashed
-    /// sign-ins do not outlive the next sign-in attempt.
-    fn open_auth_profile_in(
-        root: &Path,
-        legacy_root: &Path,
-        now: SystemTime,
-    ) -> Result<tempfile::TempDir, std::io::Error> {
-        sweep_stale_auth_profiles(legacy_root, now);
-        std::fs::create_dir_all(root)?;
-        sweep_stale_auth_profiles(root, now);
-        tempfile::Builder::new()
-            .prefix(AUTH_PROFILE_PREFIX)
-            .tempdir_in(root)
-    }
-
-    /// Best-effort removal of sign-in profiles under `root` that have been
-    /// untouched for AUTH_PROFILE_SWEEP_AGE as of `now`. Only directories
-    /// carrying the profile prefix are removed, so unrelated entries and live
-    /// sign-ins in other processes always survive.
-    fn sweep_stale_auth_profiles(root: &Path, now: SystemTime) {
-        // The sweep is a crash backstop, so an unreadable or missing root
-        // simply ends it without failing the sign-in.
-        let Ok(entries) = std::fs::read_dir(root) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            if !entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(AUTH_PROFILE_PREFIX)
-            {
-                continue;
-            }
-            let stale = entry
-                .metadata()
-                .ok()
-                .filter(|metadata| metadata.is_dir())
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(|modified| now.duration_since(modified).ok())
-                .is_some_and(|age| age >= AUTH_PROFILE_SWEEP_AGE);
-            if stale {
-                // A locked entry is retried by the next sign-in's sweep.
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
-        }
+    fn drain_pending_quit_messages() {
+        let mut message = MSG::default();
+        while unsafe { PeekMessageW(&mut message, None, WM_QUIT, WM_QUIT, PM_REMOVE) }.as_bool() {}
     }
 
     fn pump_one_message(service: Service, window: &NativeWindow) -> Result<(), String> {
@@ -515,238 +620,600 @@ mod platform {
         }
         Ok(())
     }
+}
 
-    fn drain_pending_quit_messages() {
-        let mut message = MSG::default();
-        while unsafe { PeekMessageW(&mut message, None, WM_QUIT, WM_QUIT, PM_REMOVE) }.as_bool() {}
+#[cfg(any(windows, target_os = "linux"))]
+pub(crate) use platform::login;
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) async fn login(_service: Service) -> Result<BrowserCredentials, String> {
+    Err("Embedded service sign-in is currently supported only on Windows and Linux.".into())
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    use std::cell::RefCell;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use gtk::glib::{self, ControlFlow, Propagation, SourceId};
+    use gtk::prelude::*;
+    use gtk::{Window as GtkWindow, WindowPosition, WindowType};
+    use wry::{WebContext, WebView, WebViewBuilder, WebViewBuilderExtUnix};
+
+    use crate::platform::gtk_host;
+    use crate::search::DEEZER_USER_AGENT;
+
+    use super::shared::{
+        COOKIE_CONSENT_REJECTION_SCRIPT, DEEZER_COOKIE_URL, LOGIN_TIMEOUT, POLL_INTERVAL,
+        SOUNDCLOUD_MOBILE_COOKIE_URL, cookie_name, cookie_url, is_soundcloud_redirect, login_url,
+        navigation_allowed, open_auth_profile, pkce_pair, schedule_profile_cleanup,
+        soundcloud_authorization_code, soundcloud_authorize_url,
+    };
+    use super::{BrowserCredentials, MobileAuthorization, Service};
+
+    /// The login state machine for one sign-in window, owned by the shared
+    /// GTK thread. The `wry::WebView`, the `WebContext`, and the GTK window
+    /// are all `!Send`, so they live in a thread-local cell instead of the
+    /// async future's stack, and only the thread that created them touches
+    /// them.
+    struct LoginSession {
+        service: Service,
+        started: Instant,
+        next_poll: Instant,
+        webview: WebView,
+        context: WebContext,
+        window: GtkWindow,
+        /// Set when the user closes the GTK window, mirroring the Windows
+        /// backend's `IsWindow` check. The delete handler keeps the closure
+        /// capture-free so it never borrows the session it reports on.
+        closed: bool,
+        /// Set once the harvested cookie has been observed, so the final
+        /// cookie-jar reads run exactly once even if a timer fires again.
+        finished: bool,
+        /// The SoundCloud mobile PKCE step, advancing on each poll tick.
+        mobile: MobileStep,
+        mobile_authorization: Option<MobileAuthorization>,
+        redirect_receiver: mpsc::Receiver<String>,
+        desktop_cookie: Option<String>,
+        data_dir: tempfile::TempDir,
+        result: Option<Result<BrowserCredentials, String>>,
     }
 
-    fn login_url(service: Service) -> &'static str {
-        match service {
-            Service::Deezer => DEEZER_LOGIN_URL,
-            Service::SoundCloud => SOUNDCLOUD_LOGIN_URL,
-        }
+    thread_local! {
+        /// The active session on the GTK thread. There is at most one live
+        /// sign-in per process because `login` is serialized by a mutex, and
+        /// `RESULT` (below) hands the value out before the session is
+        /// dropped, so `Take` never finds an occupied slot mid-flight.
+        static SESSION: RefCell<Option<LoginSession>> = const { RefCell::new(None) };
+        /// The completed credentials of the last session, staged for pickup
+        /// by the awaiting thread before teardown is scheduled.
+        static RESULT: RefCell<Option<Result<BrowserCredentials, String>>> =
+            const { RefCell::new(None) };
+        /// The timer source of the active session, so the teardown closure
+        /// can detach it from the main loop. Only read while the session is
+        /// alive, which is the same lifetime as the source.
+        static TIMER: RefCell<Option<SourceId>> = const { RefCell::new(None) };
     }
 
-    fn cookie_url(service: Service) -> &'static str {
-        match service {
-            Service::Deezer => DEEZER_COOKIE_URL,
-            Service::SoundCloud => SOUNDCLOUD_COOKIE_URL,
-        }
+    /// The SoundCloud mobile PKCE step of the login state machine. Deezer
+    /// sessions skip it entirely, so the enum only matters for SoundCloud.
+    enum MobileStep {
+        NotStarted,
+        Navigating { verifier: String, state: String },
+        Done,
     }
 
-    fn cookie_name(service: Service) -> &'static str {
-        match service {
-            Service::Deezer => "arl",
-            Service::SoundCloud => "oauth_token",
-        }
-    }
-
-    fn navigation_allowed(raw_url: &str) -> bool {
-        Url::parse(raw_url)
-            .map(|url| matches!(url.scheme(), "https" | "about"))
-            .unwrap_or(false)
-    }
-
-    fn is_soundcloud_redirect(raw_url: &str) -> bool {
-        Url::parse(raw_url)
-            .map(|url| url.scheme() == "sc" && url.host_str() == Some("auth"))
-            .unwrap_or(false)
-    }
-
-    fn pkce_pair() -> (String, String) {
-        let verifier = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        (verifier, challenge)
-    }
-
-    fn soundcloud_authorize_url(challenge: &str, state: &str) -> Result<String, String> {
-        let mut url = Url::parse(SOUNDCLOUD_AUTHORIZE_URL).map_err(|error| error.to_string())?;
-        url.query_pairs_mut()
-            .append_pair("client_id", SOUNDCLOUD_MOBILE_CLIENT_ID)
-            .append_pair("redirect_uri", SOUNDCLOUD_MOBILE_REDIRECT_URI)
-            .append_pair("response_type", "code")
-            .append_pair("code_challenge", challenge)
-            .append_pair("code_challenge_method", "S256")
-            .append_pair("state", state)
-            .append_pair("display", "popup");
-        Ok(url.into())
-    }
-
-    fn soundcloud_authorization_code(
-        raw_url: &str,
-        expected_state: &str,
-    ) -> Result<String, String> {
-        let url = Url::parse(raw_url).map_err(|_| "SoundCloud returned an invalid redirect.")?;
-        let parameters = url.query_pairs().collect::<HashMap<_, _>>();
-        if parameters.get("state").map(|value| value.as_ref()) != Some(expected_state) {
-            return Err("SoundCloud returned an invalid mobile authorization state.".into());
-        }
-        parameters
-            .get("code")
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "SoundCloud did not return a mobile authorization code.".into())
-    }
-
-    impl Service {
-        fn display_name(self) -> &'static str {
-            match self {
-                Self::Deezer => "Deezer",
-                Self::SoundCloud => "SoundCloud",
+    /// Runs one step of the login state machine on the GTK thread. Called by
+    /// a glib timeout source every POLL_INTERVAL, mirroring the Windows
+    /// backend's message-pump cadence: check the clock, check the window,
+    /// poll the cookie, then advance the flow.
+    fn tick_session() -> ControlFlow {
+        let outcome = SESSION.with(|session| {
+            let mut session = session.borrow_mut();
+            let Some(session) = session.as_mut() else {
+                // No live session means the timeout belongs to a finished
+                // login that has not been detached yet; stop ticking.
+                return ControlFlow::Break;
+            };
+            if session.result.is_some() {
+                return ControlFlow::Break;
             }
+            if session.started.elapsed() >= LOGIN_TIMEOUT {
+                session.result = Some(Err(format!(
+                    "{} sign-in timed out.",
+                    session.service.display_name()
+                )));
+                return ControlFlow::Break;
+            }
+            if session.closed {
+                session.result = Some(Err(format!(
+                    "{} sign-in was cancelled.",
+                    session.service.display_name()
+                )));
+                return ControlFlow::Break;
+            }
+            if Instant::now() < session.next_poll {
+                return ControlFlow::Continue;
+            }
+            session.next_poll = Instant::now() + POLL_INTERVAL;
+            if session.desktop_cookie.is_none() && poll_desktop_cookie(session).is_none() {
+                return ControlFlow::Continue;
+            }
+            if session.service == Service::SoundCloud {
+                match pump_mobile_authorization(session) {
+                    Some(()) => {}
+                    None => return ControlFlow::Continue,
+                }
+            }
+            harvest_cookie_jars(session);
+            ControlFlow::Break
+        });
+        if matches!(outcome, ControlFlow::Break) {
+            finish_session();
+        }
+        outcome
+    }
+
+    /// Polls the service's main session cookie. Returns Some when the cookie
+    /// exists and None while the user is still signing in.
+    fn poll_desktop_cookie(session: &mut LoginSession) -> Option<()> {
+        let cookies = match session.webview.cookies_for_url(cookie_url(session.service)) {
+            Ok(cookies) => cookies,
+            Err(error) => {
+                session.result = Some(Err(format!(
+                    "Could not inspect the sign-in session: {error}"
+                )));
+                return Some(());
+            }
+        };
+        let value = cookies
+            .into_iter()
+            .find(|cookie| cookie.name() == cookie_name(session.service))
+            .map(|cookie| cookie.value().trim().to_owned())
+            .filter(|value| !value.is_empty());
+        match value {
+            Some(value) => {
+                session.desktop_cookie = Some(value);
+                Some(())
+            }
+            None => None,
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        fn history_played_at(value: &serde_json::Value, track_id: u64) -> Option<u64> {
-            value
-                .get("collection")?
-                .as_array()?
-                .iter()
-                .find(|item| {
-                    item.get("track_id").and_then(serde_json::Value::as_u64) == Some(track_id)
-                })?
-                .get("played_at")?
-                .as_u64()
+    /// Advances the SoundCloud mobile PKCE step: navigates to the authorize
+    /// URL on the first poll after the desktop cookie appears, then watches
+    /// for the `sc://auth` redirect. Returns Some once the authorization code
+    /// is captured (or failed) and None while the step is still pending.
+    fn pump_mobile_authorization(session: &mut LoginSession) -> Option<()> {
+        match std::mem::replace(&mut session.mobile, MobileStep::Done) {
+            MobileStep::NotStarted => {
+                let (verifier, challenge) = pkce_pair();
+                let state = uuid::Uuid::new_v4().simple().to_string();
+                let url = match soundcloud_authorize_url(&challenge, &state) {
+                    Ok(url) => url,
+                    Err(error) => {
+                        session.result = Some(Err(error));
+                        return Some(());
+                    }
+                };
+                if let Err(error) = session.webview.load_url(&url) {
+                    session.result = Some(Err(format!(
+                        "Could not open SoundCloud mobile authorization: {error}"
+                    )));
+                    return Some(());
+                }
+                session.mobile = MobileStep::Navigating { verifier, state };
+                None
+            }
+            MobileStep::Navigating { verifier, state } => {
+                let Ok(redirect) = session.redirect_receiver.try_recv() else {
+                    session.mobile = MobileStep::Navigating { verifier, state };
+                    return None;
+                };
+                match soundcloud_authorization_code(&redirect, &state) {
+                    Ok(code) => {
+                        session.mobile_authorization = Some(MobileAuthorization { code, verifier });
+                        Some(())
+                    }
+                    Err(error) => {
+                        session.result = Some(Err(error));
+                        Some(())
+                    }
+                }
+            }
+            MobileStep::Done => Some(()),
         }
+    }
 
-        #[test]
-        fn navigation_policy_allows_only_https_and_about() {
-            assert!(navigation_allowed("https://soundcloud.com/signin"));
-            assert!(navigation_allowed("about:blank"));
-            assert!(!navigation_allowed("http://soundcloud.com/signin"));
-            assert!(!navigation_allowed("file:///C:/secret"));
-            assert!(!navigation_allowed("sc://auth?code=x&state=y"));
+    /// Reads the final cookie jars, mirroring the Windows backend: every
+    /// deezer.com cookie except the separately harvested ARL for Deezer,
+    /// and the mobile API cookie jar for SoundCloud. Replaces the
+    /// `MobileStep` enum mid-flight so the session fields line up; called
+    /// only once per login.
+    fn harvest_cookie_jars(session: &mut LoginSession) {
+        session.finished = true;
+        let desktop = match session.desktop_cookie.take() {
+            Some(value) => value,
+            None => {
+                session.result = Some(Err(format!(
+                    "{} sign-in was cancelled.",
+                    session.service.display_name()
+                )));
+                return;
+            }
+        };
+        let deezer_cookies = if session.service == Service::Deezer {
+            // The ARL is captured separately in the loop above, so every
+            // other deezer.com cookie joins the persistent jar here.
+            let cookies = match session.webview.cookies_for_url(DEEZER_COOKIE_URL) {
+                Ok(cookies) => cookies,
+                Err(error) => {
+                    session.result = Some(Err(format!(
+                        "Could not preserve the Deezer sign-in session: {error}"
+                    )));
+                    return;
+                }
+            };
+            let value = cookies
+                .into_iter()
+                .filter_map(|cookie| {
+                    let name = cookie.name().trim();
+                    let value = cookie.value().trim();
+                    let keep =
+                        !name.is_empty() && !value.is_empty() && !name.eq_ignore_ascii_case("arl");
+                    keep.then(|| format!("{name}={value}"))
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            (!value.is_empty()).then_some(value)
+        } else {
+            None
+        };
+        let soundcloud_cookies = if session.service == Service::SoundCloud {
+            let cookies = match session
+                .webview
+                .cookies_for_url(SOUNDCLOUD_MOBILE_COOKIE_URL)
+            {
+                Ok(cookies) => cookies,
+                Err(error) => {
+                    session.result = Some(Err(format!(
+                        "Could not preserve the SoundCloud sign-in session: {error}"
+                    )));
+                    return;
+                }
+            };
+            let value = cookies
+                .into_iter()
+                .filter_map(|cookie| {
+                    let name = cookie.name().trim();
+                    let value = cookie.value().trim();
+                    (!name.is_empty() && !value.is_empty()).then(|| format!("{name}={value}"))
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            (!value.is_empty()).then_some(value)
+        } else {
+            None
+        };
+        session.result = Some(Ok(BrowserCredentials {
+            desktop,
+            mobile_authorization: session.mobile_authorization.take(),
+            soundcloud_cookies,
+            deezer_cookies,
+        }));
+    }
+
+    /// Stops the timer, stages the result for pickup, and schedules window
+    /// destruction and profile cleanup. Runs on the GTK thread from the
+    /// timer callback (or a teardown closure) after the state machine has
+    /// produced an outcome.
+    fn finish_session() {
+        if let Some(timer) = TIMER.with(|timer| timer.borrow_mut().take()) {
+            // Removing the source from inside its own callback is legal in
+            // glib: the source is detached from the context and will not
+            // fire again even though this callback is still on its stack.
+            timer.remove();
         }
+        let session = SESSION.with(|session| session.borrow_mut().take());
+        let Some(mut session) = session else {
+            return;
+        };
+        RESULT.with(|result| {
+            *result.borrow_mut() = session.result.take();
+        });
+        // Stage the profile path before dropping the data directory guard,
+        // then tear the browser objects down in the same order as the
+        // Windows backend: webview, context, window, profile cleanup.
+        let profile_path = session.data_dir.keep();
+        drop(session.webview);
+        drop(session.context);
+        session.window.close();
+        drop(session.window);
+        schedule_profile_cleanup(profile_path);
+    }
 
-        #[test]
-        fn recognizes_and_validates_soundcloud_redirect() {
-            let redirect = "sc://auth?code=authorization-code&state=expected-state";
-            assert!(is_soundcloud_redirect(redirect));
-            assert_eq!(
-                soundcloud_authorization_code(redirect, "expected-state").unwrap(),
-                "authorization-code"
-            );
-            assert!(soundcloud_authorization_code(redirect, "wrong-state").is_err());
-            assert!(!is_soundcloud_redirect("sc://other?code=x"));
-        }
-
-        #[test]
-        fn pkce_values_are_url_safe_and_stateful_authorize_url_is_correct() {
-            let (verifier, challenge) = pkce_pair();
-            assert_eq!(verifier.len(), 64);
-            assert!(!challenge.contains('='));
-            let url = Url::parse(&soundcloud_authorize_url(&challenge, "state").unwrap()).unwrap();
-            let parameters = url.query_pairs().collect::<HashMap<_, _>>();
-            assert_eq!(
-                parameters.get("state").map(|value| value.as_ref()),
-                Some("state")
-            );
-            assert_eq!(
-                parameters.get("redirect_uri").map(|value| value.as_ref()),
-                Some(SOUNDCLOUD_MOBILE_REDIRECT_URI)
-            );
-        }
-
-        #[test]
-        fn soundcloud_history_lookup_reads_matching_track_timestamp() {
-            let history = serde_json::json!({
-                "collection": [
-                    {"track_id": 41, "played_at": 1_700_000_000},
-                    {"track_id": 42, "played_at": 1_700_000_123}
-                ]
+    /// Builds the window, webview, and timer on the GTK thread. Every step
+    /// after the host starts runs there, keeping all GTK and WebKitGTK
+    /// objects on the thread that owns the default main context.
+    fn run_login(handle: gtk_host::GtkHostHandle, service: Service) -> Result<(), String> {
+        let (ready_sender, ready_receiver) = mpsc::channel::<Result<(), String>>();
+        handle.submit(move || {
+            // The profile sweep inside `open_auth_profile` is file I/O that
+            // would stall the shared tray pump, but it is bounded and rare
+            // (once per sign-in), so it runs inline on the GTK thread.
+            let data_dir = match open_auth_profile() {
+                Ok(data_dir) => data_dir,
+                Err(error) => {
+                    let _ = ready_sender.send(Err(format!(
+                        "Could not create the private browser profile: {error}"
+                    )));
+                    return;
+                }
+            };
+            let profile_path = data_dir.path().to_owned();
+            let mut context = WebContext::new(Some(profile_path.clone()));
+            let (redirect_sender, redirect_receiver) = mpsc::channel();
+            let (width, height, title) = match service {
+                Service::Deezer => (560, 720, "Sign in to Deezer"),
+                Service::SoundCloud => (1040, 760, "Sign in to SoundCloud"),
+            };
+            let window = GtkWindow::new(WindowType::Toplevel);
+            window.set_title(title);
+            window.set_default_size(width, height);
+            window.set_position(WindowPosition::Center);
+            window.set_resizable(true);
+            let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            window.add(&container);
+            window.connect_delete_event(|_, _| {
+                // Record the cancellation without borrowing the session; the
+                // tick reads the flag on its next poll.
+                SESSION.with(|session| {
+                    if let Some(session) = session.borrow_mut().as_mut() {
+                        session.closed = true;
+                    }
+                });
+                Propagation::Proceed
             });
+            let builder = WebViewBuilder::new_with_web_context(&mut context)
+                .with_url(login_url(service))
+                .with_user_agent(DEEZER_USER_AGENT)
+                .with_focused(true)
+                .with_initialization_script_for_main_only(COOKIE_CONSENT_REJECTION_SCRIPT, false)
+                .with_navigation_handler(move |raw_url| {
+                    if is_soundcloud_redirect(&raw_url) {
+                        let _ = redirect_sender.send(raw_url);
+                        return false;
+                    }
+                    navigation_allowed(&raw_url)
+                });
+            let webview = match builder.build_gtk(&container) {
+                Ok(webview) => webview,
+                Err(error) => {
+                    let _ =
+                        ready_sender.send(Err(format!("Could not initialize WebKitGTK: {error}")));
+                    return;
+                }
+            };
+            let _ = webview.focus();
+            window.show_all();
+            window.present();
+            let session = LoginSession {
+                service,
+                started: Instant::now(),
+                next_poll: Instant::now(),
+                webview,
+                context,
+                window,
+                closed: false,
+                finished: false,
+                mobile: if service == Service::SoundCloud {
+                    MobileStep::NotStarted
+                } else {
+                    MobileStep::Done
+                },
+                mobile_authorization: None,
+                redirect_receiver,
+                desktop_cookie: None,
+                data_dir,
+                result: None,
+            };
+            SESSION.with(|cell| {
+                *cell.borrow_mut() = Some(session);
+            });
+            // A glib timeout drives the poll cadence; it must not capture the
+            // session (only the thread-local does) because the source would
+            // then own a second path to the data the tick borrows.
+            let timer = glib::timeout_add_local(POLL_INTERVAL, tick_session);
+            TIMER.with(|cell| {
+                *cell.borrow_mut() = Some(timer);
+            });
+            let _ = ready_sender.send(Ok(()));
+        });
+        ready_receiver
+            .recv()
+            .map_err(|_| "The GTK host thread stopped unexpectedly.".to_string())?
+    }
 
-            assert_eq!(history_played_at(&history, 42), Some(1_700_000_123));
-            assert_eq!(history_played_at(&history, 99), None);
-            assert_eq!(history_played_at(&serde_json::json!({}), 42), None);
-        }
-
-        fn abandoned_profile(root: &Path, name: &str) -> PathBuf {
-            let path = root.join(name);
-            std::fs::create_dir_all(&path).unwrap();
-            // Profiles hold authentication state, so each fixture carries a
-            // marker file the sweep must remove with the directory.
-            std::fs::write(path.join("Cookies"), b"auth-state").unwrap();
-            path
-        }
-
-        #[test]
-        fn profile_creation_places_new_profiles_in_the_app_owned_root() {
-            let root = tempfile::tempdir().unwrap();
-            let legacy = tempfile::tempdir().unwrap();
-            let fresh_root_profile = abandoned_profile(root.path(), "ralgrum-auth-fresh");
-            let fresh_legacy_profile =
-                abandoned_profile(legacy.path(), "ralgrum-auth-legacy-fresh");
-            let unrelated_dir = abandoned_profile(legacy.path(), "unrelated-dir");
-            let prefix_named_file = legacy.path().join("ralgrum-auth-not-a-directory.txt");
-            std::fs::write(&prefix_named_file, b"not a profile").unwrap();
-            let now = SystemTime::now();
-
-            let profile = open_auth_profile_in(root.path(), legacy.path(), now).unwrap();
-
-            assert!(profile.path().starts_with(root.path()));
-            let profile_name = profile.path().file_name().unwrap().to_string_lossy();
-            assert!(profile_name.starts_with(AUTH_PROFILE_PREFIX));
-            assert!(profile.path().is_dir());
-            // Profiles from a live or just finished sign-in, plus unrelated
-            // entries, must survive the creation-time sweep.
-            assert!(fresh_root_profile.is_dir());
-            assert!(fresh_legacy_profile.is_dir());
-            assert!(unrelated_dir.is_dir());
-            assert!(prefix_named_file.is_file());
-        }
-
-        #[test]
-        fn sweep_removes_crashed_profiles_and_keeps_unrelated_entries() {
-            let root = tempfile::tempdir().unwrap();
-            let legacy = tempfile::tempdir().unwrap();
-            let crashed_in_root = abandoned_profile(root.path(), "ralgrum-auth-crash");
-            let crashed_in_legacy =
-                abandoned_profile(legacy.path(), "ralgrum-auth-old-crash-in-temp");
-            let unrelated_dir = abandoned_profile(legacy.path(), "unrelated-dir");
-            let prefix_named_file = legacy.path().join("ralgrum-auth-not-a-directory.txt");
-            std::fs::write(&prefix_named_file, b"not a profile").unwrap();
-            let now = SystemTime::now();
-
-            // A sign-in right after the crash keeps the abandoned profiles
-            // because they are too recent for the sweep threshold.
-            open_auth_profile_in(root.path(), legacy.path(), now).unwrap();
-            assert!(crashed_in_root.is_dir());
-            assert!(crashed_in_legacy.is_dir());
-
-            // The next day's sign-in sweeps both the app root and the legacy
-            // system temp location while unrelated entries survive.
-            let next_day = now + AUTH_PROFILE_SWEEP_AGE;
-            let profile = open_auth_profile_in(root.path(), legacy.path(), next_day).unwrap();
-            assert!(profile.path().starts_with(root.path()));
-            assert!(!crashed_in_root.exists());
-            assert!(!crashed_in_legacy.exists());
-            assert!(unrelated_dir.is_dir());
-            assert!(prefix_named_file.is_file());
-        }
-
-        #[test]
-        fn profile_creation_tolerates_a_missing_legacy_location() {
-            let root = tempfile::tempdir().unwrap();
-            let missing_legacy = root.path().join("missing-temp-location");
-            let now = SystemTime::now();
-
-            let profile = open_auth_profile_in(root.path(), &missing_legacy, now).unwrap();
-
-            assert!(profile.path().starts_with(root.path()));
-        }
+    pub(crate) async fn login(service: Service) -> Result<BrowserCredentials, String> {
+        let host = gtk_host::spawn()?;
+        run_login(host.clone(), service)?;
+        // Wait for the state machine to finish on the GTK thread. The host
+        // thread outlives every login, so the channel close is the only exit.
+        std::thread::Builder::new()
+            .name("ralgrum-auth-webview".to_owned())
+            .spawn(move || {
+                loop {
+                    let (sender, receiver) = mpsc::channel::<Result<BrowserCredentials, String>>();
+                    host.submit(move || {
+                        let outcome = RESULT.with(|result| result.borrow_mut().take());
+                        if let Some(outcome) = outcome {
+                            let _ = sender.send(outcome);
+                        }
+                    });
+                    match receiver.recv_timeout(Duration::from_millis(200)) {
+                        Ok(outcome) => return outcome,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            return Err("The GTK host thread stopped unexpectedly.".to_string());
+                        }
+                        // Nothing staged yet: keep waiting for the user.
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    }
+                }
+            })
+            .map_err(|error| format!("Could not start the sign-in waiter thread: {error}"))?
+            .join()
+            .map_err(|_| "The sign-in window thread stopped unexpectedly.".to_string())?
     }
 }
 
-#[cfg(windows)]
-pub(crate) use platform::login;
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::time::SystemTime;
 
-#[cfg(not(windows))]
-pub(crate) async fn login(_service: Service) -> Result<BrowserCredentials, String> {
-    Err("Embedded service sign-in is currently supported only on Windows.".into())
+    use url::Url;
+
+    use super::shared::{
+        AUTH_PROFILE_PREFIX, AUTH_PROFILE_SWEEP_AGE, is_soundcloud_redirect, navigation_allowed,
+        open_auth_profile_in, pkce_pair, soundcloud_authorization_code, soundcloud_authorize_url,
+    };
+
+    fn history_played_at(value: &serde_json::Value, track_id: u64) -> Option<u64> {
+        value
+            .get("collection")?
+            .as_array()?
+            .iter()
+            .find(|item| {
+                item.get("track_id").and_then(serde_json::Value::as_u64) == Some(track_id)
+            })?
+            .get("played_at")?
+            .as_u64()
+    }
+
+    #[test]
+    fn navigation_policy_allows_only_https_and_about() {
+        assert!(navigation_allowed("https://soundcloud.com/signin"));
+        assert!(navigation_allowed("about:blank"));
+        assert!(!navigation_allowed("http://soundcloud.com/signin"));
+        assert!(!navigation_allowed("file:///C:/secret"));
+        assert!(!navigation_allowed("sc://auth?code=x&state=y"));
+    }
+
+    #[test]
+    fn recognizes_and_validates_soundcloud_redirect() {
+        let redirect = "sc://auth?code=authorization-code&state=expected-state";
+        assert!(is_soundcloud_redirect(redirect));
+        assert_eq!(
+            soundcloud_authorization_code(redirect, "expected-state").unwrap(),
+            "authorization-code"
+        );
+        assert!(soundcloud_authorization_code(redirect, "wrong-state").is_err());
+        assert!(!is_soundcloud_redirect("sc://other?code=x"));
+    }
+
+    #[test]
+    fn pkce_values_are_url_safe_and_stateful_authorize_url_is_correct() {
+        let (verifier, challenge) = pkce_pair();
+        assert_eq!(verifier.len(), 64);
+        assert!(!challenge.contains('='));
+        let url = Url::parse(&soundcloud_authorize_url(&challenge, "state").unwrap()).unwrap();
+        let parameters = url.query_pairs().collect::<HashMap<_, _>>();
+        assert_eq!(
+            parameters.get("state").map(|value| value.as_ref()),
+            Some("state")
+        );
+        assert_eq!(
+            parameters.get("redirect_uri").map(|value| value.as_ref()),
+            Some("sc://auth")
+        );
+    }
+
+    #[test]
+    fn soundcloud_history_lookup_reads_matching_track_timestamp() {
+        let history = serde_json::json!({
+            "collection": [
+                {"track_id": 41, "played_at": 1_700_000_000},
+                {"track_id": 42, "played_at": 1_700_000_123}
+            ]
+        });
+
+        assert_eq!(history_played_at(&history, 42), Some(1_700_000_123));
+        assert_eq!(history_played_at(&history, 99), None);
+        assert_eq!(history_played_at(&serde_json::json!({}), 42), None);
+    }
+
+    fn abandoned_profile(root: &Path, name: &str) -> PathBuf {
+        let path = root.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        // Profiles hold authentication state, so each fixture carries a
+        // marker file the sweep must remove with the directory.
+        std::fs::write(path.join("Cookies"), b"auth-state").unwrap();
+        path
+    }
+
+    #[test]
+    fn profile_creation_places_new_profiles_in_the_app_owned_root() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = tempfile::tempdir().unwrap();
+        let fresh_root_profile = abandoned_profile(root.path(), "ralgrum-auth-fresh");
+        let fresh_legacy_profile = abandoned_profile(legacy.path(), "ralgrum-auth-legacy-fresh");
+        let unrelated_dir = abandoned_profile(legacy.path(), "unrelated-dir");
+        let prefix_named_file = legacy.path().join("ralgrum-auth-not-a-directory.txt");
+        std::fs::write(&prefix_named_file, b"not a profile").unwrap();
+        let now = SystemTime::now();
+
+        let profile = open_auth_profile_in(root.path(), legacy.path(), now).unwrap();
+
+        assert!(profile.path().starts_with(root.path()));
+        let profile_name = profile.path().file_name().unwrap().to_string_lossy();
+        assert!(profile_name.starts_with(AUTH_PROFILE_PREFIX));
+        assert!(profile.path().is_dir());
+        // Profiles from a live or just finished sign-in, plus unrelated
+        // entries, must survive the creation-time sweep.
+        assert!(fresh_root_profile.is_dir());
+        assert!(fresh_legacy_profile.is_dir());
+        assert!(unrelated_dir.is_dir());
+        assert!(prefix_named_file.is_file());
+    }
+
+    #[test]
+    fn sweep_removes_crashed_profiles_and_keeps_unrelated_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = tempfile::tempdir().unwrap();
+        let crashed_in_root = abandoned_profile(root.path(), "ralgrum-auth-crash");
+        let crashed_in_legacy = abandoned_profile(legacy.path(), "ralgrum-auth-old-crash-in-temp");
+        let unrelated_dir = abandoned_profile(legacy.path(), "unrelated-dir");
+        let prefix_named_file = legacy.path().join("ralgrum-auth-not-a-directory.txt");
+        std::fs::write(&prefix_named_file, b"not a profile").unwrap();
+        let now = SystemTime::now();
+
+        // A sign-in right after the crash keeps the abandoned profiles
+        // because they are too recent for the sweep threshold.
+        open_auth_profile_in(root.path(), legacy.path(), now).unwrap();
+        assert!(crashed_in_root.is_dir());
+        assert!(crashed_in_legacy.is_dir());
+
+        // The next day's sign-in sweeps both the app root and the legacy
+        // system temp location while unrelated entries survive.
+        let next_day = now + AUTH_PROFILE_SWEEP_AGE;
+        let profile = open_auth_profile_in(root.path(), legacy.path(), next_day).unwrap();
+        assert!(profile.path().starts_with(root.path()));
+        assert!(!crashed_in_root.exists());
+        assert!(!crashed_in_legacy.exists());
+        assert!(unrelated_dir.is_dir());
+        assert!(prefix_named_file.is_file());
+    }
+
+    #[test]
+    fn profile_creation_tolerates_a_missing_legacy_location() {
+        let root = tempfile::tempdir().unwrap();
+        let missing_legacy = root.path().join("missing-temp-location");
+        let now = SystemTime::now();
+
+        let profile = open_auth_profile_in(root.path(), &missing_legacy, now).unwrap();
+
+        assert!(profile.path().starts_with(root.path()));
+    }
 }

@@ -98,3 +98,50 @@ jobs:
           name: ralgruM-${{ github.sha }}
           path: artifacts/*.zip
           if-no-files-found: error
+
+  build-linux:
+    name: Build full Linux application (${{ matrix.target }})
+    needs: require-private-access
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      BUILD_SHA: ${{ github.sha }}
+    steps:
+      - name: Check out the parent and private submodule
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        uses: ./.github/actions/setup-linux
+        with:
+          private-token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+
+      - name: Test the full application with the private backend
+        run: cargo test --locked --all-targets
+
+      - name: Build the full application
+        run: cargo build --locked --release
+
+      - name: Package the full application as an AppImage
+        shell: bash
+        run: bash scripts/build-appimage.sh
+
+      - name: Upload full Linux application artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ralgruM-linux-${{ matrix.target }}-${{ github.sha }}
+          path: ralgruM-*-linux.AppImage
+          if-no-files-found: error

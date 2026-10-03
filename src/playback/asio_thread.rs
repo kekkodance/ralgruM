@@ -13,11 +13,15 @@
 //! initializes COM with `CoInitializeEx(STA)`. It never pumps window
 //! messages: the reference implementation works without pumping, and a
 //! message loop here would swallow messages the driver posts to itself.
+#[cfg(windows)]
 use rodio::cpal::traits::DeviceTrait;
+#[cfg(windows)]
 use std::sync::mpsc::{Receiver, Sender, channel};
+#[cfg(windows)]
 use std::thread;
 
 /// Requests executed on the dedicated ASIO thread.
+#[cfg(windows)]
 enum AsioRequest {
     /// Opens an output stream on the named ASIO driver.
     Open {
@@ -35,16 +39,19 @@ enum AsioRequest {
     },
 }
 
+#[cfg(windows)]
 struct AsioOwner {
     sender: Sender<AsioRequest>,
 }
 
+#[cfg(windows)]
 impl AsioOwner {
     fn sender(&self) -> Sender<AsioRequest> {
         self.sender.clone()
     }
 }
 
+#[cfg(windows)]
 static ASIO_OWNER: std::sync::OnceLock<AsioOwner> = std::sync::OnceLock::new();
 
 #[cfg(windows)]
@@ -59,11 +66,6 @@ fn owner_sender() -> Sender<AsioRequest> {
             AsioOwner { sender }
         })
         .sender()
-}
-
-#[cfg(not(windows))]
-fn owner_sender() -> Sender<AsioRequest> {
-    unreachable!("the ASIO owner thread is Windows only")
 }
 
 /// The owner thread body: initializes COM and serves requests forever.
@@ -126,6 +128,7 @@ fn open_stream_on_this_thread(driver: &str) -> Result<rodio::OutputStream, Strin
 /// driver's live config there. Blocks the caller until the open finishes
 /// or fails. No other thread may enumerate ASIO drivers while a session is
 /// live: the driver is process-global and a concurrent load poisons it.
+#[cfg(windows)]
 pub(crate) fn open_asio_stream_logged(driver: &str) -> Result<rodio::OutputStream, String> {
     let (reply_tx, reply_rx) = channel();
     owner_sender()
@@ -139,11 +142,19 @@ pub(crate) fn open_asio_stream_logged(driver: &str) -> Result<rodio::OutputStrea
         .map_err(|_| "The ASIO owner thread stopped unexpectedly".to_string())?
 }
 
+/// ASIO does not exist off Windows: every open fails fast instead of
+/// reaching for the Windows-only owner thread.
+#[cfg(not(windows))]
+pub(crate) fn open_asio_stream_logged(_driver: &str) -> Result<rodio::OutputStream, String> {
+    Err("ASIO is unavailable on this platform".into())
+}
+
 /// Drops ASIO output streams on the dedicated owner thread and blocks until
 /// the COM release completed. Every teardown is synchronous: the next open
 /// on the same physical interface must not race the release, and the
 /// system-suspend teardown must finish before the OS freezes all threads or
 /// the Apartment-threaded driver DLL is left half-exited.
+#[cfg(windows)]
 pub(crate) fn drop_asio_streams(streams: Vec<rodio::OutputStream>) {
     let (ack_tx, ack_rx) = channel();
     let request = AsioRequest::Drop {
@@ -153,6 +164,13 @@ pub(crate) fn drop_asio_streams(streams: Vec<rodio::OutputStream>) {
     if owner_sender().send(request).is_ok() {
         let _ = ack_rx.recv();
     }
+}
+
+/// ASIO does not exist off Windows: the streams are plain backend streams,
+/// so the teardown drops them in place with no owner thread to synchronize.
+#[cfg(not(windows))]
+pub(crate) fn drop_asio_streams(streams: Vec<rodio::OutputStream>) {
+    drop(streams);
 }
 
 #[cfg(test)]

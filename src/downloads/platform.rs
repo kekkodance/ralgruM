@@ -47,6 +47,7 @@ pub(crate) fn reveal_file(path: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn windows_reveal_args(path: &Path) -> (&'static str, &'static str, &Path) {
     ("explorer.exe", "/select,", path)
 }
@@ -63,7 +64,7 @@ fn open_path(path: &Path) -> Result<(), String> {
         .map_err(|_| "The downloads folder could not be opened".to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::windows_reveal_args;
     use std::path::Path;

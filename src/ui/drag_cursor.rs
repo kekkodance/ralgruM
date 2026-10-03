@@ -39,6 +39,9 @@ impl DragCursorOwner {
 ///
 /// An empty cursor slot is safe to reset, and an owner may clear itself. A
 /// stale callback from another surface must leave the current drag untouched.
+// Only the native Windows drag cursor bridge consults ownership; the GPUI
+// fallback path resets unconditionally.
+#[cfg(windows)]
 pub(crate) const fn can_reset_drag_cursor(
     active_owner: Option<DragCursorOwner>,
     requested_owner: DragCursorOwner,
@@ -384,7 +387,9 @@ mod windows_impl {
 
 #[cfg(test)]
 mod tests {
-    use super::{DragCursorOwner, DragCursorState, can_reset_drag_cursor, grabbing_cursor};
+    #[cfg(windows)]
+    use super::{DragCursorOwner, can_reset_drag_cursor};
+    use super::{DragCursorState, grabbing_cursor};
     use gpui::CursorStyle;
 
     #[test]
@@ -397,6 +402,7 @@ mod tests {
         assert_eq!(grabbing_cursor(), CursorStyle::ClosedHand);
     }
 
+    #[cfg(windows)]
     #[test]
     fn stale_owner_resets_cannot_clear_a_new_drag() {
         let first_carousel = DragCursorOwner::carousel(1);

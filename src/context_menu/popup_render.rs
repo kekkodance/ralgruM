@@ -147,7 +147,32 @@ pub(super) fn render_popup(
         )
         .into_any_element();
     }
-    let arrow = div()
+    let arrow = build_arrow(arrow_edge, arrow_offset);
+    // Measure the wrapper, not the padded surface. The probe is an absolute
+    // size_full canvas, so inside the padded surface it would report an inset
+    // box. The wrapper has no padding or border, so its probe equals the
+    // menu border box and the chevron can align to the trigger exactly.
+    // Animate the wrapper so the chevron fades and slides with the menu.
+    animate_popup(
+        div()
+            .relative()
+            .child(surface)
+            .child(arrow)
+            .on_prepaint(move |bounds, _, cx| {
+                view.update(cx, |menu, _| menu.bounds = bounds);
+            }),
+        animation_id,
+        closing,
+        arrow_edge,
+    )
+    .into_any_element()
+}
+
+/// The floating chevron wrapper. Side edges exist only for the Windows tray
+/// popup, which anchors its menu to a vertical taskbar side.
+#[cfg(windows)]
+fn build_arrow(arrow_edge: PopupMenuArrowEdge, arrow_offset: Option<gpui::Pixels>) -> gpui::Div {
+    div()
         .absolute()
         .when(matches!(arrow_edge, PopupMenuArrowEdge::Top), |this| {
             this.top(px(-MENU_ARROW_OVERHANG_PX))
@@ -193,25 +218,26 @@ pub(super) fn render_popup(
                 |this| this.top(px(0.)).bottom(px(0.)).flex().items_center(),
             )
         })
-        .child(menu_arrow(arrow_edge));
-    // Measure the wrapper, not the padded surface. The probe is an absolute
-    // size_full canvas, so inside the padded surface it would report an inset
-    // box. The wrapper has no padding or border, so its probe equals the
-    // menu border box and the chevron can align to the trigger exactly.
-    // Animate the wrapper so the chevron fades and slides with the menu.
-    animate_popup(
-        div()
-            .relative()
-            .child(surface)
-            .child(arrow)
-            .on_prepaint(move |bounds, _, cx| {
-                view.update(cx, |menu, _| menu.bounds = bounds);
-            }),
-        animation_id,
-        closing,
-        arrow_edge,
-    )
-    .into_any_element()
+        .child(menu_arrow(arrow_edge))
+}
+
+#[cfg(not(windows))]
+fn build_arrow(arrow_edge: PopupMenuArrowEdge, arrow_offset: Option<gpui::Pixels>) -> gpui::Div {
+    div()
+        .absolute()
+        .when(matches!(arrow_edge, PopupMenuArrowEdge::Top), |this| {
+            this.top(px(-MENU_ARROW_OVERHANG_PX))
+        })
+        .when(matches!(arrow_edge, PopupMenuArrowEdge::Bottom), |this| {
+            this.bottom(px(-MENU_ARROW_OVERHANG_PX))
+        })
+        .when_some(arrow_offset, |this, offset| {
+            this.left(px(offset.as_f32() - MENU_ARROW_CANVAS_PX / 2.))
+        })
+        .when(arrow_offset.is_none(), |this| {
+            this.left(px(0.)).right(px(0.)).flex().justify_center()
+        })
+        .child(menu_arrow(arrow_edge))
 }
 
 fn animate_popup<E>(
@@ -224,8 +250,12 @@ where
     E: gpui::Styled + gpui::AnimationExt + 'static,
 {
     let opening_offset = match arrow_edge {
-        PopupMenuArrowEdge::Top | PopupMenuArrowEdge::Left => -3.,
-        PopupMenuArrowEdge::Bottom | PopupMenuArrowEdge::Right => 3.,
+        PopupMenuArrowEdge::Top => -3.,
+        #[cfg(windows)]
+        PopupMenuArrowEdge::Left => -3.,
+        PopupMenuArrowEdge::Bottom => 3.,
+        #[cfg(windows)]
+        PopupMenuArrowEdge::Right => 3.,
     };
     element.with_animation(
         animation_id,
@@ -243,6 +273,7 @@ where
             });
             match arrow_edge {
                 PopupMenuArrowEdge::Top | PopupMenuArrowEdge::Bottom => this.top(px(offset)),
+                #[cfg(windows)]
                 PopupMenuArrowEdge::Left | PopupMenuArrowEdge::Right => this.left(px(offset)),
             }
         },
@@ -278,7 +309,9 @@ fn paint_menu_arrow(bounds: Bounds<gpui::Pixels>, window: &mut Window, edge: Pop
     let (vertices, tip, stroke_start, stroke_end) = match edge {
         PopupMenuArrowEdge::Top => ([left, bottom, right, top], top, left, right),
         PopupMenuArrowEdge::Bottom => ([left, top, right, bottom], bottom, left, right),
+        #[cfg(windows)]
         PopupMenuArrowEdge::Left => ([top, right, bottom, left], left, top, bottom),
+        #[cfg(windows)]
         PopupMenuArrowEdge::Right => ([top, left, bottom, right], right, top, bottom),
     };
     let mut fill = PathBuilder::fill();

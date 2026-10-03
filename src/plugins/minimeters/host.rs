@@ -354,8 +354,11 @@ fn process_audio(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use clack_extensions::gui::{GuiApiType, GuiConfiguration, PluginGui};
+    #[cfg(windows)]
     use clack_host::prelude::*;
+    #[cfg(windows)]
     use std::{
         sync::{
             Arc,

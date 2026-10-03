@@ -1,10 +1,11 @@
 // Browser integration entry point for ralgrum://open links (v1).
 // Parsing and pending link stash live here so main.rs stays a thin
 // composition root. Tests sit with the module they verify.
+#[cfg(windows)]
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::Deserialize;
@@ -363,6 +364,8 @@ pub(crate) fn find_browser_link_arg(args: &[String]) -> Option<String> {
                 .to_owned()
         })
 }
+
+#[cfg(windows)]
 fn pending_directory() -> Option<PathBuf> {
     crate::paths::config_dir().map(|directory| directory.join(PENDING_DIRECTORY_NAME))
 }
@@ -376,6 +379,7 @@ fn pending_directories() -> Option<[PathBuf; 2]> {
     })
 }
 
+#[cfg(windows)]
 fn queue_entry_name() -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -390,6 +394,9 @@ fn queue_entry_name() -> String {
 
 /// Validates and atomically queues one browser link. Each launch gets its own
 /// file so a burst of extension clicks cannot overwrite an earlier action.
+// Windows writes queued links before signaling the owner; the Linux
+// single-instance handoff forwards links over its socket instead.
+#[cfg(windows)]
 pub(crate) fn enqueue_pending_link(raw: &str) -> Option<(BrowserEntity, PathBuf)> {
     let entity = parse_ralgrum_url(raw)?;
     let directory = pending_directory()?;
@@ -557,6 +564,7 @@ mod tests {
         assert!(parse_pending_bytes(br#"{"raw_url":"https://evil"}"#).is_none());
     }
 
+    #[cfg(windows)]
     #[test]
     fn queue_entry_names_are_app_generated_and_unique() {
         let first = queue_entry_name();

@@ -47,11 +47,24 @@ pub(crate) async fn download(
     let staging_dir = install_dir.join(format!(".ralgruM-update-{}", Uuid::new_v4()));
     tokio::fs::create_dir(&staging_dir)
         .await
-        .map_err(|error| format!("Cannot prepare the update beside ralgruM.exe: {error}"))?;
-    let staged_exe = staging_dir.join("ralgruM.exe");
-    let result = download_into(client, release, &staged_exe, cancellation, progress).await;
-    if result.is_err() {
-        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+        .map_err(|error| format!("Cannot prepare the update staging directory: {error}"))?;
+    let staged_exe = staging_dir.join(super::platform::staged_file_name());
+    let result = match download_into(client, release, &staged_exe, cancellation, progress).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return Err(error);
+        }
+    };
+    // The staged payload becomes the next executable on Linux, where the
+    // AppImage swap installs it directly, so it needs the executable bit.
+    // set_permissions on an already-open path is one fchmodat, which is safe
+    // to call inline on the async runtime.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&staged_exe, std::fs::Permissions::from_mode(0o755))
+            .map_err(|error| format!("Could not make the update executable: {error}"))?;
     }
     result.map(|()| Downloaded {
         staged_exe,

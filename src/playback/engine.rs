@@ -262,6 +262,7 @@ pub(crate) static ASIO_DRIVER_RESET: std::sync::atomic::AtomicBool =
 impl RodioEngine {
     pub(crate) fn new(output_target: AudioOutputTarget) -> Result<Self, String> {
         let stream = Self::open_output_stream(&output_target)?;
+        #[cfg(windows)]
         Self::register_driver_reset_listener();
         let sink = Arc::new(Sink::connect_new(stream.mixer()));
         Ok(Self {
@@ -292,6 +293,7 @@ impl RodioEngine {
     /// Registers the process-global ASIO driver message listener exactly
     /// once; the driver invokes it from its own thread when it needs a reset
     /// or resync, such as after a system sleep.
+    #[cfg(windows)]
     fn register_driver_reset_listener() {
         static REGISTER: std::sync::Once = std::sync::Once::new();
         REGISTER.call_once(|| {

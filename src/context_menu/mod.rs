@@ -78,7 +78,11 @@ pub(crate) use palette::{
     CONTEXT_MENU_BORDER, CONTEXT_MENU_FOREGROUND, CONTEXT_MENU_HOVER,
     CONTEXT_MENU_HOVER_FOREGROUND, CONTEXT_MENU_SEPARATOR, CONTEXT_MENU_SURFACE,
 };
-pub(crate) use popup::{POPUP_ARROW_EDGE_INSET_PX, PopupMenu, PopupMenuArrowEdge, PopupMenuItem};
+pub(crate) use popup::{PopupMenu, PopupMenuArrowEdge, PopupMenuItem};
+// Only the Windows tray popup consumes the arrow geometry re-exports.
+#[cfg(windows)]
+pub(crate) use popup::POPUP_ARROW_EDGE_INSET_PX;
+#[cfg(windows)]
 pub(crate) use popup_render::{MENU_ARROW_CANVAS_PX, MENU_ARROW_OVERHANG_PX, menu_arrow};
 pub(crate) use queue_menu::queue_menu;
 #[allow(unused_imports)]

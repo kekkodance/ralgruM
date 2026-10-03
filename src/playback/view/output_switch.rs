@@ -792,6 +792,7 @@ impl PlaybackModel {
 /// Builds a fresh engine for the target the way app startup does. Used after
 /// a wake recycled the previous engine to unload its poisoned ASIO driver.
 fn rebuild_engine(target: &AudioOutputTarget, volume: f32) -> Option<RodioEngine> {
+    #[cfg(windows)]
     if let AudioOutputTarget::AsioDriver(name) = target {
         // The previous engine was recycled: the driver was fully unloaded, so
         // its shared stream slot must be cleared or the rebuild would reuse

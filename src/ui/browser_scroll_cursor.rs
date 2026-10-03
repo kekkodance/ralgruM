@@ -109,8 +109,11 @@ pub(crate) fn restore_browser_scroll_cursor(window: &mut Window) {
     let _ = window;
 }
 
+#[cfg(windows)]
 const PAN_MIDDLE_VERTICAL: &str = include_str!("../../assets/cursors/pan_middle_vertical.cur.b64");
+#[cfg(windows)]
 const PAN_NORTH: &str = include_str!("../../assets/cursors/pan_north.cur.b64");
+#[cfg(windows)]
 const PAN_SOUTH: &str = include_str!("../../assets/cursors/pan_south.cur.b64");
 
 /// Decode the selected image from a Windows CUR file into the resource format
@@ -119,7 +122,7 @@ const PAN_SOUTH: &str = include_str!("../../assets/cursors/pan_south.cur.b64");
 /// CUR files use the same image payload as ICO files, with the first two
 /// fields of each directory entry carrying the hotspot instead of icon
 /// dimensions. The native API expects that hotspot prepended to the selected
-/// image payload.
+#[cfg(windows)]
 fn cursor_resource(bytes: &[u8]) -> Option<Vec<u8>> {
     if le_u16(bytes, 0)? != 0 || le_u16(bytes, 2)? != 2 {
         return None;
@@ -164,12 +167,14 @@ fn cursor_resource(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(resource)
 }
 
+#[cfg(windows)]
 fn le_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes(
         bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?,
     ))
 }
 
+#[cfg(windows)]
 fn le_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
         bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
@@ -448,14 +453,13 @@ mod windows_impl {
 
 #[cfg(test)]
 mod tests {
+    use super::BrowserScrollCursor;
+    #[cfg(windows)]
+    use super::{PAN_MIDDLE_VERTICAL, PAN_NORTH, PAN_SOUTH, cursor_resource, le_u16, le_u32};
+    use crate::browser_scroll::AUTOSCROLL_DEAD_ZONE_PX;
+    #[cfg(windows)]
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use gpui::CursorStyle;
-
-    use super::{
-        BrowserScrollCursor, PAN_MIDDLE_VERTICAL, PAN_NORTH, PAN_SOUTH, cursor_resource, le_u16,
-        le_u32,
-    };
-    use crate::browser_scroll::AUTOSCROLL_DEAD_ZONE_PX;
 
     #[test]
     fn cursor_state_respects_the_dead_zone_boundaries() {
@@ -505,6 +509,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn embedded_chromium_pan_cursors_have_valid_cur_resources() {
         for encoded in [PAN_MIDDLE_VERTICAL, PAN_NORTH, PAN_SOUTH] {
@@ -524,6 +529,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn malformed_cursor_resources_are_rejected() {
         assert!(cursor_resource(&[]).is_none());

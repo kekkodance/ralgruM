@@ -65,11 +65,11 @@ fn open(
         .get_extension::<PluginGui>()
         .ok_or("MiniMeters Audio Server does not provide a plugin UI")?;
     let configuration = GuiConfiguration {
-        api_type: GuiApiType::WIN32,
+        api_type: gui_api_type(),
         is_floating: false,
     };
     if !gui.is_api_supported(&handle, configuration) {
-        return Err("MiniMeters Audio Server does not support an embedded Win32 UI".into());
+        return Err(embedding_unsupported_message());
     }
     gui.create(&handle, configuration)
         .map_err(|error| error.to_string())?;
@@ -83,10 +83,9 @@ fn open(
         let size = gui
             .get_size(&handle)
             .ok_or("MiniMeters did not report a plugin UI size")?;
-        // SAFETY: The GPUI-owned child HWND stays alive until CloseEditor has
-        // synchronously destroyed the CLAP editor.
-        let parent = unsafe { ClapWindow::from_win32_hwnd(parent_hwnd as *mut _) };
-        // SAFETY: The parent window lifetime is enforced by the editor window's close handshake.
+        let parent = parent_window(parent_hwnd);
+        // SAFETY: The GPUI-owned parent window stays alive until CloseEditor
+        // has synchronously destroyed the CLAP editor.
         unsafe { gui.set_parent(&handle, parent) }.map_err(|error| error.to_string())?;
         gui.show(&handle).map_err(|error| error.to_string())?;
         Ok((size.width, size.height))
@@ -109,6 +108,46 @@ pub(super) fn close(instance: &mut PluginInstance<MeterHost>, editor_open: &mut 
         gui.destroy(&handle);
     }
     *editor_open = false;
+}
+
+#[cfg(windows)]
+fn gui_api_type() -> GuiApiType<'static> {
+    GuiApiType::WIN32
+}
+
+#[cfg(target_os = "linux")]
+fn gui_api_type() -> GuiApiType<'static> {
+    GuiApiType::X11
+}
+
+#[cfg(target_os = "macos")]
+fn gui_api_type() -> GuiApiType<'static> {
+    GuiApiType::COCOA
+}
+
+#[cfg(windows)]
+fn embedding_unsupported_message() -> String {
+    "MiniMeters Audio Server does not support an embedded Win32 UI".into()
+}
+
+#[cfg(not(windows))]
+fn embedding_unsupported_message() -> String {
+    "MiniMeters Audio Server does not support an embedded X11 UI".into()
+}
+
+#[cfg(windows)]
+fn parent_window(parent_hwnd: isize) -> ClapWindow<'static, 'static> {
+    // SAFETY: The GPUI-owned child HWND stays alive until CloseEditor has
+    // synchronously destroyed the CLAP editor.
+    unsafe { ClapWindow::from_win32_hwnd(parent_hwnd as *mut _) }
+}
+
+#[cfg(target_os = "linux")]
+fn parent_window(parent_hwnd: isize) -> ClapWindow<'static, 'static> {
+    // SAFETY: The GPUI-owned child X11 window stays alive until CloseEditor
+    // has synchronously destroyed the CLAP editor. clack's X11 handle is a
+    // plain `c_ulong` window ID, so no pointer lifetime is involved.
+    ClapWindow::from_x11_handle(parent_hwnd as core::ffi::c_ulong)
 }
 
 #[cfg(windows)]

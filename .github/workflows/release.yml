@@ -89,6 +89,35 @@ jobs:
       - name: Run full release tests
         run: cargo test --locked --all-targets
 
+  test-linux:
+    name: Test full Linux release
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - name: Check out the parent repository
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Set up the full Linux build
+        uses: ./.github/actions/setup-linux
+        with:
+          private-token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+
+      - name: Run full release tests
+        run: cargo test --locked --all-targets
   build:
     name: Build full release
     needs: prepare
@@ -137,17 +166,77 @@ jobs:
           name: ralgruM-${{ github.run_id }}
           path: target/release/ralgruM.exe
           if-no-files-found: error
+
+  build-linux:
+    name: Build full Linux release (${{ matrix.target }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - name: Check out the parent repository
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Set up the full Linux build
+        uses: ./.github/actions/setup-linux
+        with:
+          private-token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+
+      - name: Build the full release
+        run: cargo build --locked --release
+
+      - name: Package the full release as an AppImage
+        shell: bash
+        run: bash scripts/build-appimage.sh
+
+      - name: Record the AppImage hash
+        id: appimage-hash
+        shell: bash
+        run: |
+          hash=$(sha256sum ralgruM-*-linux.AppImage | cut -d' ' -f1)
+          echo "sha256=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Transfer the Linux release AppImage
+        uses: actions/upload-artifact@v7
+        with:
+          name: ralgruM-linux-${{ matrix.target }}-${{ github.run_id }}
+          path: ralgruM-*-linux.AppImage
+          if-no-files-found: error
           compression-level: 0
+
 
   publish:
     name: Publish tested release
-    needs: [prepare, test, build]
-    runs-on: windows-latest
+    needs: [prepare, test, test-linux, build, build-linux]
+    runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
       EXPECTED_SHA256: ${{ needs.build.outputs.sha256 }}
     steps:
+      - name: Download the Linux AppImages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ralgruM-linux-*-${{ github.run_id }}
+          path: artifacts
+          merge-multiple: true
+
+      - name: Restore the Linux asset permissions
+        shell: bash
+        run: find artifacts -name 'ralgruM-*-linux.AppImage' -exec chmod +x {} \;
+
       - name: Check out the parent repository
         uses: actions/checkout@v7
         with:
@@ -165,7 +254,7 @@ jobs:
       - name: Verify the transferred executable
         shell: pwsh
         run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'artifacts\ralgruM.exe'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'artifacts/ralgruM.exe'
           $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($hash -ne $env:EXPECTED_SHA256) {
             throw "Transferred EXE hash mismatch: got '$hash', expected '$env:EXPECTED_SHA256'."
@@ -174,7 +263,7 @@ jobs:
 
       - name: Write commit-by-commit release notes
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/write-release-notes.ps1 -Version $env:RELEASE_VERSION -OutputPath artifacts/release-notes.md
+        run: pwsh -File scripts/write-release-notes.ps1 -Version $env:RELEASE_VERSION -OutputPath artifacts/release-notes.md
 
       - name: Configure Git identity
         run: |
@@ -183,7 +272,7 @@ jobs:
 
       - name: Update Cargo package version
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version $env:RELEASE_VERSION -NoBuild
+        run: pwsh -File scripts/build-release.ps1 -Version $env:RELEASE_VERSION -NoBuild
 
       - name: Commit the version bump
         shell: pwsh
@@ -202,4 +291,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release create $env:RELEASE_TAG $env:RELEASE_EXE --title "ralgruM $env:RELEASE_VERSION" --notes-file artifacts/release-notes.md
+          gh release create $env:RELEASE_TAG $env:RELEASE_EXE artifacts/ralgruM-x86_64-linux.AppImage artifacts/ralgruM-aarch64-linux.AppImage --title "ralgruM $env:RELEASE_VERSION" --notes-file artifacts/release-notes.md

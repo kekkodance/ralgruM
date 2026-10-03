@@ -79,6 +79,38 @@ fn start_browser_link_pump(
     .detach();
 }
 
+#[cfg(target_os = "linux")]
+fn start_browser_link_pump(
+    cx: &mut App,
+    shell: gpui::WeakEntity<RalgrumApp>,
+    mut events: futures::channel::mpsc::UnboundedReceiver<
+        platform::linux_instance::BrowserLinkEvent,
+    >,
+) {
+    use futures::StreamExt as _;
+
+    cx.spawn(async move |cx| {
+        while let Some(event) = events.next().await {
+            let alive = cx.update(|cx| match event {
+                platform::linux_instance::BrowserLinkEvent::Restore => {
+                    tray::restore_main_window(cx);
+                    true
+                }
+                platform::linux_instance::BrowserLinkEvent::Open(entity) => shell
+                    .update(cx, |app, cx| {
+                        tray::restore_main_window(cx);
+                        app.open_browser_link(entity, cx)
+                    })
+                    .is_ok(),
+            });
+            if !alive {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
 fn main() {
     if updater::helper::dispatch() {
         return;
@@ -87,6 +119,8 @@ fn main() {
     diagnostics::init();
     diagnostics::event("INFO", "startup begin");
     let update_handoff_error = updater::helper::take_last_error();
+    #[cfg(target_os = "linux")]
+    platform::linux_protocol::sync_registration();
     #[cfg(windows)]
     windows_protocol::sync_registration();
     let raw_browser_link =
@@ -117,8 +151,26 @@ fn main() {
         }
         return;
     }
-    #[cfg(not(windows))]
-    let initial_browser_links = raw_browser_link
+    #[cfg(target_os = "linux")]
+    let mut browser_launch = platform::linux_instance::prepare(raw_browser_link.clone());
+    #[cfg(target_os = "linux")]
+    if matches!(
+        &browser_launch,
+        platform::linux_instance::BrowserLinkLaunch::Forwarded
+            | platform::linux_instance::BrowserLinkLaunch::Unavailable
+    ) {
+        if matches!(
+            &browser_launch,
+            platform::linux_instance::BrowserLinkLaunch::Forwarded
+        ) {
+            diagnostics::event("INFO", "secondary launch forwarded to running app");
+        } else {
+            diagnostics::event("ERROR", "single-instance startup unavailable");
+        }
+        return;
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let mut initial_browser_links = raw_browser_link
         .as_deref()
         .and_then(browser_link::parse_ralgrum_url)
         .into_iter()
@@ -132,11 +184,11 @@ fn main() {
         .with_http_client(http_client)
         .run(move |cx: &mut App| {
             diagnostics::event("INFO", "GPUI application callback entered");
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             browser_launch.install_owner(cx);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             let mut initial_browser_links = browser_launch.take_initial();
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             let browser_events = browser_launch.take_events();
             let device_identity = murglar_backend::load_current_user();
             let account_session = account_session::SessionStore::load_current_user();
@@ -257,10 +309,12 @@ fn main() {
                         );
                     }
                     let tray_available = tray::install(cx, window, view.downgrade());
+                    #[cfg(target_os = "linux")]
+                    platform::linux_power::install(cx, view.downgrade());
                     for entity in initial_browser_links.drain(..) {
                         view.update(cx, |app, cx| app.open_browser_link(entity, cx));
                     }
-                    #[cfg(windows)]
+                    #[cfg(any(windows, target_os = "linux"))]
                     if let Some(events) = browser_events {
                         start_browser_link_pump(cx, view.downgrade(), events);
                     }

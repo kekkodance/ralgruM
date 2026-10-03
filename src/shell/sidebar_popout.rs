@@ -5,7 +5,7 @@ use gpui::{
     px, size,
 };
 
-use crate::{lyrics::LyricsPanel, playback::PlaybackModel, playback::QueuePanel, windows_chrome};
+use crate::{lyrics::LyricsPanel, playback::PlaybackModel, playback::QueuePanel};
 
 use super::sidebar_popout_root::SidebarPopoutRoot;
 
@@ -167,8 +167,9 @@ fn build_root(
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<gpui_component::Root> {
+    #[cfg(windows)]
     if let Some(raw) = crate::media_control::window_handle(window) {
-        windows_chrome::apply_app_window_chrome(windows::Win32::Foundation::HWND(raw as _));
+        crate::windows_chrome::apply_app_window_chrome(windows::Win32::Foundation::HWND(raw as _));
     }
     let view =
         cx.new(|cx| SidebarPopoutRoot::new(playback.clone(), lyrics.clone(), queue.clone(), cx));

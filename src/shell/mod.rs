@@ -643,6 +643,36 @@ impl RalgrumApp {
         cx.notify();
     }
 
+    /// System wake: re-applies the saved output target so a dead backend
+    /// stream is reopened (with position restore) by the wake machinery.
+    pub(crate) fn handle_system_wake(&self, cx: &mut Context<Self>) {
+        crate::diagnostics::event("INFO", "system resumed; reinitializing the audio output");
+        let saved = self.settings.read(cx).saved();
+        let asio_mode = saved.asio_mode;
+        let output_device = saved.output_device.clone();
+        let asio_driver = saved.asio_driver.clone();
+        self.playback.update(cx, |playback, cx| {
+            playback.reinitialize_audio_output_after_wake(
+                asio_mode,
+                output_device,
+                asio_driver,
+                cx,
+            );
+        });
+    }
+
+    /// System suspend: releases the ASIO session before the hardware sleeps
+    /// so no zombie callback fires into dead hardware; the wake path rebuilds
+    /// a fresh session.
+    pub(crate) fn handle_system_suspend(&self, cx: &mut Context<Self>) {
+        crate::diagnostics::event("INFO", "system suspending; releasing the audio output");
+        let saved = self.settings.read(cx).saved();
+        if saved.asio_mode {
+            self.playback.update(cx, |playback, cx| {
+                playback.suspend_audio_output_for_sleep(cx);
+            });
+        }
+    }
     pub(crate) fn new(
         settings: Entity<SettingsView>,
         account: Entity<AccountState>,
@@ -652,63 +682,31 @@ impl RalgrumApp {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&window_state, |_, _, cx| cx.notify()).detach();
-        {
-            // ASIO driver sessions die across system sleeps without any
-            // error surfacing: the driver's buffer-switch interrupt stops
-            // firing while cpal's stream still looks running. Re-applying
-            // the saved output target reopens the stream through the
-            // standard output-switch machinery, which also restores the
-            // playback position. The platform forwards the wake broadcast
-            // to the message-only platform window, and the armed stall
-            // probe falls back to a working endpoint if the reopened
-            // backend still refuses to advance.
-            let shell = cx.entity().downgrade();
-            cx.on_system_wake(move |cx| {
-                crate::diagnostics::event(
-                    "INFO",
-                    "system resumed; reinitializing the audio output",
-                );
-                if let Some(shell) = shell.upgrade() {
-                    shell.update(cx, |this, cx| {
-                        let saved = this.settings.read(cx).saved();
-                        let asio_mode = saved.asio_mode;
-                        let output_device = saved.output_device.clone();
-                        let asio_driver = saved.asio_driver.clone();
-                        this.playback.update(cx, |playback, cx| {
-                            playback.reinitialize_audio_output_after_wake(
-                                asio_mode,
-                                output_device,
-                                asio_driver,
-                                cx,
-                            );
-                        });
-                    });
-                }
-            })
-            .detach();
-        }
-        {
-            // The reference implementation drops the ASIO session BEFORE the
-            // hardware sleeps: tearing down while the driver still works means
-            // no zombie callback fires into dead hardware (the clicking), and
-            // the wake path opens a genuinely fresh session. The engine is
-            // dropped here and rebuilt by the wake/retry machinery.
-            let shell = cx.entity().downgrade();
-            cx.on_system_suspend(move |cx| {
-                crate::diagnostics::event("INFO", "system suspending; releasing the audio output");
-                if let Some(shell) = shell.upgrade() {
-                    shell.update(cx, |this, cx| {
-                        let saved = this.settings.read(cx).saved();
-                        if saved.asio_mode {
-                            this.playback.update(cx, |playback, cx| {
-                                playback.suspend_audio_output_for_sleep(cx);
-                            });
-                        }
-                    });
-                }
-            })
-            .detach();
-        }
+        // ASIO driver sessions die across system sleeps without any error
+        // surfacing: the driver's buffer-switch interrupt stops firing while
+        // cpal's stream still looks running. Re-applying the saved output
+        // target reopens the stream through the standard output-switch
+        // machinery, which also restores the playback position. The wake
+        // path falls back to a working endpoint if the reopened backend
+        // still refuses to advance.
+        let shell = cx.entity().downgrade();
+        cx.on_system_wake(move |cx| {
+            if let Some(shell) = shell.upgrade() {
+                shell.update(cx, |this, cx| this.handle_system_wake(cx));
+            }
+        })
+        .detach();
+        // The reference implementation drops the ASIO session BEFORE the
+        // hardware sleeps: tearing down while the driver still works means
+        // no zombie callback fires into dead hardware (the clicking), and
+        // the wake path opens a genuinely fresh session.
+        let shell = cx.entity().downgrade();
+        cx.on_system_suspend(move |cx| {
+            if let Some(shell) = shell.upgrade() {
+                shell.update(cx, |this, cx| this.handle_system_suspend(cx));
+            }
+        })
+        .detach();
         let saved = settings.read(cx).saved().clone();
         cx.set_reduce_motion(saved.motion_preference.is_reduced());
         let cache = settings.read(cx).cache.clone();

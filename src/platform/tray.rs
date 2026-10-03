@@ -1476,6 +1476,289 @@ mod windows_impl {
     }
 }
 
+/// Linux tray implementation.
+///
+/// tray-icon's Linux backend is StatusNotifierItem (via libappindicator)
+/// and it does not emit `TrayIconEvent` at all: the crate documents the
+/// click events as unsupported on Linux and libappindicator's safe Rust
+/// wrapper exposes no click signal either. Left-click activation is
+/// therefore not implementable through this stack, so the tray is
+/// menu-only: right-click opens the native muda menu (Open ralgruM,
+/// Settings, Quit) and the desktop shell's own panel behavior (single
+/// click opening the menu on some environments) fills the interaction
+/// gap. Every other Linux tray app using this stack has the same shape.
+///
+/// GTK rules shape the threading: all widgets live on the shared
+/// `gtk_host` thread (see `platform::gtk_host` for why there is exactly
+/// one), and muda menu events are forwarded from the handler into an
+/// unbounded channel drained by a GPUI foreground task, mirroring how
+/// `windows_impl` pumps its tray events.
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    use futures::{
+        StreamExt,
+        channel::mpsc::{UnboundedReceiver, unbounded},
+    };
+    use gpui::{App, Global, Window};
+    use tray_icon::{
+        Icon, TrayIcon, TrayIconBuilder,
+        menu::{Menu, MenuEvent, MenuId, MenuItem},
+    };
+
+    use crate::shell::RalgrumApp;
+
+    /// Menu item labels, mirroring the GPUI tray menu on Windows
+    /// (`TRAY_MENU_LABELS` there: Open ralgruM / Settings / Quit).
+    pub(super) const TRAY_MENU_LABELS: [&str; 3] = ["Open ralgruM", "Settings", "Quit"];
+
+    /// The muda menu item ids. Fixed strings (rather than muda's
+    /// auto-generated counter ids) so the id-to-action mapping is a pure,
+    /// unit-testable function and stays stable across restarts.
+    pub(super) const TRAY_MENU_ITEM_IDS: [&str; 3] = ["tray-open", "tray-settings", "tray-quit"];
+
+    /// The app icon reused from the Windows tray implementation.
+    const APP_ICON: &[u8] = include_bytes!("../../assets/app-icon.png");
+
+    /// The tray action behind a muda menu id. Unknown ids map to `None`
+    /// so unrelated menus (none exist today, but the muda event channel
+    /// is process-global) can never trigger a tray action.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(super) enum TrayMenuAction {
+        Open,
+        Settings,
+        Quit,
+    }
+
+    pub(super) fn tray_menu_action(id: &str) -> Option<TrayMenuAction> {
+        // if-else rather than match: the ids are array members, and Rust
+        // patterns cannot index constants. String equality keeps the
+        // mapping exact and case-sensitive.
+        if id == TRAY_MENU_ITEM_IDS[0] {
+            Some(TrayMenuAction::Open)
+        } else if id == TRAY_MENU_ITEM_IDS[1] {
+            Some(TrayMenuAction::Settings)
+        } else if id == TRAY_MENU_ITEM_IDS[2] {
+            Some(TrayMenuAction::Quit)
+        } else {
+            None
+        }
+    }
+
+    struct TrayController {
+        /// The icon removes itself from the notification area when
+        /// dropped. It is not `Send` (GTK objects must stay on their
+        /// thread), so the controller only owns the main window handle
+        /// and the quit flag; the icon itself stays boxed inside the
+        /// gtk host thread's state.
+        main_window: gpui::AnyWindowHandle,
+        shell: gpui::WeakEntity<RalgrumApp>,
+        quit_requested: bool,
+    }
+
+    impl Global for TrayController {}
+
+    pub(super) fn install(
+        cx: &mut App,
+        window: &Window,
+        shell: gpui::WeakEntity<RalgrumApp>,
+    ) -> bool {
+        let host = match crate::platform::gtk_host::spawn() {
+            Ok(host) => host,
+            Err(error) => {
+                crate::diagnostics::event("WARN", format!("system tray unavailable: {error}"));
+                return false;
+            }
+        };
+
+        // muda's MenuEvent handler is a one-time process-global
+        // registration, exactly like TrayIconEvent on Windows. It is
+        // registered before the icon exists so no activation can race it,
+        // and it only forwards ids through a channel; all GPUI work
+        // happens on the main thread in the pump task below.
+        let (event_sender, event_receiver) = unbounded::<String>();
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            let _ = event_sender.unbounded_send(event.id.0.clone());
+        }));
+
+        let (created_sender, created_receiver) = std::sync::mpsc::channel::<Result<(), String>>();
+        let icon_window = window.window_handle();
+        host.submit(move || {
+            // Everything GTK on this thread: the decoded icon, the muda
+            // menu, and the appindicator handle. The icon is kept alive
+            // for the process lifetime by leaking it; a tray icon should
+            // never disappear while the app runs, and dropping GTK
+            // objects from the wrong thread later would be worse.
+            let result = build_tray().map(|tray| {
+                std::mem::forget(tray);
+            });
+            let _ = created_sender.send(result);
+        });
+        let created = created_receiver
+            .recv()
+            .unwrap_or_else(|_| Err("gtk host thread died while building the tray".into()));
+        if let Err(error) = created {
+            crate::diagnostics::event("WARN", format!("system tray unavailable: {error}"));
+            return false;
+        }
+
+        cx.set_global(TrayController {
+            main_window: icon_window,
+            shell,
+            quit_requested: false,
+        });
+        start_menu_pump(cx, event_receiver);
+        crate::diagnostics::event("INFO", "system tray ready");
+        true
+    }
+
+    /// Builds the icon and its native menu on the GTK thread.
+    fn build_tray() -> Result<TrayIcon, String> {
+        let menu = build_menu()?;
+        let icon = application_icon()?;
+        TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_icon(icon)
+            .build()
+            .map_err(|error| format!("could not create the tray icon: {error}"))
+    }
+
+    /// The native muda menu mirroring the Windows GPUI tray menu.
+    fn build_menu() -> Result<Menu, String> {
+        let menu = Menu::new();
+        for (label, id) in TRAY_MENU_LABELS.iter().zip(TRAY_MENU_ITEM_IDS) {
+            menu.append(&MenuItem::with_id(MenuId::new(id), *label, true, None))
+                .map_err(|error| format!("could not build the tray menu: {error}"))?;
+        }
+        Ok(menu)
+    }
+
+    fn application_icon() -> Result<Icon, String> {
+        let image = image::load_from_memory(APP_ICON)
+            .map_err(|error| format!("could not decode app icon: {error}"))?;
+        let width = image.width();
+        let height = image.height();
+        Icon::from_rgba(image.into_rgba8().into_raw(), width, height)
+            .map_err(|error| format!("could not prepare tray icon: {error}"))
+    }
+
+    /// Drains muda menu ids on the main thread and performs the matching
+    /// action. This is the Linux twin of `windows_impl::start_event_pump`.
+    fn start_menu_pump(cx: &mut App, mut events: UnboundedReceiver<String>) {
+        cx.spawn(async move |cx| {
+            while let Some(id) = events.next().await {
+                let action = tray_menu_action(&id);
+                let alive = cx.update(|cx| {
+                    if cx.try_global::<TrayController>().is_none() {
+                        return false;
+                    }
+                    match action {
+                        Some(TrayMenuAction::Open) => restore_main_window(cx),
+                        Some(TrayMenuAction::Settings) => open_general_settings(cx),
+                        Some(TrayMenuAction::Quit) => request_quit(cx),
+                        // An id from any future non-tray muda menu; the
+                        // action mapping is the single source of truth.
+                        None => {}
+                    }
+                    true
+                });
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn quit_requested(cx: &App) -> bool {
+        cx.try_global::<TrayController>()
+            .is_some_and(|controller| controller.quit_requested)
+    }
+
+    pub(super) fn hide_window(window: &Window) {
+        // The Windows twin hides the HWND outright (SW_HIDE) so no
+        // taskbar button remains. GPUI has no cross-platform hide, so the
+        // closest supported equivalent is minimizing: the window stays on
+        // the taskbar, but it is out of the way and the app keeps
+        // running, which is the point of close-to-tray. The alternative,
+        // removing the window, would destroy the GPUI window and its
+        // state, which is a quit in disguise.
+        window.minimize_window();
+    }
+
+    pub(super) fn restore_main_window(cx: &mut App) {
+        let Some(main_window) = cx.try_global::<TrayController>().map(|c| c.main_window) else {
+            return;
+        };
+        let _ = main_window.update(cx, |_, window, _| {
+            // activate is the cross-platform GPUI path: on Wayland it
+            // requests an activation token, on X11 it sends
+            // _NET_ACTIVE_WINDOW. Both compositors also un-minimize a
+            // window they activate.
+            window.activate_window();
+        });
+    }
+
+    fn open_general_settings(cx: &mut App) {
+        let Some((main_window, shell)) = cx
+            .try_global::<TrayController>()
+            .map(|c| (c.main_window, c.shell.clone()))
+        else {
+            return;
+        };
+        let _ = main_window.update(cx, |_, window, cx| {
+            window.activate_window();
+            shell
+                .update(cx, |app, cx| app.open_general_settings(window, cx))
+                .ok();
+        });
+    }
+
+    fn request_quit(cx: &mut App) {
+        if cx.try_global::<TrayController>().is_some() {
+            cx.global_mut::<TrayController>().quit_requested = true;
+        }
+        cx.quit();
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{TRAY_MENU_ITEM_IDS, TRAY_MENU_LABELS, tray_menu_action};
+
+        #[test]
+        fn tray_menu_labels_match_the_windows_menu() {
+            assert_eq!(TRAY_MENU_LABELS, ["Open ralgruM", "Settings", "Quit"]);
+        }
+
+        #[test]
+        fn menu_ids_map_to_their_actions() {
+            assert_eq!(
+                tray_menu_action(TRAY_MENU_ITEM_IDS[0]),
+                Some(super::TrayMenuAction::Open)
+            );
+            assert_eq!(
+                tray_menu_action(TRAY_MENU_ITEM_IDS[1]),
+                Some(super::TrayMenuAction::Settings)
+            );
+            assert_eq!(
+                tray_menu_action(TRAY_MENU_ITEM_IDS[2]),
+                Some(super::TrayMenuAction::Quit)
+            );
+        }
+
+        #[test]
+        fn unknown_menu_ids_map_to_nothing() {
+            assert_eq!(tray_menu_action("tray-open-extra"), None);
+            assert_eq!(tray_menu_action(""), None);
+            assert_eq!(tray_menu_action("0"), None);
+        }
+
+        #[test]
+        fn labels_and_ids_stay_parallel() {
+            assert_eq!(TRAY_MENU_LABELS.len(), TRAY_MENU_ITEM_IDS.len());
+        }
+    }
+}
+
 #[cfg(windows)]
 pub(crate) fn install(
     cx: &mut App,
@@ -1485,7 +1768,16 @@ pub(crate) fn install(
     windows_impl::install(cx, window, shell)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub(crate) fn install(
+    cx: &mut App,
+    window: &Window,
+    shell: gpui::WeakEntity<crate::shell::RalgrumApp>,
+) -> bool {
+    linux_impl::install(cx, window, shell)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn install(
     _: &mut App,
     _: &Window,
@@ -1499,7 +1791,12 @@ pub(crate) fn quit_requested(cx: &App) -> bool {
     windows_impl::quit_requested(cx)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub(crate) fn quit_requested(cx: &App) -> bool {
+    linux_impl::quit_requested(cx)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn quit_requested(_: &App) -> bool {
     false
 }
@@ -1514,10 +1811,20 @@ pub(crate) fn restore_main_window(cx: &mut App) {
     windows_impl::restore_main_window(cx);
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub(crate) fn hide_window(window: &Window) {
+    linux_impl::hide_window(window);
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn restore_main_window(cx: &mut App) {
+    linux_impl::restore_main_window(cx);
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn hide_window(_: &Window) {}
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn restore_main_window(_: &mut App) {}
 
 #[cfg(test)]

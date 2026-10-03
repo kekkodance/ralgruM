@@ -66,3 +66,40 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --locked --all-targets --no-deps -- -D warnings
+
+  linux:
+    name: Linux checks (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      RALGRUM_MURGLAR_PRIVATE_DIR: target/no-private-backend
+    steps:
+      - name: Check out the public repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        uses: ./.github/actions/setup-linux
+        with:
+          private-token: not-used
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run tests
+        run: cargo test --locked --all-targets
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --no-deps -- -D warnings

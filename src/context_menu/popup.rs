@@ -63,7 +63,11 @@ pub(crate) enum PopupMenuItem {
 pub(crate) enum PopupMenuArrowEdge {
     Top,
     Bottom,
+    // Side edges anchor the arrow to a vertical menu side; only the
+    // Windows tray popup, which sits on a vertical taskbar, produces them.
+    #[cfg(windows)]
     Left,
+    #[cfg(windows)]
     Right,
 }
 
@@ -348,6 +352,7 @@ impl PopupMenu {
             PopupMenuArrowEdge::Top | PopupMenuArrowEdge::Bottom => {
                 (self.bounds.origin.x, self.bounds.size.width)
             }
+            #[cfg(windows)]
             PopupMenuArrowEdge::Left | PopupMenuArrowEdge::Right => {
                 (self.bounds.origin.y, self.bounds.size.height)
             }

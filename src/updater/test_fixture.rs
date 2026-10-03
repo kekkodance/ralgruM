@@ -21,8 +21,7 @@ fn valid_candidate(executable: &Path, candidate: &Path, temp: &Path) -> bool {
     uuid::Uuid::parse_str(id).is_ok()
         && executable
             .file_name()
-            .is_some_and(|value| value == "ralgruM.exe")
-        && candidate == directory.join("candidate.exe")
+            .is_some_and(|value| value == super::platform::staged_file_name().as_str())
         && directory.parent().and_then(|path| path.canonicalize().ok()) == temp.canonicalize().ok()
         && executable.is_file()
         && candidate.is_file()
@@ -39,7 +38,7 @@ mod tests {
             .path()
             .join(format!("ralgrum-updater-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
-        let executable = directory.join("ralgruM.exe");
+        let executable = directory.join(crate::updater::platform::staged_file_name());
         let candidate = directory.join("candidate.exe");
         std::fs::write(&executable, b"old").unwrap();
         std::fs::write(&candidate, b"new").unwrap();

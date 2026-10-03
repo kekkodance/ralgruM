@@ -1,11 +1,12 @@
-//! OS media session integration (Windows SMTC, macOS remote commands).
+//! OS media session integration (Windows SMTC, macOS remote commands, and
+//! Linux MPRIS over D-Bus).
 //!
 //! Mirrors the mediaSession handlers of the original Tauri app
 //! (public/js/core/app.js): metadata for the current track, playback state,
 //! and remote control events (play, pause, previous, next, and seeks) routed
 //! back into the playback model. Events arrive on OS threads, so they are
 //! forwarded through an unbounded channel that the model drains on the main
-//! thread. Linux MPRIS is not wired up (see Cargo.toml).
+//! thread.
 
 use std::time::Duration;
 
@@ -125,13 +126,37 @@ pub(crate) fn window_handle(window: &gpui::Window) -> Option<isize> {
     }
 }
 
-#[cfg(not(windows))]
+/// Extracts the X11 window ID GPUI created for the main window. The CLAP gui
+/// extension takes an X11 window ID as its parent handle, and the value
+/// crosses no threads here. Wayland sessions expose a surface pointer instead
+/// of a window ID, so callers treat `None` as "not an X11 session".
+#[cfg(target_os = "linux")]
+pub(crate) fn window_handle(window: &gpui::Window) -> Option<isize> {
+    use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    // Called as a trait function: Window also has an inherent window_handle
+    // method that returns the unrelated AnyWindowHandle id.
+    match HasWindowHandle::window_handle(window) {
+        Ok(handle) => match handle.as_raw() {
+            // The X11 backend of the pinned GPUI reports an XCB window handle,
+            // so both raw handle spellings are accepted here.
+            RawWindowHandle::Xcb(xcb) => Some(xcb.window.get() as isize),
+            RawWindowHandle::Xlib(xlib) => Some(xlib.window as isize),
+            _ => None,
+        },
+        Err(error) => {
+            crate::diagnostics::event("DEBUG", format!("main window handle unavailable: {error}"));
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn window_handle(_window: &gpui::Window) -> Option<isize> {
     // macOS remote commands do not need a window handle.
     None
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod native {
     use futures::channel::mpsc::{UnboundedReceiver, unbounded};
     use souvlaki::{
@@ -139,9 +164,10 @@ mod native {
         PlatformConfig, SeekDirection,
     };
 
+    #[cfg(windows)]
+    use super::track_snapshot;
     use super::{
         DEFAULT_SEEK_STEP, MediaRequest, Plan, PlaybackCommand, SessionState, TrackSnapshot,
-        track_snapshot,
     };
     use crate::{diagnostics, playback::PlaybackState};
 
@@ -175,7 +201,20 @@ mod native {
             let config = PlatformConfig {
                 dbus_name: APP_NAME,
                 display_name: APP_NAME,
+                // The HWND is a Windows-only SMTC registration detail.
+                // Linux MPRIS ignores it (souvlaki's dbus backend derives
+                // everything from dbus_name) and macOS does not use it, so
+                // only Windows forwards the handle. Off-Windows the value
+                // is always None because `window_handle` returns None.
+                #[cfg(windows)]
                 hwnd: hwnd.map(|handle| handle as *mut std::ffi::c_void),
+                #[cfg(not(windows))]
+                hwnd: {
+                    // Reference the parameter so non-Windows builds do not
+                    // warn about it; souvlaki never reads the field there.
+                    let _ = hwnd;
+                    None
+                },
             };
             let controls = MediaControls::new(config)
                 .and_then(|mut controls| {
@@ -412,7 +451,7 @@ mod native {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod stub {
     use futures::channel::mpsc::UnboundedReceiver;
 
@@ -434,9 +473,9 @@ mod stub {
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub(crate) use native::MediaSession;
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub(crate) use stub::MediaSession;
 
 #[cfg(test)]

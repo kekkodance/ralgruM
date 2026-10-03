@@ -92,8 +92,17 @@ impl UpdaterModel {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(Some(release)) => {
-                        this.release = Some(release);
-                        this.status = Status::Available;
+                        // Linux self-update only exists for the AppImage
+                        // build: only `$APPIMAGE` provides a stable file to
+                        // swap. A plain unpacked build would show an offer
+                        // that can never install, so it stays Current.
+                        if super::platform::install_target().is_err() {
+                            this.release = None;
+                            this.status = Status::Current;
+                        } else {
+                            this.release = Some(release);
+                            this.status = Status::Available;
+                        }
                     }
                     Ok(None) => this.status = Status::Current,
                     Err(error) => this.status = Status::Error(error),
@@ -112,10 +121,18 @@ impl UpdaterModel {
         let Some(release) = self.release.clone() else {
             return;
         };
-        let Ok(destination) = std::env::current_exe() else {
-            self.status = Status::Error("Cannot find the running executable".into());
-            cx.notify();
-            return;
+        // The staging directory must be created beside the file the update
+        // will replace. On Linux the running executable lives inside the
+        // read-only AppImage mount, so only the `$APPIMAGE` path provides a
+        // writable parent; without it there is nothing to stage beside and
+        // nothing to install into.
+        let destination = match super::platform::install_target() {
+            Ok(destination) => destination,
+            Err(error) => {
+                self.status = Status::Error(error);
+                cx.notify();
+                return;
+            }
         };
         self.status = Status::Downloading { received: 0 };
         cx.notify();
@@ -176,9 +193,12 @@ impl UpdaterModel {
         if !matches!(self.status, Status::Ready) {
             return Err("The update is not ready".into());
         }
-        if cfg!(debug_assertions) && !cfg!(windows) {
-            return Err("Automatic installation is currently available only on Windows".into());
-        }
+        // The install target check lives here so the failure surfaces before
+        // the status flips to Installing. On Linux, `install_target` is the
+        // `$APPIMAGE` path; unset means a plain unpacked build that has no
+        // stable file to swap, which must refuse rather than leave the user
+        // without a relaunch path.
+        super::platform::install_target()?;
         #[cfg(debug_assertions)]
         if super::test_fixture::candidate_path().is_none() {
             return Err("Debug builds only download and verify updates. Automatic installation is enabled in release builds.".into());
