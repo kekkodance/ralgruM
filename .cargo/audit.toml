@@ -1,0 +1,32 @@
+# Decisions for cargo-audit informational warnings. Every entry records
+# why the finding is accepted instead of fixed, so the weekly audit can fail
+# on anything NOT covered here. Real vulnerabilities stay failures always.
+[advisories]
+ignore = [
+    # paste (RUSTSEC-2024-0436, unmaintained): pulled in through
+    # image -> exr -> pulp purely as a proc-macro helper at build time.
+    # No fix exists unless exr drops it; not our dependency edge to change.
+    "RUSTSEC-2024-0436",
+    # proc-macro-error (RUSTSEC-2024-0370, unmaintained): required by
+    # glib-macros 0.18, the gtk-0.18 tree that tray-icon 0.24 and wry 0.55
+    # pin. Upstream gtk-rs replaced it only in gtk-0.20+; upgrading the GTK
+    # stack means a tray-icon/wry major-version migration, tracked when
+    # those crates move.
+    "RUSTSEC-2024-0370",
+    # rustls-pemfile (RUSTSEC-2025-0134, unmaintained): vendored through
+    # the pinned zed-reqwest fork. Their tree is the only edge; follows
+    # the Zed pin whenever it moves.
+    "RUSTSEC-2025-0134",
+    # rustybuzz (RUSTSEC-2026-0206, unmaintained): text shaping behind
+    # resvg/usvg in both gpui trees. No maintained replacement exists for
+    # the API surface those crates use.
+    "RUSTSEC-2026-0206",
+    # ttf-parser (RUSTSEC-2026-0192, unmaintained): same resvg/usvg font
+    # stack as rustybuzz; no replacement the consumers accept.
+    "RUSTSEC-2026-0192",
+    # glib (RUSTSEC-2024-0429, unsound): affects VariantStrIter iteration
+    # of GVariant strings. The app never touches that API (grep: no
+    # Variant usage in ralgrum or the vendored gpui trees); the unsound
+    # code is never executed. gtk-rs has no patched 0.18.x release.
+    "RUSTSEC-2024-0429",
+]
