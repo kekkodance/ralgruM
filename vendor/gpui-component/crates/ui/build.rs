@@ -1,48 +1,52 @@
 use std::{env, path::Path};
 
 fn main() {
-    // `gpui-component-assets` exposes the absolute path of its default
-    // icons directory via cargo's `links` mechanism (see its `Cargo.toml`
-    // and `build.rs`). We receive that path as
-    // `DEP_GPUI_COMPONENT_DEFAULT_ICONS_ICONS_DIR` here, then re-publish
-    // it as a `rustc-env` so it's visible to the
-    // `icon_named!("$GPUI_COMPONENT_DEFAULT_ICONS_DIR")` proc-macro call
-    // in `src/icon.rs` at expansion time. This is what lets the default
-    // `IconName` enum be generated from the assets crate's icon set
-    // without a sibling-crate reference, which would otherwise break
-    // `cargo vendor` and `cargo publish`.
+    // The default icons live in the sibling `gpui-component-assets` crate,
+    // whose checkout location is fixed relative to this crate: both sit in
+    // `crates/` of the same repository and are consumed together as path
+    // dependencies. This build script derives the absolute icons directory
+    // from our own `CARGO_MANIFEST_DIR`, so no `links`-style metadata
+    // handshake between the two build scripts is needed.
     //
-    // Cargo only propagates `DEP_<name>_<key>` through *regular*
-    // dependencies, not through build-deps — see the `dependencies`
-    // (not `build-dependencies`) entry for `gpui-component-assets` in
-    // `Cargo.toml`.
-    let icons_dir = env::var("DEP_GPUI_COMPONENT_DEFAULT_ICONS_ICONS_DIR").expect(
-        "DEP_GPUI_COMPONENT_DEFAULT_ICONS_ICONS_DIR is set by gpui-component-assets's \
-         build.rs via its `links` field; make sure the regular dependency on \
-         gpui-component-assets is intact in Cargo.toml",
-    );
+    // That handshake was removed deliberately: it required the `links` field
+    // in the assets crate's manifest, and cargo rejects `links`-declaring
+    // packages that lack a build script, which is exactly the shape
+    // Dependabot's cargo updater produces when it copies manifests without
+    // build scripts. The sibling-relative computation is equivalent for
+    // every consumer in this repository.
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set by cargo");
+    let icons_dir = Path::new(&manifest_dir)
+        .join("../assets")
+        .join("assets/icons");
 
     // Fail here rather than letting `icon_named!` panic mid-expansion.
-    // The assets crate validates this directory when it publishes the
-    // path, so a miss at this point means we were handed a value that no
-    // longer describes this machine: almost always a `target/` directory
-    // carrying build script output recorded under a different checkout.
-    if !Path::new(&icons_dir).is_dir() {
+    if !icons_dir.is_dir() {
         panic!(
-            "gpui-component-assets published an icons directory that does not exist:\n  \
-             {icons_dir}\n\
-             This is stale build script output, usually from a `target/` directory that was \
-             produced under a different path. Run `cargo clean -p gpui-component-assets -p \
-             gpui-component` and build again."
+            "expected default icons at {}, but the directory is missing",
+            icons_dir.display(),
         );
     }
 
-    println!("cargo:rustc-env=GPUI_COMPONENT_DEFAULT_ICONS_DIR={icons_dir}");
+    println!("cargo:rustc-env=GPUI_COMPONENT_DEFAULT_ICONS_DIR={}", icons_dir.display());
 
-    // Rerun if the icons directory we point at changes. The assets crate's
-    // build.rs already declares the same `rerun-if-changed`, but cargo
-    // invalidates each build script independently, so this keeps us in
-    // lockstep.
-    println!("cargo:rerun-if-changed={icons_dir}");
+    // Rerun if the icon set changes (rename/add/remove).
+    //
+    // This MUST name the absolute path rather than the relative
+    // `../assets/assets/icons`. Cargo records these instructions in this
+    // build script's fingerprint, so an absolute path pins our location:
+    // relocating the checkout, or reusing a `target/` directory produced
+    // under a different path, makes the recorded instructions differ,
+    // cargo reports "the rerun-if-changed instructions changed", and we
+    // rerun and republish a correct `icons-dir` above.
+    //
+    // The relative form is location-independent, so cargo instead replays
+    // this script's cached output. The stale absolute `icons-dir` that
+    // output carries then either breaks the dependent's `icon_named!`
+    // expansion with a "failed to read" panic (old path gone) or, worse,
+    // silently builds against the other checkout's icons (old path still
+    // present).
+    println!("cargo:rerun-if-changed={}", icons_dir.display());
+
+    // Also rerun if anyone fiddles with this script itself.
     println!("cargo:rerun-if-changed=build.rs");
 }
