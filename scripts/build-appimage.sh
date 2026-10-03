@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Packages the ralgruM Linux build as ralgruM-<arch>-linux.AppImage.
 # Runs on a Linux host (CI) with the release binary already built at
-# target/release/ralgruM. Uses linuxdeploy's appimage output plugin, which
-# needs the appimage tool for the host architecture (auto-downloaded).
+# target/release/ralgruM. Uses linuxdeploy for AppDir dependency bundling
+# and its appimage output plugin for the final artifact.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,13 +50,24 @@ curl -fsSL -o "$linuxdeploy" "$LINUXDEPLOY_URL"
 echo "${LINUXDEPLOY_SHA256[$arch]}  $linuxdeploy" | sha256sum -c -
 chmod +x "$linuxdeploy"
 
+# The appimage output plugin names the artifact itself (desktop-file Name
+# plus architecture) and writes it to the current directory; the core tool
+# rejects unknown CLI flags like --artifact-name. Clear the directory of
+# stale AppImages, run the plugin, and rename the single artifact it
+# produced to the release asset name.
+cd "$root"
+rm -f ./*.AppImage
 DEPLOY_GTK_VERSION=3 NO_STRIP=true "$linuxdeploy" \
   --appdir "$appdir" \
   --desktop-file "$appdir/usr/share/applications/ralgruM.desktop" \
   --icon-file "$appdir/usr/share/icons/hicolor/512x512/apps/ralgruM.png" \
-  --output appimage \
-  --artifact-name "ralgruM-$arch-linux"
+  --output appimage
 
+produced=(./*.AppImage)
+if [ "${#produced[@]}" -ne 1 ] || [ ! -f "${produced[0]}" ]; then
+  echo "Expected exactly one AppImage after linuxdeploy, found: ${produced[*]:-none}" >&2
+  exit 1
+fi
 out="$root/ralgruM-$arch-linux.AppImage"
-mv "$workdir/ralgruM-$arch-linux.AppImage" "$out"
+mv "${produced[0]}" "$out"
 echo "Created $out"
