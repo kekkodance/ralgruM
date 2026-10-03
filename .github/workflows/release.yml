@@ -115,9 +115,11 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           private-token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          cache-key: release-tests-linux
 
       - name: Run full release tests
         run: cargo test --locked --all-targets
+
   build:
     name: Build full release
     needs: prepare
@@ -193,6 +195,7 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           private-token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          cache-key: release-linux
 
       - name: Build the full release
         run: cargo build --locked --release

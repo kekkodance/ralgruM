@@ -89,13 +89,21 @@ jobs:
 
       - name: Install Linux build dependencies
         uses: ./.github/actions/setup-linux
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-key: ${{ matrix.target }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Check formatting
+        run: cargo fmt --package ralgrum-gpui -- --check
+
+      - name: Check Cargo metadata
+        run: cargo metadata --locked --no-deps
+
+      - name: Reject source-text tests
+        shell: pwsh
+        run: pwsh -File scripts/check-test-quality.ps1
+
+      # cargo test compiles all targets, so a separate cargo check would duplicate work.
       - name: Run tests
         run: cargo test --locked --all-targets
 

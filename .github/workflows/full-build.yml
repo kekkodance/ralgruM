@@ -117,10 +117,10 @@ jobs:
       RUST_BACKTRACE: 1
       BUILD_SHA: ${{ github.sha }}
     steps:
-      - name: Check out the parent and private submodule
+      - name: Check out the parent repository
         uses: actions/checkout@v7
         with:
-          submodules: recursive
+          submodules: false
           token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
           persist-credentials: false
 
@@ -128,6 +128,7 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           private-token: ${{ secrets.MURGLAR_PRIVATE_REPO_TOKEN }}
+          cache-key: full-build-linux
 
       - name: Test the full application with the private backend
         run: cargo test --locked --all-targets

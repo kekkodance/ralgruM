@@ -1,11 +1,15 @@
 $ErrorActionPreference = 'Stop'
 
-$sourceRoot = Join-Path $PSScriptRoot '..\src'
+# Path separators are normalized to forward slashes and Join-Path results are
+# canonicalized, so the same script runs under Windows PowerShell 5.1 and
+# pwsh on Linux runners. Plain Join-Path keeps the scripts\..\ segment, which
+# never matches a FullName, and GetFullPath collapses it on both platforms.
+$sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' | Join-Path -ChildPath 'src'))
 $allowedSourceContract = [System.IO.Path]::GetFullPath(
-    (Join-Path $sourceRoot 'murglar_backend\privacy_tests.rs')
-)
+    (Join-Path $sourceRoot 'murglar_backend' | Join-Path -ChildPath 'privacy_tests.rs')
+).Replace('\', '/')
 $violations = Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -Filter '*.rs' |
-    Where-Object { $_.FullName -ne $allowedSourceContract } |
+    Where-Object { $_.FullName.Replace('\', '/') -ne $allowedSourceContract } |
     Select-String -Pattern 'include_str!\("[^"]+\.rs"\)'
 
 if ($violations) {

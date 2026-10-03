@@ -12,6 +12,16 @@ case "$arch" in
   *) echo "Unsupported build architecture: $arch" >&2; exit 1 ;;
 esac
 
+# linuxdeploy's continuous channel is a moving target, so the download is
+# pinned by SHA-256. A hash mismatch means the upstream publish moved, and
+# the failure points at the pin instead of producing a silently different
+# release artifact. Bump both together.
+LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$arch.AppImage"
+declare -A LINUXDEPLOY_SHA256=(
+  [x86_64]="8aea8da0f7f7039d2a2cecb14657d752a222a5e1d3825caeef186c82f751cdd1"
+  [aarch64]="5c1fddf96066891e829831cac0d84424690f3b22846c7f8f1bb9990a5c6c73f4"
+)
+
 binary="$root/target/release/ralgruM"
 [ -x "$binary" ] || { echo "Missing release binary at $binary" >&2; exit 1; }
 
@@ -35,11 +45,9 @@ MimeType=x-scheme-handler/ralgrum;
 StartupWMClass=ralgruM
 EOF
 
-# The desktop file names the bare binary; linuxdeploy turns the Exec line
-# into the AppRun launch through its wrapper.
 linuxdeploy="$workdir/linuxdeploy-$arch.AppImage"
-curl -fsSL -o "$linuxdeploy" \
-  "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$arch.AppImage"
+curl -fsSL -o "$linuxdeploy" "$LINUXDEPLOY_URL"
+echo "${LINUXDEPLOY_SHA256[$arch]}  $linuxdeploy" | sha256sum -c -
 chmod +x "$linuxdeploy"
 
 DEPLOY_GTK_VERSION=3 NO_STRIP=true "$linuxdeploy" \

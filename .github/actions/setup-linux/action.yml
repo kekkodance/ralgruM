@@ -5,6 +5,14 @@ inputs:
     description: Token with read access to kekkodance/ralgrum-murglar-private. Leave empty to skip the private submodule and build the public stub.
     required: false
     default: ''
+  cache-key:
+    description: Stable cache namespace for this job. Leave empty to use the default key.
+    required: false
+    default: ''
+  cache-save-if:
+    description: Whether to save a fresh cache entry. Empty keeps rust-cache's default.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -44,3 +52,9 @@ runs:
 
     - name: Install stable Rust
       uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Cargo dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.cache-key }}
+        save-if: ${{ inputs.cache-save-if != '' && inputs.cache-save-if }}
