@@ -232,7 +232,7 @@ mod tests {
     fn plan_quotes_executable_paths_with_spaces() {
         let plan =
             RegistrationPlan::for_executable(Path::new("/opt/ralgruM App/bin/ralgruM")).unwrap();
-        assert_eq!(plan.exec_line, r#""/opt/ralgruM App/bin/ralgruM" %u""#);
+        assert_eq!(plan.exec_line, r#""/opt/ralgruM App/bin/ralgruM" %u"#);
     }
 
     #[test]
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn desktop_file_for_plain_paths_has_no_needless_quotes() {
         let plan = RegistrationPlan::for_executable(Path::new("/usr/bin/ralgruM")).unwrap();
-        assert_eq!(plan.exec_line, r#""/usr/bin/ralgruM" %u""#);
+        assert_eq!(plan.exec_line, r#""/usr/bin/ralgruM" %u"#);
     }
 
     #[test]

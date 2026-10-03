@@ -5,7 +5,7 @@ const VERSION: u16 = 1;
 const HEADER_LEN: usize = MAGIC.len() + 2 + 2 + 4;
 const MAX_PLAINTEXT_LEN: usize = 64 * 1024;
 const MAX_PROTECTED_LEN: usize = 256 * 1024;
-#[cfg(any(windows, all(not(windows), not(target_os = "linux"))))]
+#[cfg(any(windows, test))]
 const APP_ENTROPY: &[u8] = b"ralgruM account session v1";
 
 #[cfg(all(windows, test))]
@@ -13,20 +13,22 @@ type BeforeFree = Box<dyn FnOnce(&[u8])>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProtectionError {
-    #[cfg(all(not(windows), any(not(test), target_os = "linux")))]
+    #[cfg(all(not(windows), not(test)))]
     Unavailable,
     InvalidEnvelope,
     TooLarge,
+    #[cfg(any(windows, all(target_os = "linux", not(test))))]
     Platform,
 }
 
 impl fmt::Display for ProtectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            #[cfg(all(not(windows), any(not(test), target_os = "linux")))]
+            #[cfg(all(not(windows), not(test)))]
             Self::Unavailable => "account session protection is unavailable",
             Self::InvalidEnvelope => "account session protection envelope is invalid",
             Self::TooLarge => "account session protection payload is too large",
+            #[cfg(any(windows, all(target_os = "linux", not(test))))]
             Self::Platform => "account session protection failed",
         })
     }
@@ -234,7 +236,7 @@ impl Drop for DpapiBufferGuard {
 /// which the account session layer treats exactly like the existing
 /// non-Windows platforms: the saved session reads back invalid and new
 /// writes surface a storage error.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(test)))]
 fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use keyring::Entry;
@@ -264,7 +266,7 @@ fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     Ok(protected)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(test)))]
 fn unprotect_platform(protected: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use keyring::Entry;
@@ -296,7 +298,7 @@ fn unprotect_platform(_protected: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     Err(ProtectionError::Unavailable)
 }
 
-#[cfg(all(not(windows), not(target_os = "linux"), test))]
+#[cfg(all(not(windows), test))]
 fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     Ok(plaintext
         .iter()
@@ -305,7 +307,7 @@ fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
         .collect())
 }
 
-#[cfg(all(not(windows), not(target_os = "linux"), test))]
+#[cfg(all(not(windows), test))]
 fn unprotect_platform(protected: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     Ok(protected
         .iter()

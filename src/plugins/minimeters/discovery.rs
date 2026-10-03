@@ -139,7 +139,7 @@ mod tests {
         std::fs::write(&lower_priority, b"later prefix").unwrap();
         // An unreadable (missing) root must not abort the scan.
         let missing = temp.path().join("missing");
-        let top_priority = first.join("MINIMETERS - AUDIO-SERVER.CLP");
+        let top_priority = first.join("MINIMETERS - AUDIO-SERVER.CLAP");
         std::fs::write(&top_priority, b"earlier prefix").unwrap();
         assert_eq!(
             find_in_prefixes([missing, first, second]),
@@ -159,7 +159,7 @@ mod tests {
             "/usr/lib/minimeters/minimeters - audio-server.Clap"
         )));
         assert!(matches_audio_server_name(Path::new(
-            "/usr/lib/minimeters/MINIMETERS - AUDIO-SERVER.CLP"
+            "/usr/lib/minimeters/MINIMETERS - AUDIO-SERVER.CLAP"
         )));
         assert!(!matches_audio_server_name(Path::new(
             "/usr/lib/minimeters/MiniMeters.clap"
