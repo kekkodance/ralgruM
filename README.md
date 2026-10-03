@@ -31,7 +31,7 @@ You can browse without signing into everything, but signing in unlocks your pers
 
 ## Getting started
 
-1. Download the [latest ralgruM release](https://github.com/kekkodance/ralgruM/releases/latest) for Windows and open it.
+1. Download the [latest ralgruM release](https://github.com/kekkodance/ralgruM/releases/latest) and open it.
 2. Log in with your Murglar account to unlock the full service.
 3. Go to Settings and connect your Deezer and SoundCloud accounts.
 
@@ -41,12 +41,12 @@ That is it.
 
 - ralgruM is an unofficial, community-made app. For Murglar service issues, contact the Murglar developers.
 - Some tracks, especially in high quality, require an active Murglar Pass. If you hit a limit, the app will tell you.
-- On Windows, ralgruM uses the built-in secure storage for your OS user account to keep your login safe.
+- ralgruM uses the built-in secure storage for your OS user account to keep your login safe.
 - If music stops or a login expires, try signing out and back in from Settings.
 
 ## Releases
 
-Grab the latest Windows build here:
+Grab the latest build here:
 
 **[Download the latest release](https://github.com/kekkodance/ralgruM/releases/latest)**
 
