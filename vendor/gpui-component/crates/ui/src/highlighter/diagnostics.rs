@@ -1,7 +1,6 @@
 use std::{
     cmp::Ordering,
     ops::{Deref, Range},
-    usize,
 };
 
 use gpui::{px, App, HighlightStyle, Hsla, SharedString, UnderlineStyle};
@@ -215,8 +214,8 @@ impl sum_tree::Summary for DiagnosticSummary {
     fn zero(_: Self::Context<'_>) -> Self {
         DiagnosticSummary {
             count: 0,
-            start: usize::MIN,
-            end: usize::MIN,
+            start: 0,
+            end: 0,
         }
     }
 
