@@ -31,7 +31,7 @@ appdir="$workdir/AppDir"
 mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/share/icons/hicolor/512x512/apps"
 
 install -m 0755 "$binary" "$appdir/usr/bin/ralgruM"
-install -m 0644 "$root/assets/app-icon.png" "$appdir/usr/share/icons/hicolor/512x512/apps/ralgruM.png"
+install -m 0644 "$root/assets/app-icon-512.png" "$appdir/usr/share/icons/hicolor/512x512/apps/ralgruM.png"
 cat > "$appdir/usr/share/applications/ralgruM.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
