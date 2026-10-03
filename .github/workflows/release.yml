@@ -205,17 +205,18 @@ jobs:
         run: bash scripts/build-appimage.sh
 
       - name: Record the AppImage hash
-        id: appimage-hash
         shell: bash
         run: |
-          hash=$(sha256sum ralgruM-*-linux.AppImage | cut -d' ' -f1)
-          echo "sha256=$hash" >> "$GITHUB_OUTPUT"
+          appimage=$(ls ralgruM-*-linux.AppImage)
+          sha256sum "$appimage" > "$appimage.sha256"
 
       - name: Transfer the Linux release AppImage
         uses: actions/upload-artifact@v7
         with:
           name: ralgruM-linux-${{ matrix.target }}-${{ github.run_id }}
-          path: ralgruM-*-linux.AppImage
+          path: |
+            ralgruM-*-linux.AppImage
+            ralgruM-*-linux.AppImage.sha256
           if-no-files-found: error
           compression-level: 0
 
@@ -229,17 +230,6 @@ jobs:
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
       EXPECTED_SHA256: ${{ needs.build.outputs.sha256 }}
     steps:
-      - name: Download the Linux AppImages
-        uses: actions/download-artifact@v8
-        with:
-          pattern: ralgruM-linux-*-${{ github.run_id }}
-          path: artifacts
-          merge-multiple: true
-
-      - name: Restore the Linux asset permissions
-        shell: bash
-        run: find artifacts -name 'ralgruM-*-linux.AppImage' -exec chmod +x {} \;
-
       - name: Check out the parent repository
         uses: actions/checkout@v7
         with:
@@ -263,6 +253,17 @@ jobs:
             throw "Transferred EXE hash mismatch: got '$hash', expected '$env:EXPECTED_SHA256'."
           }
           "RELEASE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Download and verify the Linux AppImages
+        shell: bash
+        run: |
+          # The digest files travel inside the artifacts, so a byte-exact
+          # check here proves the published AppImages are the tested builds.
+          cd artifacts
+          for digest in ralgruM-*-linux.AppImage.sha256; do
+            sha256sum --check "$digest"
+          done
+          chmod +x ralgruM-*-linux.AppImage
 
       - name: Write commit-by-commit release notes
         shell: pwsh
