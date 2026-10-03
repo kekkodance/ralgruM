@@ -89,8 +89,6 @@ jobs:
 
       - name: Install Linux build dependencies
         uses: ./.github/actions/setup-linux
-        with:
-          private-token: not-used
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2

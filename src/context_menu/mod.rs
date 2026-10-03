@@ -24,7 +24,7 @@ impl ContextMenuLease {
 impl Drop for ContextMenuLease {
     fn drop(&mut self) {
         OPEN_CONTEXT_MENUS
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 Some(count.saturating_sub(1))
             })
             .ok();
