@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  public-stub:
-    name: Public stub checks
+  stub-windows:
+    name: Stub checks (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -67,8 +67,8 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --locked --all-targets --no-deps -- -D warnings
 
-  linux:
-    name: Linux checks (${{ matrix.target }})
+  stub-linux:
+    name: Stub checks (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
