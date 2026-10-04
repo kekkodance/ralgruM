@@ -254,16 +254,31 @@ jobs:
           }
           "RELEASE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Download the Linux AppImages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ralgruM-linux-*-${{ github.run_id }}
+          path: artifacts
+          merge-multiple: true
+
       - name: Download and verify the Linux AppImages
         shell: bash
         run: |
           # The digest files travel inside the artifacts, so a byte-exact
           # check here proves the published AppImages are the tested builds.
-          cd artifacts
-          for digest in ralgruM-*-linux.AppImage.sha256; do
+          # The glob below must not silently expand to nothing: two AppImages
+          # means two digests, so an empty match means the download failed.
+          shopt -s nullglob
+          digests=(artifacts/ralgruM-*-linux.AppImage.sha256)
+          if [ "${#digests[@]}" -ne 2 ]; then
+            echo "Expected 2 AppImage digest files, found ${#digests[@]} in artifacts/:" >&2
+            ls -la artifacts/ >&2 || true
+            exit 1
+          fi
+          for digest in "${digests[@]}"; do
             sha256sum --check "$digest"
           done
-          chmod +x ralgruM-*-linux.AppImage
+          chmod +x artifacts/ralgruM-*-linux.AppImage
 
       - name: Write commit-by-commit release notes
         shell: pwsh
