@@ -276,7 +276,11 @@ jobs:
             exit 1
           fi
           for digest in "${digests[@]}"; do
-            sha256sum --check "$digest"
+            # sha256sum --check resolves the bare filename recorded in the
+            # digest against the current directory, not the digest's own
+            # location, so each check runs from the directory holding both
+            # the digest and the AppImage it names.
+            (cd "$(dirname "$digest")" && sha256sum --check "$(basename "$digest")")
           done
           chmod +x artifacts/ralgruM-*-linux.AppImage
 
