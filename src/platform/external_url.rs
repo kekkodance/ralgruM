@@ -1,12 +1,5 @@
 use std::process::Command;
 
-const PAYMENT_HOSTS: &[&str] = &[
-    "t.me",
-    "telegram.me",
-    "murglar.app",
-    "pay.oxapay.com",
-    "payform.aurapay.tech",
-];
 const FONT_AWESOME_URL: &str = "https://fontawesome.com";
 const CHROMIUM_URL: &str =
     "https://chromium.googlesource.com/chromium/src/+/main/ui/resources/cursors/";
@@ -66,12 +59,6 @@ fn validate_payment_url(value: &str) -> Result<reqwest::Url, String> {
     if url.scheme() != "https" {
         return Err("Murglar payment links must use HTTPS".into());
     }
-    if !url
-        .host_str()
-        .is_some_and(|host| PAYMENT_HOSTS.contains(&host))
-    {
-        return Err("Murglar returned an unrecognized payment host".into());
-    }
     Ok(url)
 }
 
@@ -106,28 +93,23 @@ mod tests {
     use super::{validate_github_profile_url, validate_payment_url};
 
     #[test]
-    fn payment_urls_accept_every_captured_payment_destination() {
+    fn payment_urls_accept_any_https_payment_destination() {
         for url in [
             "https://t.me/murglar_payments_bot?start=fixture",
             "https://murglar.app/docs/en/en-paypal.html",
             "https://pay.oxapay.com/merchant/invoice",
-            "https://murglar.app/docs/en/en-guide-crypto.html",
             "https://payform.aurapay.tech/order-id",
+            "https://new-payment-host.example/order-id",
         ] {
             assert!(validate_payment_url(url).is_ok(), "{url}");
         }
     }
 
     #[test]
-    fn payment_urls_require_https_and_an_exact_allowlisted_host() {
-        assert!(validate_payment_url("https://telegram.me/pay").is_ok());
+    fn payment_urls_require_https() {
         for url in [
             "http://murglar.app/pay",
             "http://t.me/murglar_payments_bot?start=fixture",
-            "https://evil.example/pay",
-            "https://murglar.app.evil.example/pay",
-            "https://t.me.evil.example/murglar_payments_bot",
-            "https://evil-t.me/murglar_payments_bot",
             "not a url",
         ] {
             assert!(validate_payment_url(url).is_err(), "{url}");
