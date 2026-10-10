@@ -158,9 +158,6 @@ pub(super) fn volume_icon(level: VolumeIconLevel) -> AnyElement {
             div()
                 .absolute()
                 .inset_0()
-                .flex()
-                .items_center()
-                .justify_start()
                 .group_hover("mute", |style| style.invisible())
                 .child(volume_icon_svg(level, icon.path(), width, height, MUTED)),
         )
@@ -168,9 +165,6 @@ pub(super) fn volume_icon(level: VolumeIconLevel) -> AnyElement {
             div()
                 .absolute()
                 .inset_0()
-                .flex()
-                .items_center()
-                .justify_start()
                 .invisible()
                 .group_hover("mute", |style| style.visible())
                 .child(volume_icon_svg(
@@ -192,8 +186,8 @@ pub(super) fn volume_icon_svg(
     color: u32,
 ) -> impl IntoElement {
     div()
-        .relative()
-        .flex_none()
+        .absolute()
+        .top(px((VOLUME_ICON_FRAME_PX - VOLUME_ICON_EM_HEIGHT_PX) / 2.))
         .left(px(volume_icon_speaker_offset(level)))
         .child(local_icon_svg_sized(path, width, height, color))
 }
