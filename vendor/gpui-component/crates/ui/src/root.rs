@@ -157,8 +157,7 @@ impl Root {
 
     pub(crate) fn set_dialog_bounds(&mut self, layer_ix: usize, bounds: Bounds<Pixels>) {
         if self.dialog_bounds.len() <= layer_ix {
-            self.dialog_bounds
-                .resize(layer_ix + 1, Bounds::default());
+            self.dialog_bounds.resize(layer_ix + 1, Bounds::default());
         }
         self.dialog_bounds[layer_ix] = bounds;
     }
