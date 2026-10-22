@@ -1,9 +1,9 @@
-use web_time::Duration;
 use anyhow::Result;
 use gpui::{App, Context, Task, Window};
 use ropey::Rope;
+use web_time::Duration;
 
-use crate::input::{popovers::HoverPopover, InputState, RopeExt};
+use crate::input::{InputState, RopeExt, popovers::HoverPopover};
 
 /// Hover provider
 ///

@@ -1,5 +1,5 @@
-use web_time::Duration;
 use std::ops::Range;
+use web_time::Duration;
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::input::InputState;
@@ -24,13 +24,13 @@ use gpui::{
 use rust_i18n::t;
 
 pub(crate) fn init(cx: &mut App) {
-    let context: Option<&str> = Some("List");
+    const CONTEXT: &str = "List";
     cx.bind_keys([
-        KeyBinding::new("escape", Cancel, context),
-        KeyBinding::new("enter", Confirm { secondary: false }, context),
-        KeyBinding::new("secondary-enter", Confirm { secondary: true }, context),
-        KeyBinding::new("up", SelectUp, context),
-        KeyBinding::new("down", SelectDown, context),
+        KeyBinding::new("escape", Cancel, Some(CONTEXT)),
+        KeyBinding::new("enter", Confirm { secondary: false }, Some(CONTEXT)),
+        crate::dynamic_key_binding("secondary-enter", Confirm { secondary: true }, CONTEXT, cx),
+        KeyBinding::new("up", SelectUp, Some(CONTEXT)),
+        KeyBinding::new("down", SelectDown, Some(CONTEXT)),
     ]);
 }
 
@@ -484,7 +484,7 @@ where
                     this.selected_index = Some(ix);
                     this.on_action_confirm(
                         &Confirm {
-                            secondary: e.modifiers().secondary(),
+                            secondary: e.modifiers().secondary(cx),
                         },
                         window,
                         cx,

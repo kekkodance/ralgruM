@@ -255,10 +255,7 @@ mod tests {
             assert_eq!(Kbd::format(&Keystroke::parse("cmd--").unwrap()), "⌘-");
             assert_eq!(Kbd::format(&Keystroke::parse("cmd-+").unwrap()), "⌘+");
             assert_eq!(Kbd::format(&Keystroke::parse("cmd-enter").unwrap()), "⌘⏎");
-            assert_eq!(
-                Kbd::format(&Keystroke::parse("secondary-f12").unwrap()),
-                "⌘F12"
-            );
+            assert_eq!(Kbd::format(&Keystroke::parse("cmd-f12").unwrap()), "⌘F12");
             assert_eq!(
                 Kbd::format(&Keystroke::parse("shift-pagedown").unwrap()),
                 "⇧Page Down"

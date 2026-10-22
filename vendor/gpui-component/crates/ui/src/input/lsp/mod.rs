@@ -176,7 +176,7 @@ impl InputState {
         let had_definition = !self.hover_definition.is_empty();
         let had_popover = self.hover_popover.is_some();
 
-        if event.modifiers.secondary() {
+        if event.modifiers.secondary(cx) {
             self.handle_hover_definition(offset, window, cx);
         } else {
             self.hover_definition.clear();
