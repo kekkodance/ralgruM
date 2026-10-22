@@ -16,9 +16,9 @@ const DESKTOP_FILE_NAME: &str = "ralgruM.desktop";
 const APP_ID: &str = "ralgruM";
 const ICON_NAME: &str = "ralgruM";
 const ICON_SIZE_DIR: &str = "512x512";
-/// The icon is installed from the shared asset directory rather than an
-/// embedded copy so the shipped icon never drifts from `assets/app-icon.png`.
-const ICON_SOURCE: &str = "assets/app-icon.png";
+/// Embed the same 512px icon shipped in the Linux AppImage so installation
+/// works when the executable is launched outside the repository directory.
+const APP_ICON_PNG: &[u8] = include_bytes!("../../assets/app-icon-512.png");
 
 /// The registration content, kept separate from installation so the desktop
 /// file text can be unit tested without touching the filesystem.
@@ -125,27 +125,12 @@ fn install_desktop_file(plan: &RegistrationPlan) -> Option<PathBuf> {
 /// Copies the shipped app icon into the hicolor icon theme so `Icon=ralgruM`
 /// resolves on desktops that do not inspect the executable directory.
 fn install_icon(data_home: &Path) {
-    let source = Path::new(ICON_SOURCE);
     let target = data_home
         .join("icons")
         .join("hicolor")
         .join(ICON_SIZE_DIR)
         .join("apps")
         .join(format!("{ICON_NAME}.png"));
-    let exe_directory = match std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-    {
-        Some(directory) => directory,
-        None => {
-            diagnostics::event(
-                "WARN",
-                "Linux ralgrum:// icon installation skipped: executable path has no parent directory",
-            );
-            return;
-        }
-    };
-    let source = exe_directory.join(source);
     if let Err(error) = std::fs::create_dir_all(target.parent().unwrap_or(&target)) {
         diagnostics::event(
             "WARN",
@@ -156,12 +141,11 @@ fn install_icon(data_home: &Path) {
         );
         return;
     }
-    if let Err(error) = std::fs::copy(&source, &target) {
+    if let Err(error) = std::fs::write(&target, APP_ICON_PNG) {
         diagnostics::event(
             "WARN",
             format!(
-                "Linux {SCHEME} icon installation failed: {} could not be copied to {}: {error}",
-                source.display(),
+                "Linux {SCHEME} icon installation failed: embedded icon could not be written to {}: {error}",
                 target.display()
             ),
         );

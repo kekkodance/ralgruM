@@ -1313,6 +1313,7 @@ impl Source for ProgressiveOpus {
 
 impl AudioEngine for RodioEngine {
     fn load(&mut self, prepared: PreparedSource, volume: f32, playing: bool) -> Option<Duration> {
+        crate::plugins::minimeters::tap::set_paused(false);
         crate::plugins::minimeters::tap::clear();
         self.set_playback_intent(false);
         self.cancel_pending_progressive_reload();
@@ -1340,9 +1341,12 @@ impl AudioEngine for RodioEngine {
         self.sink.append(self.wrap_source(source));
         self.set_playback_intent(playing);
         if playing {
+            crate::plugins::minimeters::tap::set_paused(false);
             self.sink.play();
         } else {
             self.sink.pause();
+            crate::plugins::minimeters::tap::clear();
+            crate::plugins::minimeters::tap::set_paused(true);
         }
         self.progressive_seek = progressive_seek;
         self.retain_playback_file(file);
@@ -1351,16 +1355,18 @@ impl AudioEngine for RodioEngine {
 
     fn play(&self) {
         self.set_playback_intent(true);
+        crate::plugins::minimeters::tap::set_paused(false);
         self.sink.play();
     }
     fn pause(&self) {
         self.set_playback_intent(false);
         self.sink.pause();
         crate::plugins::minimeters::tap::clear();
+        crate::plugins::minimeters::tap::set_paused(true);
     }
     fn stop(&mut self) {
         self.set_playback_intent(false);
-        crate::plugins::minimeters::tap::clear();
+        crate::plugins::minimeters::tap::set_paused(false);
         self.cancel_pending_progressive_reload();
         self.active_suffix = None;
         self.landed_suffix = None;
@@ -1369,6 +1375,7 @@ impl AudioEngine for RodioEngine {
         self.front_reopen = None;
         self.standby_reopen = None;
         self.sink.stop();
+        crate::plugins::minimeters::tap::clear();
     }
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, String> {
         crate::plugins::minimeters::tap::clear();

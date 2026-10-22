@@ -1,6 +1,6 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageReader, imageops::FilterType};
-use std::{io::Cursor, path::Path, sync::Arc};
+use std::{io::Cursor, path::Path, sync::Arc, time::Duration};
 
 use crate::search::Provider;
 
@@ -156,6 +156,84 @@ impl CoverDraft {
         self.pan_x = self.pan_x.clamp(-center_x, max_x - center_x);
         self.pan_y = self.pan_y.clamp(-center_y, max_y - center_y);
     }
+}
+
+pub(crate) async fn download_provider_artwork_jpeg(
+    provider: Provider,
+    artwork_url: &str,
+) -> Option<Vec<u8>> {
+    let url = reqwest::Url::parse(artwork_url).ok()?;
+    if !provider_artwork_url_allowed(provider, &url) {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 5
+                || !provider_artwork_url_allowed(provider, attempt.url())
+            {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
+        .ok()?;
+    let mut response = client.get(url).send().await.ok()?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_IMAGE_BYTES as u64)
+    {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_IMAGE_BYTES {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return None;
+    }
+    tokio::task::spawn_blocking(move || remote_cover_jpeg(&bytes))
+        .await
+        .ok()?
+        .ok()
+}
+
+fn provider_artwork_url_allowed(provider: Provider, url: &reqwest::Url) -> bool {
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port_or_known_default() != Some(443)
+    {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    match provider {
+        Provider::Deezer => {
+            host == "api.deezer.com" || host == "dzcdn.net" || host.ends_with(".dzcdn.net")
+        }
+        Provider::SoundCloud => {
+            host == "soundcloud.com"
+                || host.ends_with(".soundcloud.com")
+                || host == "sndcdn.com"
+                || host.ends_with(".sndcdn.com")
+        }
+    }
+}
+
+fn remote_cover_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+        return Err("The playlist cover image is too large.".into());
+    }
+    crop_square(decode_image(bytes)?, 100, 0, 0)
 }
 
 fn image_metadata(bytes: &[u8]) -> Result<(CoverImageFormat, u32, u32), String> {

@@ -5,6 +5,8 @@ use super::{
     model::{Card, Category, Page, Service, Track},
 };
 
+const LOCAL_PLAYLIST_CARD_SUBTITLE_MAX_CHARS: usize = 80;
+
 pub(crate) fn local_playlists_page(playlists: &[LocalPlaylist]) -> Page {
     let cards = playlists
         .iter()
@@ -12,7 +14,7 @@ pub(crate) fn local_playlists_page(playlists: &[LocalPlaylist]) -> Page {
             kind: Category::Playlists,
             id: playlist.id.clone(),
             title: playlist.title.clone(),
-            subtitle: playlist.description.clone(),
+            subtitle: local_playlist_card_subtitle(&playlist.description),
             artwork: playlist.artwork.clone(),
             release_date: String::new(),
             badge: playlist.tracks.len().to_string(),
@@ -37,6 +39,25 @@ pub(crate) fn local_playlists_page(playlists: &[LocalPlaylist]) -> Page {
         empty_title: "No local playlists yet".into(),
         empty_description: "Create a local playlist to organize tracks from all platforms.".into(),
         ..Page::default()
+    }
+}
+
+fn local_playlist_card_subtitle(description: &str) -> String {
+    let first_line = description
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let one_line = first_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = one_line.chars();
+    let summary = chars
+        .by_ref()
+        .take(LOCAL_PLAYLIST_CARD_SUBTITLE_MAX_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        format!("{summary}…")
+    } else {
+        summary
     }
 }
 

@@ -18,6 +18,8 @@ pub(super) struct Frame {
 
 pub(crate) struct Tap {
     pub enabled: AtomicBool,
+    /// Makes the host feed timed silent blocks while playback is paused.
+    pub paused: AtomicBool,
     volume: AtomicU32,
     pub(super) frames: ArrayQueue<Frame>,
 }
@@ -28,6 +30,7 @@ pub(crate) fn shared() -> Arc<Tap> {
     Arc::clone(TAP.get_or_init(|| {
         Arc::new(Tap {
             enabled: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             volume: AtomicU32::new(1.0f32.to_bits()),
             frames: ArrayQueue::new(16_384),
         })
@@ -38,6 +41,10 @@ pub(crate) fn set_volume(volume: f32) {
     shared()
         .volume
         .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+pub(crate) fn set_paused(paused: bool) {
+    shared().paused.store(paused, Ordering::Release);
 }
 
 pub(crate) fn clear() {

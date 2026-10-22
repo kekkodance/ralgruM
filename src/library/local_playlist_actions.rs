@@ -71,6 +71,23 @@ impl LibraryView {
         });
     }
 
+    pub(crate) fn play_local_playlist(&mut self, playlist_id: String, cx: &mut Context<Self>) {
+        let Some(snapshot) = self.local_playlist_action_snapshot(&playlist_id) else {
+            local_playlist_toast(
+                "Playlist unavailable",
+                "The Local playlist could not be found.",
+                cx,
+            );
+            return;
+        };
+        if snapshot.tracks.is_empty() {
+            local_playlist_toast("Playlist is empty", "Add tracks before playing it.", cx);
+            return;
+        }
+        self.playback
+            .update(cx, |playback, cx| playback.play_queue(snapshot.tracks, cx));
+    }
+
     pub(crate) fn download_local_playlist(&mut self, playlist_id: String, cx: &mut Context<Self>) {
         let Some(snapshot) = self.local_playlist_action_snapshot(&playlist_id) else {
             local_playlist_toast(

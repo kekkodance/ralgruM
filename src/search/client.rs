@@ -12,7 +12,7 @@ use super::{
     models::{Provider, ProviderError, RawResult, ResultType, SearchRequest},
 };
 
-pub(crate) const SOUNDCLOUD_CLIENT_ID: &str = "Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo";
+pub(crate) const SOUNDCLOUD_CLIENT_ID: &str = "mPlu6PcFn4MUnGqFmsvUDt4oEA1CeA72";
 const DEEZER_USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
 const DEEZER_SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 // Placeholder ARL sent when no account is signed in. Deezer's gateway only

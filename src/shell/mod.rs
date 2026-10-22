@@ -788,6 +788,9 @@ impl RalgrumApp {
                 cx,
             )
         });
+        favorite_controller.update(cx, |controller, _| {
+            controller.set_library(library.downgrade());
+        });
         let playback_view = cx.new(|cx| {
             PlaybackView::new(
                 playback.clone(),

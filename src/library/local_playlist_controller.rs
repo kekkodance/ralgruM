@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use gpui::{Context, Window};
 use gpui_component::WindowExt;
 
@@ -197,6 +199,85 @@ impl LibraryView {
             }),
             cx,
         )
+    }
+
+    pub(crate) fn create_imported_local_playlist(
+        &mut self,
+        title: String,
+        description: String,
+        tracks: Vec<crate::playback::PlaybackTrack>,
+        artwork_jpeg: Option<Vec<u8>>,
+        cover_attempted: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let source_track_count = tracks.len();
+        let mut seen = HashSet::with_capacity(source_track_count);
+        let tracks = tracks
+            .into_iter()
+            .filter(|track| seen.insert((track.provider, track.id.trim().to_owned())))
+            .collect::<Vec<_>>();
+        let unique_track_count = tracks.len();
+        let repeated_tracks_collapsed = unique_track_count < source_track_count;
+        let cover_failed = cover_attempted && artwork_jpeg.is_none();
+        let tracks = tracks
+            .iter()
+            .map(super::local_store::LocalTrack::from)
+            .collect::<Vec<_>>();
+        let result = self.enqueue_local_playlist_mutation(
+            LocalPlaylistMutation::CreateWithTracks {
+                title,
+                description,
+                tracks,
+                artwork_jpeg,
+            },
+            Box::new(move |result, _, cx| match result {
+                Ok(LocalPlaylistMutationOutcome::Created) => {
+                    let detail = if repeated_tracks_collapsed {
+                        format!(
+                            "{} unique {} imported. Repeated tracks were collapsed.",
+                            unique_track_count,
+                            if unique_track_count == 1 {
+                                "track"
+                            } else {
+                                "tracks"
+                            }
+                        )
+                    } else if unique_track_count == 0 {
+                        "Empty playlist imported.".to_owned()
+                    } else {
+                        format!(
+                            "{} {} imported.",
+                            unique_track_count,
+                            if unique_track_count == 1 {
+                                "track"
+                            } else {
+                                "tracks"
+                            }
+                        )
+                    };
+                    crate::toast::push_global(
+                        cx,
+                        if cover_failed {
+                            crate::toast::ToastKind::Warning
+                        } else {
+                            crate::toast::ToastKind::Success
+                        },
+                        "Imported to Local",
+                        Some(if cover_failed {
+                            format!("{detail} The playlist cover could not be imported.").into()
+                        } else {
+                            detail.into()
+                        }),
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => push_local_error(cx, "Playlist import failed", Some(error)),
+            }),
+            cx,
+        );
+        if let Err(error) = result {
+            push_local_error(cx, "Playlist import failed", Some(error));
+        }
     }
 
     pub(crate) fn update_local_playlist_with_artwork(

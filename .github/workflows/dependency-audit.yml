@@ -29,10 +29,24 @@ jobs:
         id: audit
         shell: bash
         run: |
-          cargo audit --format terminal
-          status=$?
-          cargo audit --format json > cargo-audit.json
-          exit $status
+          if cargo audit --format terminal; then
+            audit_status=0
+          else
+            audit_status=$?
+          fi
+
+          if cargo audit --format json > cargo-audit.json; then
+            json_status=0
+          else
+            json_status=$?
+          fi
+
+          if [ ! -s cargo-audit.json ]; then
+            echo "::error::cargo audit did not produce a JSON report (exit code $json_status)."
+            exit "$json_status"
+          fi
+
+          exit "$audit_status"
 
       - name: Upload audit report
         if: always()

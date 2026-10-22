@@ -17,9 +17,11 @@ use super::{
 
 enum CollectionAction {
     Queue { last: bool },
+    PlayNow,
     Download { variant: DownloadVariant },
     AddToLocalPlaylist,
     AddToProviderPlaylist,
+    ImportToLocal,
 }
 
 impl SearchView {
@@ -27,6 +29,10 @@ impl SearchView {
     /// are fetched first; the current queue is never replaced.
     pub(crate) fn queue_collection(&mut self, card: Card, last: bool, cx: &mut Context<Self>) {
         self.run_collection_action(&card, CollectionAction::Queue { last }, cx);
+    }
+
+    pub(crate) fn play_collection(&mut self, card: Card, cx: &mut Context<Self>) {
+        self.run_collection_action(&card, CollectionAction::PlayNow, cx);
     }
 
     /// Batch downloads an album or playlist card in the chosen format. The
@@ -48,6 +54,10 @@ impl SearchView {
         self.run_collection_action(&card, CollectionAction::AddToLocalPlaylist, cx);
     }
 
+    pub(crate) fn import_collection_to_local(&mut self, card: Card, cx: &mut Context<Self>) {
+        self.run_collection_action(&card, CollectionAction::ImportToLocal, cx);
+    }
+
     fn run_collection_action(
         &mut self,
         card: &Card,
@@ -58,6 +68,14 @@ impl SearchView {
             action,
             CollectionAction::AddToLocalPlaylist | CollectionAction::AddToProviderPlaylist
         ) && !add_to_playlist_eligible(card)
+        {
+            return;
+        }
+        if matches!(action, CollectionAction::ImportToLocal) && !import_to_local_eligible(card) {
+            return;
+        }
+        if matches!(action, CollectionAction::PlayNow)
+            && card.kind != super::models::ResultType::Playlists
         {
             return;
         }
@@ -74,6 +92,9 @@ impl SearchView {
             (account.deezer_arl(), account.soundcloud_token())
         };
         let provider = card.source;
+        let fallback_title = card.title.clone();
+        let account_scope = self.account.read(cx).library_scope();
+        let runtime = self.runtime.clone();
         cx.notify();
         let task = self
             .runtime
@@ -84,7 +105,48 @@ impl SearchView {
                     "Collection request failed",
                 ))
             });
+            let (artwork_jpeg, cover_attempted) =
+                if matches!(&action, CollectionAction::ImportToLocal) {
+                    match &result {
+                        Ok(page) => {
+                            let artwork_url = page.route.artwork.clone();
+                            let cover_attempted = !artwork_url.trim().is_empty();
+                            let artwork_jpeg = runtime
+                                .spawn(async move {
+                                    crate::library::playlist_image::download_provider_artwork_jpeg(
+                                        provider,
+                                        &artwork_url,
+                                    )
+                                    .await
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                            (artwork_jpeg, cover_attempted)
+                        }
+                        Err(_) => (None, false),
+                    }
+                } else {
+                    (None, false)
+                };
             this.update_in(cx, |this, window, cx| {
+                if matches!(
+                    &action,
+                    CollectionAction::ImportToLocal | CollectionAction::PlayNow
+                ) && this.account.read(cx).library_scope() != account_scope
+                {
+                    let title = if matches!(&action, CollectionAction::PlayNow) {
+                        "Playlist playback canceled"
+                    } else {
+                        "Playlist import canceled"
+                    };
+                    collection_toast(
+                        title,
+                        "The account changed while the playlist was loading. Try again.".to_owned(),
+                        cx,
+                    );
+                    return;
+                }
                 match (result, action) {
                     (Ok(page), CollectionAction::AddToProviderPlaylist) => {
                         let track_ids = playlist_track_ids(&page.tracks);
@@ -106,6 +168,71 @@ impl SearchView {
                             this.library.update(cx, |library, cx| {
                                 library.open_local_playlist_picker_tracks(tracks, window, cx);
                             });
+                        }
+                    }
+                    (Ok(page), CollectionAction::ImportToLocal) => {
+                        if page.authoritative_total != Some(page.raw_loaded_count)
+                            || page.normalized_count != page.raw_loaded_count
+                        {
+                            collection_toast(
+                                "Playlist import failed",
+                                "The playlist did not load completely, so nothing was imported."
+                                    .to_owned(),
+                                cx,
+                            );
+                        } else {
+                            let tracks = page
+                                .tracks
+                                .iter()
+                                .map(PlaybackTrack::from_search)
+                                .collect::<Vec<_>>();
+                            let title = if page.route.title.trim().is_empty() {
+                                fallback_title
+                            } else {
+                                page.route.title
+                            };
+                            let description = if page.description.trim().is_empty() {
+                                page.album_info
+                                    .as_ref()
+                                    .map(|info| info.description.clone())
+                                    .unwrap_or_default()
+                            } else {
+                                page.description
+                            };
+                            this.library.update(cx, |library, cx| {
+                                library.create_imported_local_playlist(
+                                    title,
+                                    description,
+                                    tracks,
+                                    artwork_jpeg,
+                                    cover_attempted,
+                                    cx,
+                                );
+                            });
+                        }
+                    }
+                    (Ok(page), CollectionAction::PlayNow) => {
+                        if page.authoritative_total != Some(page.raw_loaded_count)
+                            || page.normalized_count != page.raw_loaded_count
+                        {
+                            collection_toast(
+                                "Playlist unavailable",
+                                "The playlist did not load completely, so it was not played."
+                                    .to_owned(),
+                                cx,
+                            );
+                        } else {
+                            let tracks = page
+                                .tracks
+                                .iter()
+                                .map(PlaybackTrack::from_search)
+                                .collect::<Vec<_>>();
+                            if tracks.is_empty() {
+                                collection_toast(empty_notice.0, empty_notice.1.to_owned(), cx);
+                            } else {
+                                this.playback
+                                    .update(cx, |playback, cx| playback.play_queue(tracks, cx));
+                            }
                         }
                     }
                     (Ok(page), action) if !page.tracks.is_empty() => {
@@ -136,7 +263,9 @@ impl SearchView {
                                 });
                             }
                             CollectionAction::AddToLocalPlaylist
-                            | CollectionAction::AddToProviderPlaylist => unreachable!(),
+                            | CollectionAction::AddToProviderPlaylist
+                            | CollectionAction::PlayNow
+                            | CollectionAction::ImportToLocal => unreachable!(),
                         }
                     }
                     (Ok(_), _) => collection_toast(empty_notice.0, empty_notice.1.to_owned(), cx),
@@ -163,10 +292,11 @@ fn collection_kind(card: &Card) -> CollectionKind {
 fn empty_collection_action(action: &CollectionAction) -> EmptyCollectionAction {
     match action {
         CollectionAction::Queue { .. } => EmptyCollectionAction::Queue,
+        CollectionAction::PlayNow => EmptyCollectionAction::Queue,
         CollectionAction::Download { .. } => EmptyCollectionAction::Download,
-        CollectionAction::AddToLocalPlaylist | CollectionAction::AddToProviderPlaylist => {
-            EmptyCollectionAction::AddToPlaylist
-        }
+        CollectionAction::AddToLocalPlaylist
+        | CollectionAction::AddToProviderPlaylist
+        | CollectionAction::ImportToLocal => EmptyCollectionAction::AddToPlaylist,
     }
 }
 
@@ -193,6 +323,14 @@ fn add_to_playlist_eligible(card: &Card) -> bool {
         card.source,
         crate::search::Provider::Deezer | crate::search::Provider::SoundCloud
     ) && card.kind == super::models::ResultType::Albums
+        && collection_route(card).is_some()
+}
+
+fn import_to_local_eligible(card: &Card) -> bool {
+    matches!(
+        card.source,
+        crate::search::Provider::Deezer | crate::search::Provider::SoundCloud
+    ) && card.kind == super::models::ResultType::Playlists
         && collection_route(card).is_some()
 }
 

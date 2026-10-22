@@ -223,8 +223,14 @@ fn process_audio(
     let block_duration = Duration::from_secs_f64(BLOCK as f64 / sample_rate as f64);
     'processing: while !stop.load(Ordering::Acquire) && !restart.load(Ordering::Acquire) {
         let first = loop {
+            if tap.paused.load(Ordering::Acquire) {
+                while tap.frames.pop().is_some() {}
+                if tap.paused.load(Ordering::Acquire) {
+                    break Some(None);
+                }
+            }
             if let Some(frame) = tap.frames.pop() {
-                break Some(frame);
+                break Some(Some(frame));
             }
             if stop.load(Ordering::Acquire) || restart.load(Ordering::Acquire) {
                 break None;
@@ -234,7 +240,13 @@ fn process_audio(
         let Some(first) = first else {
             break;
         };
-        if first.sample_rate != sample_rate {
+        let silence = first.is_none();
+        let first = first.unwrap_or(super::tap::Frame {
+            left: 0.0,
+            right: 0.0,
+            sample_rate,
+        });
+        if !silence && first.sample_rate != sample_rate {
             next_rate = Some(first.sample_rate);
             break;
         }
@@ -253,11 +265,16 @@ fn process_audio(
             let frame = first
                 .take()
                 .expect("audio burst always starts with a frame");
-            input[0][0] = frame.left;
-            input[1][0] = frame.right;
-            let mut filled = 1;
+            let mut filled = if silence { BLOCK } else { 1 };
+            if silence {
+                input[0].fill(0.0);
+                input[1].fill(0.0);
+            } else {
+                input[0][0] = frame.left;
+                input[1][0] = frame.right;
+            }
             let deadline = Instant::now() + block_duration;
-            while filled < BLOCK {
+            while !silence && filled < BLOCK {
                 let Some(frame) = tap.frames.pop() else {
                     if Instant::now() >= deadline
                         || stop.load(Ordering::Acquire)
@@ -318,6 +335,17 @@ fn process_audio(
             };
             if let Err(error) = result {
                 process_error = Some(error.to_string());
+                break;
+            }
+            if silence {
+                thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                if tap.paused.load(Ordering::Acquire)
+                    && !stop.load(Ordering::Acquire)
+                    && !restart.load(Ordering::Acquire)
+                {
+                    first = Some(frame);
+                    continue;
+                }
                 break;
             }
             if filled < BLOCK {

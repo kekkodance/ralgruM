@@ -103,13 +103,13 @@ impl SearchClient {
                         } else {
                             None
                         };
-                    let total = detail.tracks.len();
+                    let total = detail.authoritative_total;
                     let raw_loaded_count = detail.tracks.len();
                     (
                         detail.tracks,
-                        Some(total),
+                        total,
                         raw_loaded_count,
-                        Some(total),
+                        total,
                         description,
                         album_info,
                     )
@@ -320,16 +320,14 @@ impl SearchClient {
             .await
             .map_err(|_| ProviderError::new("SoundCloud returned an invalid response"))?;
         let embedded = playlist.get("tracks").and_then(Value::as_array);
-        let embedded_complete = embedded.is_some_and(|tracks| {
-            playlist
-                .get("track_count")
-                .and_then(value_usize)
-                .is_none_or(|count| count <= tracks.len())
-        });
-        let source_tracks = if embedded_complete {
-            embedded.cloned().unwrap_or_default()
+        let expected_total = playlist.get("track_count").and_then(value_usize);
+        let embedded_complete = embedded.is_some_and(|tracks| expected_total == Some(tracks.len()));
+        let (source_tracks, authoritative_total) = if embedded_complete {
+            (embedded.cloned().unwrap_or_default(), expected_total)
         } else {
-            self.soundcloud_playlist_tracks(id, &token).await?
+            let tracks = self.soundcloud_playlist_tracks(id, &token).await?;
+            let total = expected_total.or(Some(tracks.len()));
+            (tracks, total)
         };
         let ids = source_tracks
             .iter()
@@ -339,6 +337,7 @@ impl SearchClient {
         Ok(SoundCloudDetail {
             tracks: ordered_soundcloud_tracks(&ids, hydrated),
             playlist,
+            authoritative_total,
         })
     }
 
@@ -558,6 +557,7 @@ fn apply_track_metadata_fallback(route: &mut DetailRoute, tracks: &[super::model
 struct SoundCloudDetail {
     tracks: Vec<Value>,
     playlist: Value,
+    authoritative_total: Option<usize>,
 }
 
 fn value_string(value: &Value) -> Option<String> {

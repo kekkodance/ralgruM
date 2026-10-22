@@ -7,10 +7,25 @@ impl PlaybackModel {
         index: usize,
         cx: &mut Context<Self>,
     ) {
+        self.replace_queue_with_mode(queue, index, true, cx);
+    }
+
+    pub(crate) fn play_queue(&mut self, queue: Vec<PlaybackTrack>, cx: &mut Context<Self>) {
+        self.replace_queue_with_mode(queue, 0, false, cx);
+        self.set_context(crate::playback::PlaybackContext::None, cx);
+    }
+
+    fn replace_queue_with_mode(
+        &mut self,
+        queue: Vec<PlaybackTrack>,
+        index: usize,
+        seek_if_same_track: bool,
+        cx: &mut Context<Self>,
+    ) {
         // Clicking the already-playing track restarts it in place: seek to
         // the start without re-resolving the source, so the quality tag and
         // the buffered progress do not blink.
-        if self.state.same_track_at(&queue, index) {
+        if seek_if_same_track && self.state.same_track_at(&queue, index) {
             self.seek_to(Duration::ZERO, cx);
             return;
         }

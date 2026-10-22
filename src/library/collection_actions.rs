@@ -18,9 +18,11 @@ use super::{
 
 enum CollectionAction {
     Queue { last: bool },
+    PlayNow,
     Download { variant: DownloadVariant },
     AddToLocalPlaylist,
     AddToProviderPlaylist,
+    ImportToLocal,
 }
 
 impl LibraryView {
@@ -40,6 +42,10 @@ impl LibraryView {
         self.run_collection_action(&card, CollectionAction::Queue { last }, cx);
     }
 
+    pub(crate) fn play_collection(&mut self, card: Card, cx: &mut Context<Self>) {
+        self.run_collection_action(&card, CollectionAction::PlayNow, cx);
+    }
+
     pub(crate) fn download_collection(
         &mut self,
         card: Card,
@@ -57,6 +63,10 @@ impl LibraryView {
         self.run_collection_action(&card, CollectionAction::AddToLocalPlaylist, cx);
     }
 
+    pub(crate) fn import_collection_to_local(&mut self, card: Card, cx: &mut Context<Self>) {
+        self.run_collection_action(&card, CollectionAction::ImportToLocal, cx);
+    }
+
     fn run_collection_action(
         &mut self,
         card: &Card,
@@ -70,6 +80,12 @@ impl LibraryView {
         {
             return;
         }
+        if matches!(action, CollectionAction::PlayNow) && card.kind != Category::Playlists {
+            return;
+        }
+        if matches!(action, CollectionAction::ImportToLocal) && !import_to_local_eligible(card) {
+            return;
+        }
         let Some(route) = collection_route(card) else {
             return;
         };
@@ -77,10 +93,19 @@ impl LibraryView {
             empty_collection_notice(collection_kind(card), empty_collection_action(&action));
         let account_scope = self.account.read(cx).library_scope();
         let provider = card.source;
+        let fallback_title = card.title.clone();
+        let runtime = self.runtime.clone();
         let task = match provider {
             Provider::Deezer => {
                 let arl = self.account.read(cx).deezer_arl();
-                if arl.is_none() && !matches!(action, CollectionAction::AddToLocalPlaylist) {
+                if arl.is_none()
+                    && !matches!(
+                        action,
+                        CollectionAction::AddToLocalPlaylist
+                            | CollectionAction::ImportToLocal
+                            | CollectionAction::PlayNow
+                    )
+                {
                     collection_toast(
                         "Collection unavailable",
                         "A Deezer account is required.",
@@ -124,6 +149,30 @@ impl LibraryView {
             let result = task
                 .await
                 .unwrap_or_else(|_| Err("Collection request failed".to_owned()));
+            let (artwork_jpeg, cover_attempted) =
+                if matches!(&action, CollectionAction::ImportToLocal) {
+                    match &result {
+                        Ok(page) => {
+                            let artwork_url = page.artwork.clone();
+                            let cover_attempted = !artwork_url.trim().is_empty();
+                            let artwork_jpeg = runtime
+                                .spawn(async move {
+                                    crate::library::playlist_image::download_provider_artwork_jpeg(
+                                        provider,
+                                        &artwork_url,
+                                    )
+                                    .await
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                            (artwork_jpeg, cover_attempted)
+                        }
+                        Err(_) => (None, false),
+                    }
+                } else {
+                    (None, false)
+                };
             this.update_in(cx, |this, window, cx| {
                 if this.account.read(cx).library_scope() != account_scope {
                     return;
@@ -148,6 +197,60 @@ impl LibraryView {
                             collection_toast(empty_notice.0, empty_notice.1, cx);
                         } else {
                             this.open_local_playlist_picker_tracks(tracks, window, cx);
+                        }
+                    }
+                    (Ok(page), CollectionAction::ImportToLocal) => {
+                        if !page.playlist_removal_proven() {
+                            collection_toast(
+                                "Playlist import failed",
+                                "The playlist did not load completely, so nothing was imported.",
+                                cx,
+                            );
+                        } else {
+                            let tracks = page
+                                .tracks
+                                .iter()
+                                .map(|track| PlaybackTrack::from_library(track, provider))
+                                .collect::<Vec<_>>();
+                            let title = if page.title.trim().is_empty() {
+                                fallback_title
+                            } else {
+                                page.title
+                            };
+                            let description = page
+                                .album_info
+                                .as_ref()
+                                .map(|info| info.description.clone())
+                                .unwrap_or_default();
+                            this.create_imported_local_playlist(
+                                title,
+                                description,
+                                tracks,
+                                artwork_jpeg,
+                                cover_attempted,
+                                cx,
+                            );
+                        }
+                    }
+                    (Ok(page), CollectionAction::PlayNow) => {
+                        if !page.playlist_removal_proven() {
+                            collection_toast(
+                                "Playlist unavailable",
+                                "The playlist did not load completely, so it was not played.",
+                                cx,
+                            );
+                        } else {
+                            let tracks = page
+                                .tracks
+                                .iter()
+                                .map(|track| PlaybackTrack::from_library(track, provider))
+                                .collect::<Vec<_>>();
+                            if tracks.is_empty() {
+                                collection_toast(empty_notice.0, empty_notice.1, cx);
+                            } else {
+                                this.playback
+                                    .update(cx, |playback, cx| playback.play_queue(tracks, cx));
+                            }
                         }
                     }
                     (Ok(page), action) if !page.tracks.is_empty() => {
@@ -178,7 +281,9 @@ impl LibraryView {
                                 });
                             }
                             CollectionAction::AddToLocalPlaylist
-                            | CollectionAction::AddToProviderPlaylist => unreachable!(),
+                            | CollectionAction::AddToProviderPlaylist
+                            | CollectionAction::PlayNow
+                            | CollectionAction::ImportToLocal => unreachable!(),
                         }
                     }
                     (Ok(_), _) => collection_toast(empty_notice.0, empty_notice.1, cx),
@@ -203,10 +308,11 @@ fn collection_kind(card: &Card) -> CollectionKind {
 fn empty_collection_action(action: &CollectionAction) -> EmptyCollectionAction {
     match action {
         CollectionAction::Queue { .. } => EmptyCollectionAction::Queue,
+        CollectionAction::PlayNow => EmptyCollectionAction::Queue,
         CollectionAction::Download { .. } => EmptyCollectionAction::Download,
-        CollectionAction::AddToLocalPlaylist | CollectionAction::AddToProviderPlaylist => {
-            EmptyCollectionAction::AddToPlaylist
-        }
+        CollectionAction::AddToLocalPlaylist
+        | CollectionAction::AddToProviderPlaylist
+        | CollectionAction::ImportToLocal => EmptyCollectionAction::AddToPlaylist,
     }
 }
 
@@ -224,6 +330,12 @@ fn collection_route(card: &Card) -> Option<super::model::Route> {
 fn add_to_playlist_eligible(card: &Card) -> bool {
     matches!(card.source, Provider::Deezer | Provider::SoundCloud)
         && card.kind == Category::Albums
+        && collection_route(card).is_some()
+}
+
+fn import_to_local_eligible(card: &Card) -> bool {
+    matches!(card.source, Provider::Deezer | Provider::SoundCloud)
+        && card.kind == Category::Playlists
         && collection_route(card).is_some()
 }
 

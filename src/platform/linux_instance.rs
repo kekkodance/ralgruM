@@ -10,7 +10,10 @@
 use std::{
     io::{Read, Write},
     net::Shutdown,
-    os::unix::net::{UnixListener, UnixStream},
+    os::{
+        linux::net::SocketAddrExt,
+        unix::net::{SocketAddr, UnixListener, UnixStream},
+    },
     thread,
     time::Duration,
 };
@@ -83,10 +86,20 @@ impl BrowserLinkLaunch {
 /// the owner forwards its optional link or restore request and exits, so a
 /// second launch never creates another application window.
 pub(crate) fn prepare(raw: Option<String>) -> BrowserLinkLaunch {
-    prepare_with_address(raw, socket_address())
+    let address = match socket_address() {
+        Ok(address) => address,
+        Err(error) => {
+            diagnostics::event(
+                "ERROR",
+                format!("single-instance socket address could not be created: {error}"),
+            );
+            return BrowserLinkLaunch::Unavailable;
+        }
+    };
+    prepare_with_address(raw, address)
 }
 
-fn prepare_with_address(raw: Option<String>, address: String) -> BrowserLinkLaunch {
+fn prepare_with_address(raw: Option<String>, address: SocketAddr) -> BrowserLinkLaunch {
     // A secondary with an unparseable link still restores the running window,
     // mirroring the Windows path where a queued link that fails validation
     // degrades into a plain restore request.
@@ -97,7 +110,7 @@ fn prepare_with_address(raw: Option<String>, address: String) -> BrowserLinkLaun
 
     // Try the owner first. ECONNREFUSED means no process is bound yet, so
     // this launch becomes the owner candidate.
-    if let Ok(stream) = UnixStream::connect(&address) {
+    if let Ok(stream) = UnixStream::connect_addr(&address) {
         match forward_payload(stream, &payload) {
             Ok(()) => return BrowserLinkLaunch::Forwarded,
             Err(error) => {
@@ -110,7 +123,7 @@ fn prepare_with_address(raw: Option<String>, address: String) -> BrowserLinkLaun
         }
     }
 
-    let listener = match UnixListener::bind(&address) {
+    let listener = match UnixListener::bind_addr(&address) {
         Ok(listener) => listener,
         Err(error) => {
             // The connect failing while the bind reports the address in use
@@ -118,7 +131,7 @@ fn prepare_with_address(raw: Option<String>, address: String) -> BrowserLinkLaun
             // an external process squats the name and the owner handoff
             // cannot be honored.
             thread::sleep(RECONNECT_DELAY);
-            if let Ok(stream) = UnixStream::connect(&address) {
+            if let Ok(stream) = UnixStream::connect_addr(&address) {
                 match forward_payload(stream, &payload) {
                     Ok(()) => return BrowserLinkLaunch::Forwarded,
                     Err(error) => {
@@ -279,9 +292,11 @@ fn read_event(mut stream: UnixStream) -> Option<BrowserLinkEvent> {
     entity.map(BrowserLinkEvent::Open)
 }
 
-/// Returns the abstract socket address used for single-instance checks.
-pub(crate) fn socket_address() -> String {
-    "\0ralgrum-browser-links-v1".to_owned()
+/// Returns the Linux abstract socket address used for single-instance checks.
+/// The std Unix socket path APIs reject NUL-prefixed strings, so create a
+/// typed abstract address and bind or connect through the address APIs.
+pub(crate) fn socket_address() -> std::io::Result<SocketAddr> {
+    SocketAddr::from_abstract_name(b"ralgrum-browser-links-v1")
 }
 
 #[cfg(test)]
@@ -304,10 +319,11 @@ mod tests {
 
     #[test]
     fn socket_address_uses_the_linux_abstract_namespace() {
-        let address = socket_address();
-        assert!(address.starts_with('\0'));
-        assert!(!address[1..].contains('\0'));
-        assert_eq!(address, "\0ralgrum-browser-links-v1");
+        let address = socket_address().unwrap();
+        assert_eq!(
+            address.as_abstract_name(),
+            Some(&b"ralgrum-browser-links-v1"[..])
+        );
     }
 
     #[test]
@@ -324,8 +340,7 @@ mod tests {
             .join(format!("ralgrum-instance-test-{}", std::process::id()))
             .join(uuid::Uuid::new_v4().simple().to_string());
         std::fs::create_dir_all(&directory).unwrap();
-        let address = directory.join("socket");
-        let address = address.to_str().unwrap().to_owned();
+        let address = SocketAddr::from_pathname(directory.join("socket")).unwrap();
 
         let mut owner = prepare_with_address(None, address.clone());
         assert!(matches!(owner, BrowserLinkLaunch::Owner { .. }));
@@ -353,7 +368,7 @@ mod tests {
         // the closed sender and exits instead of lingering.
         drop(events);
         drop(owner);
-        let _ = UnixStream::connect(&address);
+        let _ = UnixStream::connect_addr(&address);
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -366,8 +381,7 @@ mod tests {
             .join(format!("ralgrum-instance-test-{}", std::process::id()))
             .join(uuid::Uuid::new_v4().simple().to_string());
         std::fs::create_dir_all(&directory).unwrap();
-        let address = directory.join("socket");
-        let address = address.to_str().unwrap().to_owned();
+        let address = SocketAddr::from_pathname(directory.join("socket")).unwrap();
 
         let mut owner = prepare_with_address(None, address.clone());
         let mut events = owner.take_events().expect("owner listener");
@@ -381,7 +395,7 @@ mod tests {
 
         drop(events);
         drop(owner);
-        let _ = UnixStream::connect(&address);
+        let _ = UnixStream::connect_addr(&address);
         let _ = std::fs::remove_dir_all(&directory);
     }
 }

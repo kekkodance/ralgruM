@@ -235,6 +235,24 @@ where
                 next_enabled,
                 last_enabled,
             );
+            let menu = if entity.kind == EntityKind::Playlist {
+                let play_host = host.clone();
+                let play_card = card.clone();
+                let play_enabled = next_enabled
+                    && (entity.provider == crate::search::Provider::Deezer || soundcloud_token);
+                menu.item(items::action_item(
+                    "Play now",
+                    Some(LocalIcon::Play),
+                    !play_enabled,
+                    move |_, _, cx| {
+                        play_host.update(cx, |library, cx| {
+                            library.play_collection(play_card.clone(), cx);
+                        });
+                    },
+                ))
+            } else {
+                menu
+            };
             let menu = if download_enabled {
                 items::library_collection_download_submenu(
                     menu.separator(),
@@ -283,6 +301,24 @@ where
                         });
                     },
                 )
+            } else {
+                menu
+            };
+            let menu = if entity.kind == EntityKind::Playlist && enabled {
+                let import_host = host.clone();
+                let import_card = card.clone();
+                let import_disabled =
+                    entity.provider == crate::search::Provider::SoundCloud && !soundcloud_token;
+                menu.separator().item(items::action_item(
+                    "Import to Local",
+                    Some(LocalIcon::FolderOpen),
+                    import_disabled,
+                    move |_, _, cx| {
+                        import_host.update(cx, |library, cx| {
+                            library.import_collection_to_local(import_card.clone(), cx);
+                        });
+                    },
+                ))
             } else {
                 menu
             };
@@ -430,6 +466,18 @@ where
                 .as_ref()
                 .is_some_and(|snapshot| !snapshot.tracks.is_empty());
             let queue_empty = host.read(cx).playback.read(cx).state.queue.is_empty();
+            let play_host = host.clone();
+            let play_id = card.id.clone();
+            let menu = menu.item(items::action_item(
+                "Play now",
+                Some(LocalIcon::Play),
+                !has_tracks,
+                move |_, _, cx| {
+                    play_host.update(cx, |library, cx| {
+                        library.play_local_playlist(play_id.clone(), cx)
+                    });
+                },
+            ));
             let download_enabled = snapshot.as_ref().is_some_and(|snapshot| {
                 host.read(cx)
                     .local_playlist_download_available(snapshot, cx)
@@ -606,6 +654,13 @@ where
                     &card.subtitle,
                     cx,
                 );
+            let (deezer_arl, soundcloud_token) = {
+                let account = account.read(cx);
+                (
+                    account.deezer_arl().is_some(),
+                    account.soundcloud_token().is_some(),
+                )
+            };
             let has_tracks = card.badge.parse::<usize>().map_or(true, |count| count > 0);
             let routable = collection_routable(&card);
             let queue_empty = search.read(cx).playback.read(cx).state.queue.is_empty();
@@ -618,6 +673,24 @@ where
                 next_enabled,
                 last_enabled,
             );
+            let menu = if entity.kind == EntityKind::Playlist {
+                let play_search = search.clone();
+                let play_card = card.clone();
+                let play_enabled = next_enabled
+                    && (entity.provider == crate::search::Provider::Deezer || soundcloud_token);
+                menu.item(items::action_item(
+                    "Play now",
+                    Some(LocalIcon::Play),
+                    !play_enabled,
+                    move |_, _, cx| {
+                        play_search.update(cx, |search, cx| {
+                            search.play_collection(play_card.clone(), cx);
+                        });
+                    },
+                ))
+            } else {
+                menu
+            };
             let menu = if routable && has_tracks {
                 items::collection_download_submenu(
                     menu.separator(),
@@ -630,13 +703,6 @@ where
             } else {
                 menu.separator()
                     .item(items::disabled_action("Download", LocalIcon::Download))
-            };
-            let (deezer_arl, soundcloud_token) = {
-                let account = account.read(cx);
-                (
-                    account.deezer_arl().is_some(),
-                    account.soundcloud_token().is_some(),
-                )
             };
             let menu = if playlist_add_to_playlist_enabled(&entity.kind) {
                 let add_enabled = album_add_to_playlist_enabled(
@@ -671,6 +737,24 @@ where
                         });
                     },
                 )
+            } else {
+                menu
+            };
+            let menu = if entity.kind == EntityKind::Playlist && routable {
+                let import_search = search.clone();
+                let import_card = card.clone();
+                let import_disabled =
+                    entity.provider == crate::search::Provider::SoundCloud && !soundcloud_token;
+                menu.separator().item(items::action_item(
+                    "Import to Local",
+                    Some(LocalIcon::FolderOpen),
+                    import_disabled,
+                    move |_, _, cx| {
+                        import_search.update(cx, |search, cx| {
+                            search.import_collection_to_local(import_card.clone(), cx);
+                        });
+                    },
+                ))
             } else {
                 menu
             };

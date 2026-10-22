@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{Context, Entity};
+use gpui::{Context, Entity, WeakEntity};
 use tokio::runtime::Runtime;
 
 use crate::settings::AccountState;
@@ -15,6 +15,7 @@ pub(crate) struct FavoriteController {
     account: Entity<AccountState>,
     favorites: Entity<super::favorite_state::FavoriteState>,
     runtime: Arc<Runtime>,
+    library: Option<WeakEntity<LibraryView>>,
     client: Result<super::client::LibraryClient, String>,
     soundcloud_client: Result<super::soundcloud_client::SoundCloudLibraryClient, String>,
 }
@@ -29,9 +30,14 @@ impl FavoriteController {
             account,
             favorites,
             runtime,
+            library: None,
             client: super::client::LibraryClient::new(),
             soundcloud_client: super::soundcloud_client::SoundCloudLibraryClient::new(),
         }
+    }
+
+    pub(crate) fn set_library(&mut self, library: WeakEntity<LibraryView>) {
+        self.library = Some(library);
     }
 
     pub(crate) fn toggle(
@@ -92,10 +98,15 @@ impl FavoriteController {
             }
         };
         let favorites = self.favorites.downgrade();
+        let library = self.library.clone();
+        let provider = mutation.key.provider;
+        let category = category_for(mutation.key.kind);
         cx.spawn(async move |_, cx| {
             let result = task
                 .await
                 .unwrap_or_else(|_| Err("Favorite request failed".into()));
+            let succeeded = result.is_ok();
+            let mut completed = false;
             let _ = favorites.update(cx, |favorites, cx| {
                 if let Err(ref error) = result {
                     crate::toast::push_global(
@@ -105,10 +116,19 @@ impl FavoriteController {
                         Some(error.clone().into()),
                     );
                 }
-                if favorites.complete(&mutation, result) {
+                completed = favorites.complete(&mutation, result);
+                if completed {
                     cx.notify();
                 }
             });
+            if succeeded
+                && completed
+                && let Some(library) = library.and_then(|library| library.upgrade())
+            {
+                let _ = library.update(cx, |library, cx| {
+                    library.refresh_after_favorite(provider, category, cx);
+                });
+            }
         })
         .detach();
         cx.notify();
@@ -370,7 +390,15 @@ impl LibraryView {
         cx: &mut Context<Self>,
     ) {
         self.state.invalidate_provider(provider, category);
-        cx.notify();
+        let service = match provider {
+            crate::search::Provider::Deezer => super::model::Service::Deezer,
+            crate::search::Provider::SoundCloud => super::model::Service::SoundCloud,
+        };
+        if self.state.service == service && self.state.selected_root_active(category) {
+            self.load_service_force(service, category, cx);
+        } else {
+            cx.notify();
+        }
     }
 }
 

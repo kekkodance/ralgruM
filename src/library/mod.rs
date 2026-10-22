@@ -33,7 +33,7 @@ mod playlist_delete_dialog;
 mod playlist_dialog;
 pub(crate) mod playlist_drag;
 mod playlist_form;
-mod playlist_image;
+pub(crate) mod playlist_image;
 mod playlist_limits;
 mod playlist_picker;
 mod playlist_remove_client;
