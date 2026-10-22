@@ -65,9 +65,9 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-  # One job per platform: tests run in the release profile, so the binary
-  # the same job then packages is a warm cache hit on the test compile and
-  # the artifact is proven by the exact code that was tested.
+  # GPUI debug-bounds selectors are intentionally disabled in optimized
+  # builds, and the visual tests depend on them. Run tests with debug
+  # instrumentation, then build the optimized release artifact separately.
   windows:
     name: Test and build Windows release
     needs: prepare
@@ -93,7 +93,7 @@ jobs:
           cache-key: release
 
       - name: Run full release tests
-        run: cargo test --locked --all-targets --release
+        run: cargo test --locked --all-targets
 
       - name: Build the full release
         run: cargo build --locked --release
@@ -149,7 +149,7 @@ jobs:
           cache-key: release-linux
 
       - name: Run full release tests
-        run: cargo test --locked --all-targets --release
+        run: cargo test --locked --all-targets
 
       - name: Build the full release
         run: cargo build --locked --release
