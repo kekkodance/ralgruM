@@ -7,7 +7,7 @@ use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
     EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, ShapedLine, SharedString, Styled as _,
+    Pixels, Point, Render, ScrollEvent, ScrollHandle, ShapedLine, SharedString, Styled as _,
     Subscription, Task, UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _,
     px,
 };
@@ -1873,9 +1873,9 @@ impl InputState {
         }
     }
 
-    pub(super) fn on_scroll_wheel(
+    pub(super) fn on_scroll(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

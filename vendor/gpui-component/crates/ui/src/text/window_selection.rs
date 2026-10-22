@@ -1,7 +1,7 @@
 use gpui::{
     App, Bounds, Context, Element, ElementId, Entity, EntityId, GlobalElementId, Hitbox,
     InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, ScrollWheelEvent, Style, WeakEntity, Window,
+    MouseUpEvent, Pixels, Point, ScrollEvent, Style, WeakEntity, Window,
 };
 
 use crate::{Root, global_state::GlobalState, scroll::AutoScroll, text::TextViewState};
@@ -823,7 +823,7 @@ impl Element for TextSelectionController {
             Root::update(window, cx, |root, _, cx| root.end_text_selection(cx));
         });
 
-        window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, cx| {
+        window.on_mouse_event(move |_: &ScrollEvent, phase, window, cx| {
             if !phase.bubble() {
                 return;
             }

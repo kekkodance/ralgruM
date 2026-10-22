@@ -1,7 +1,7 @@
 use gpui::{
     App, Axis, BorderStyle, Bounds, ContentMask, Edges, Element, ElementId, GlobalElementId,
     Hitbox, Hsla, InteractiveElement as _, IntoElement, IsZero as _, LayoutId, PaintQuad,
-    ParentElement as _, Point, Position, ScrollHandle, ScrollWheelEvent,
+    ParentElement as _, Point, Position, ScrollEvent, ScrollHandle,
     StatefulInteractiveElement as _, Style, StyleRefinement, Styled as _, Window, div, px,
     relative,
 };
@@ -150,7 +150,7 @@ impl Element for ScrollableMask {
                 let view_id = window.current_view();
                 let scroll_handle = self.scroll_handle.clone();
 
-                move |event: &ScrollWheelEvent, phase, _, cx| {
+                move |event: &ScrollEvent, phase, _, cx| {
                     if !(bounds.contains(&event.position) && phase.bubble()) {
                         return;
                     }
@@ -190,7 +190,7 @@ impl Element for ScrollableMask {
 mod tests {
     use super::*;
     use gpui::{
-        Context, IntoElement, Render, ScrollDelta, ScrollWheelEvent, TestAppContext,
+        Context, IntoElement, Render, ScrollDelta, ScrollEvent, TestAppContext,
         VisualTestContext, Window, div, point, px,
     };
 
@@ -224,7 +224,7 @@ mod tests {
             _ = window.draw(cx);
         });
 
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: point(px(10.), px(10.)),
             delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
             ..Default::default()
@@ -248,7 +248,7 @@ mod tests {
             _ = window.draw(cx);
         });
 
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: point(px(10.), px(10.)),
             delta: ScrollDelta::Pixels(point(px(-40.), px(0.))),
             ..Default::default()

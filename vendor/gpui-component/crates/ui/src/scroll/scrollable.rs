@@ -255,7 +255,7 @@ fn render_scrollbar<H: ScrollbarHandle + Clone>(
 mod tests {
     use super::*;
     use gpui::{
-        Context, Render, ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestContext, point,
+        Context, Render, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point,
         px,
     };
 
@@ -267,7 +267,7 @@ mod tests {
     }
 
     fn scroll(cx: &mut VisualTestContext, x: f32, y: f32, dx: f32, dy: f32) {
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: point(px(x), px(y)),
             delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
             ..Default::default()

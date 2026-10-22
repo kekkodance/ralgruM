@@ -7,7 +7,7 @@ use gpui::{
     Anchor, App, Axis, Background, BorderStyle, Bounds, ContentMask, CursorStyle, Edges, Element,
     ElementId, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement,
     IsZero, LayoutId, ListState, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels,
-    Point, Position, ScrollHandle, ScrollWheelEvent, Size, Style, UniformListScrollHandle, Window,
+    Point, Position, ScrollEvent, ScrollHandle, Size, Style, UniformListScrollHandle, Window,
     fill, point, px, relative, size,
 };
 use schemars::JsonSchema;
@@ -819,7 +819,7 @@ impl Element for Scrollbar {
                         let state = scrollbar_state.clone();
                         let scroll_handle = self.scroll_handle.clone();
 
-                        move |event: &ScrollWheelEvent, phase, _, cx| {
+                        move |event: &ScrollEvent, phase, _, cx| {
                             if phase.bubble() && hitbox_bounds.contains(&event.position) {
                                 if scroll_handle.offset() != state.get().last_scroll_offset {
                                     state.set(state.get().with_last_scroll(
