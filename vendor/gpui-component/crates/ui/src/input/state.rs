@@ -165,13 +165,14 @@ pub(crate) fn init(cx: &mut App) {
             },
             Some(CONTEXT),
         ),
-        KeyBinding::new(
+        crate::dynamic_key_binding(
             "secondary-enter",
             Enter {
                 secondary: true,
                 shift: false,
             },
-            Some(CONTEXT),
+            CONTEXT,
+            cx,
         ),
         KeyBinding::new("escape", Escape, Some(CONTEXT)),
         KeyBinding::new("up", MoveUp, Some(CONTEXT)),

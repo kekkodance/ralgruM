@@ -1,6 +1,27 @@
 use gpui::{App, SharedString};
 use std::ops::Deref;
 
+pub(crate) fn dynamic_key_binding<A: gpui::Action>(
+    keystrokes: &str,
+    action: A,
+    context: &str,
+    cx: &App,
+) -> gpui::KeyBinding {
+    gpui::KeyBinding::load(
+        keystrokes,
+        Box::new(action),
+        Some(
+            gpui::KeyBindingContextPredicate::parse(context)
+                .unwrap()
+                .into(),
+        ),
+        false,
+        None,
+        cx,
+    )
+    .unwrap()
+}
+
 mod async_util;
 mod element_ext;
 mod event;

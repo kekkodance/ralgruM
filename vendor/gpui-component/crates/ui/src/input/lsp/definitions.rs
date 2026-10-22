@@ -134,7 +134,7 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<InputState>,
     ) -> bool {
-        if !event.modifiers.secondary() {
+        if !event.modifiers.secondary(cx) {
             return false;
         }
 

@@ -5,10 +5,11 @@ use std::{
 
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId,
-    GlobalElementId, HighlightStyle, InspectorElementId, InteractiveElement as _, IntoElement,
-    LayoutId, LineFragment as WrapLineFragment, ObjectFit, Pixels, ShapedLine, SharedString,
-    SharedUri, Size, StatefulInteractiveElement as _, Styled, StyledImage as _, TextRun, TextStyle,
-    WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative, size,
+    GlobalElementId, HighlightStyle, IndentAdjustment, InspectorElementId, InteractiveElement as _,
+    IntoElement, LayoutId, LineFragment as WrapLineFragment, ObjectFit, Pixels, ShapedLine,
+    SharedString, SharedUri, Size, StatefulInteractiveElement as _, Styled, StyledImage as _,
+    TextRun, TextStyle, WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative,
+    size,
 };
 
 use crate::{WindowExt as _, tooltip::Tooltip};
@@ -508,7 +509,7 @@ fn line_ranges(
         .text_system()
         .line_wrapper(text_style.font(), font_size);
     let boundaries = wrapper
-        .wrap_line(&wrap_fragments, wrap_width)
+        .wrap_line(&wrap_fragments, wrap_width, IndentAdjustment::SameIndent)
         .map(|boundary| boundary.ix.min(total_len))
         .collect::<Vec<_>>();
     let mut ranges = Vec::with_capacity(boundaries.len() + 1);
