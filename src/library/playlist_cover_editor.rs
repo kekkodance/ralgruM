@@ -2,8 +2,8 @@ use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc};
 
 use gpui::{
     Context, CursorStyle, DragMoveEvent, Entity, ExternalPaths, Image, ImageSource, IntoElement,
-    KeyDownEvent, ObjectFit, Pixels, Point, Render, Role, ScrollDelta, ScrollWheelEvent,
-    SharedString, Window, div, img, prelude::*, px, relative, rgb, rgba,
+    KeyDownEvent, ObjectFit, Pixels, Point, Render, Role, ScrollDelta, ScrollEvent, SharedString,
+    Window, div, img, prelude::*, px, relative, rgb, rgba,
 };
 use gpui_component::slider::{Slider, SliderState};
 
@@ -293,7 +293,7 @@ fn crop_preview<T: PlaylistCoverEditor>(
     preview
         .cursor(CursorStyle::OpenHand)
         .focus_visible(|style| style.border_color(rgb(PRIMARY)))
-        .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+        .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
             let delta = match event.delta {
                 ScrollDelta::Lines(lines) => cover_wheel_zoom_delta(lines.y, false),
                 ScrollDelta::Pixels(pixels) => cover_wheel_zoom_delta(f32::from(pixels.y), true),

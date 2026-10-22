@@ -459,7 +459,7 @@ pub(crate) trait AppTooltipExt:
                 }
             }
         })
-        .on_scroll_wheel(move |_, _, cx| {
+        .on_scroll(move |_, _, cx| {
             if let Some(overlay) = global_overlay(cx) {
                 overlay.update(cx, |overlay, cx| overlay.request_hide(cx));
             }

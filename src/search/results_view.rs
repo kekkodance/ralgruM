@@ -1395,7 +1395,7 @@ mod tests {
             _ = window.draw(cx);
         });
 
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: gpui::point(px(20.), px(20.)),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-120.))),
             ..Default::default()
