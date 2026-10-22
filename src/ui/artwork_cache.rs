@@ -9,11 +9,10 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use futures::FutureExt;
+use futures::{FutureExt, future::Shared};
 use gpui::{
     App, AppContext, Asset, AssetLogger, Entity, Global, Image, ImageAssetLoader, ImageCache,
-    ImageCacheError, ImageCacheItem, ImageFormat, ImageLoadingTask, RenderImage, Resource,
-    SvgRenderer, WeakEntity, Window,
+    ImageCacheError, ImageFormat, RenderImage, Resource, SvgRenderer, Task, WeakEntity, Window,
 };
 use reqwest::Client;
 use sha2::{Digest, Sha256};
@@ -31,6 +30,26 @@ const ARTWORK_MEMORY_CACHE_LIMIT: usize = 512;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+type ArtworkLoadingTask = Shared<Task<Result<Arc<RenderImage>, ImageCacheError>>>;
+
+enum ArtworkCacheItem {
+    Loading(ArtworkLoadingTask),
+    Loaded(Result<Arc<RenderImage>, ImageCacheError>),
+}
+
+impl ArtworkCacheItem {
+    fn get(&mut self) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        match self {
+            Self::Loading(task) => {
+                let result = task.clone().now_or_never()?;
+                *self = Self::Loaded(result.clone());
+                Some(result)
+            }
+            Self::Loaded(result) => Some(result.clone()),
+        }
+    }
+}
+
 /// Persistent artwork storage backed by GPUI's in-memory image cache.
 ///
 /// URI resources are downloaded once, validated, and atomically stored on disk.
@@ -42,7 +61,7 @@ pub(crate) struct ArtworkCache {
     client: Client,
     download_gate: Arc<Semaphore>,
     pruner: Arc<ArtworkPruner>,
-    items: HashMap<Resource, ImageCacheItem>,
+    items: HashMap<Resource, ArtworkCacheItem>,
     loading_cancellations: HashMap<Resource, CancellationToken>,
     access_order: LruOrder<Resource>,
 }
@@ -113,7 +132,7 @@ impl ArtworkCache {
     fn insert_loading(
         &mut self,
         source: Resource,
-        task: ImageLoadingTask,
+        task: ArtworkLoadingTask,
         cancellation: Option<CancellationToken>,
         window: &mut Window,
         cx: &mut App,
@@ -123,7 +142,7 @@ impl ArtworkCache {
                 .insert(source.clone(), cancellation);
         }
         self.items
-            .insert(source.clone(), ImageCacheItem::Loading(task.clone()));
+            .insert(source.clone(), ArtworkCacheItem::Loading(task.clone()));
         self.access_order.touch(&source);
         self.trim_memory_cache(Some(&source), window, cx);
         let entity = window.current_view();
@@ -146,8 +165,8 @@ impl ArtworkCache {
             // A finished load counts as loaded even when it finished with an
             // error: the img element renders nothing for errors either way, so
             // the placeholder beneath it stays visible.
-            Some(ImageCacheItem::Loading(task)) => task.clone().now_or_never().is_some(),
-            Some(ImageCacheItem::Loaded(_)) => true,
+            Some(ArtworkCacheItem::Loading(task)) => task.clone().now_or_never().is_some(),
+            Some(ArtworkCacheItem::Loaded(_)) => true,
             None => false,
         }
     }

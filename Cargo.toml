@@ -99,11 +99,11 @@ opt-level = 3
 strip = true
 
 [patch."https://github.com/zed-industries/zed"]
-# Vendored gpui (pinned Zed checkout 5a9b955) with the retained-heights patch
-# in list.rs: a width change keeps measured item sizes so sidebar width
-# animations reflow per frame without re-rendering a measured-all feed.
+# Vendored GPUI from Zed c18e71c, carrying local list measurement, suspend
+# observer, and window option changes forward from the previous vendor copy.
 gpui = { path = "vendor/gpui" }
-# Keep this small Windows backend patch until GPUI handles stale atlas batches upstream.
+# Vendored Windows backend from the same Zed commit, retaining stale-atlas safety,
+# suspend/session forwarding, custom windows, and the existing direct native prompts.
 gpui_windows = { path = "vendor/gpui_windows" }
 [patch.crates-io]
 # Vendored cpal (0.16.0) with one fix: every ASIO Device handle shares the

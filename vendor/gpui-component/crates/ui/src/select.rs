@@ -43,11 +43,7 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("down", SelectDown, Some(CONTEXT)),
         KeyBinding::new("enter", Confirm { secondary: false }, Some(CONTEXT)),
-        KeyBinding::new(
-            "secondary-enter",
-            Confirm { secondary: true },
-            Some(CONTEXT),
-        ),
+        crate::dynamic_key_binding("secondary-enter", Confirm { secondary: true }, CONTEXT, cx),
         KeyBinding::new("escape", Cancel, Some(CONTEXT)),
     ])
 }

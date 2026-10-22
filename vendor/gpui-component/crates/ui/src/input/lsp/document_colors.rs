@@ -1,9 +1,9 @@
-use std::ops::Range;
-use web_time::Duration;
 use anyhow::Result;
 use gpui::{App, Context, Hsla, Task, Window};
 use lsp_types::ColorInformation;
 use ropey::Rope;
+use std::ops::Range;
+use web_time::Duration;
 
 use crate::input::{InputState, Lsp, RopeExt};
 

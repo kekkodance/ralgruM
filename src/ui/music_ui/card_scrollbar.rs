@@ -1,6 +1,6 @@
 use gpui::{
     App, Bounds, Hitbox, HitboxBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, ScrollHandle, ScrollWheelEvent, Window, canvas, fill, point, prelude::*, px, size,
+    Pixels, ScrollEvent, ScrollHandle, Window, canvas, fill, point, prelude::*, px, size,
 };
 use gpui_component::ActiveTheme;
 use std::{
@@ -716,7 +716,7 @@ fn register_handlers(
     let wheel_viewport = viewport_hitbox.clone();
     let wheel_snap_epoch = snap_epoch.clone();
     let wheel_pending_target = pending_target.clone();
-    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+    window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
         if phase.capture() && wheel_viewport.should_handle_scroll(window) {
             let delta = event.delta.pixel_delta(window.line_height());
             if should_consume_horizontal_scroll(f32::from(delta.x), f32::from(delta.y)) {

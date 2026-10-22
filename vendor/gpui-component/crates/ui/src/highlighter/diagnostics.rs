@@ -3,13 +3,13 @@ use std::{
     ops::{Deref, Range},
 };
 
-use gpui::{px, App, HighlightStyle, Hsla, SharedString, UnderlineStyle};
+use gpui::{App, HighlightStyle, Hsla, SharedString, UnderlineStyle, px};
 use ropey::Rope;
 use sum_tree::{Bias, SeekTarget, SumTree};
 
 use crate::{
-    input::{Position, RopeExt as _},
     ActiveTheme,
+    input::{Position, RopeExt as _},
 };
 
 pub type DiagnosticRelatedInformation = lsp_types::DiagnosticRelatedInformation;

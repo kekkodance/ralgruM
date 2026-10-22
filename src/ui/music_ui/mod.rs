@@ -1,8 +1,8 @@
 use gpui::{
     AnimationExt as _, AnyElement, App, Bounds, ClickEvent, CursorStyle, Div, ElementId,
-    FontWeight, HighlightStyle, InteractiveText, Pixels, ScrollHandle, ScrollWheelEvent,
-    SharedString, Stateful, StyledText, TextAlign, UnderlineStyle, Window, canvas, div, fill,
-    point, prelude::*, px, rgb, rgba, size, svg,
+    FontWeight, HighlightStyle, InteractiveText, Pixels, ScrollEvent, ScrollHandle, SharedString,
+    Stateful, StyledText, TextAlign, UnderlineStyle, Window, canvas, div, fill, point, prelude::*,
+    px, rgb, rgba, size, svg,
 };
 use std::{
     cell::Cell,
@@ -308,7 +308,7 @@ pub(crate) fn horizontal_scroll_boundary(
         .id(id)
         .flex_1()
         .min_w_0()
-        .on_scroll_wheel(|event: &ScrollWheelEvent, window, cx| {
+        .on_scroll(|event: &ScrollEvent, window, cx| {
             let delta = event.delta.pixel_delta(window.line_height());
             // Let vertical wheel events bubble to the page. Only horizontal
             // trackpad motion belongs to this row.
