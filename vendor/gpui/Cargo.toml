@@ -121,7 +121,7 @@ async-channel = { version = "2.5", default-features = false }
 async-channel = { version = "2.5", default-features = false, features = ["std"] }
 [target."cfg(not(target_family = \"wasm\"))"]
 [target."cfg(not(target_family = \"wasm\"))".dependencies]
-pollster = { version = "0.4.0" }
+pollster = { version = "1.0.1" }
 [target."cfg(not(target_family = \"wasm\"))".dev-dependencies]
 http_client = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
 proptest = { version = "1.12.0", features = ["attr-macro"] }
