@@ -7,7 +7,7 @@ use std::{
 use gpui::{
     AnyElement, App, CursorStyle, ElementId, Hitbox, HitboxBehavior, ListOffset, ListState,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta,
-    ScrollHandle, ScrollWheelEvent, Size, Window, canvas, div, point, prelude::*, px, size,
+    ScrollEvent, ScrollHandle, Size, Window, canvas, div, point, prelude::*, px, size,
 };
 use gpui_component::scroll::ScrollbarHandle;
 
@@ -500,7 +500,7 @@ impl BrowserScrollState {
     /// Registers a callback invoked on captured wheel scrolls over this
     /// surface. The capture-phase handler consumes wheel events before
     /// bubble-phase listeners run, so scroll-dismissal hooks (closing an
-    /// open dropdown) must attach here instead of `on_scroll_wheel`.
+    /// open dropdown) must attach here instead of `on_scroll`.
     pub(crate) fn on_wheel(&self, callback: impl Fn(&mut Window, &mut App) + 'static) {
         self.inner.borrow_mut().on_wheel = Some(Rc::new(callback));
     }
@@ -763,7 +763,7 @@ fn register_handlers(
     let wheel_hitbox = hitbox.clone();
     let wheel_target = target.clone();
     let wheel_state = state.clone();
-    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+    window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
         if !phase.capture() {
             return;
         }

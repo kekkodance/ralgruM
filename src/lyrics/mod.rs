@@ -1743,7 +1743,7 @@ mod tests {
         );
         assert!(centered < 0.);
 
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: viewport.center(),
             delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-120.))),
             ..Default::default()

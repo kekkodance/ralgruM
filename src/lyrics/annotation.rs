@@ -850,7 +850,7 @@ mod tests {
             .debug_bounds("genius-annotation-scroll")
             .expect("annotation scroll viewport should render");
 
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui::ScrollEvent {
             position: scroll_bounds.center(),
             delta: gpui::ScrollDelta::Lines(gpui::point(0., -3.)),
             ..Default::default()
@@ -898,7 +898,7 @@ mod tests {
             .expect("annotation scroll viewport should render");
 
         // Make the scrolling-only scrollbar visible before exercising its track.
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui::ScrollEvent {
             position: scroll_bounds.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40.))),
             ..Default::default()
@@ -955,7 +955,7 @@ mod tests {
             .expect("annotation scrollbar overlay should render");
 
         // Make the scrolling-only thumb visible and move it slightly off the top edge.
-        visual.simulate_event(gpui::ScrollWheelEvent {
+        visual.simulate_event(gpui::ScrollEvent {
             position: scroll_bounds.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-30.))),
             ..Default::default()
