@@ -1420,8 +1420,35 @@ fn safe_cache_filename<'a>(value: &'a str, extension: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::{
+        io,
+        pin::Pin,
+        task::{Context, Poll},
+        time::Duration,
+    };
     use tempfile::TempDir;
+
+    #[derive(Default)]
+    struct CountingWriter(Vec<u8>);
+
+    impl AsyncWrite for CountingWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buffer: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.0.extend_from_slice(buffer);
+            Poll::Ready(Ok(buffer.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     fn test_track(id: &str, title: &str) -> PlaybackTrack {
         PlaybackTrack {
@@ -1820,8 +1847,7 @@ mod tests {
             .complete_download_variant(&track, DownloadVariant::Standard, &cancellation)
             .await
             .expect("complete cache should be copyable");
-        let output_path = temp.path().join("copy.part");
-        let mut output = File::create(&output_path).await.unwrap();
+        let mut output = CountingWriter::default();
         let cancel_after_first_chunk = cancellation.clone();
         let progress = move |downloaded: u64, _: u64| {
             if downloaded >= 64 * 1024 {
@@ -1832,9 +1858,8 @@ mod tests {
             .copy_cached_variant(&cached, &mut output, &cancellation, Some(&progress))
             .await
             .expect_err("cancellation must stop a cache copy");
-        drop(output);
         assert_eq!(error, "Download request cancelled");
-        let copied = tokio::fs::metadata(output_path).await.unwrap().len();
+        let copied = output.0.len() as u64;
         assert!(copied >= 64 * 1024 && copied < total);
 
         tokio::fs::remove_file(&path).await.unwrap();
