@@ -125,7 +125,7 @@ impl FavoriteController {
                 && completed
                 && let Some(library) = library.and_then(|library| library.upgrade())
             {
-                let _ = library.update(cx, |library, cx| {
+                library.update(cx, |library, cx| {
                     library.refresh_after_favorite(provider, category, cx);
                 });
             }
