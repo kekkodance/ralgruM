@@ -158,6 +158,11 @@ impl RalgrumApp {
         } else {
             0.
         };
+        let compact_icon_offset = if library_route && service == Some(LibraryService::Local) {
+            0.
+        } else {
+            2.
+        };
         let label_element = div()
             .flex_none()
             .min_w(px(0.))
@@ -216,10 +221,10 @@ impl RalgrumApp {
                         responsive.target_compact || local_optical_offset > 0.,
                         |this| {
                             this.relative().left(px(if responsive.target_compact {
-                                2.
+                                compact_icon_offset
                             } else {
-                                0.
-                            } + local_optical_offset))
+                                local_optical_offset
+                            }))
                         },
                     )
                     .child(source_icon(icon, text)),
