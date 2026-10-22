@@ -139,7 +139,7 @@ waker-fn = "1.2.0"
 lyon = "1.0"
 pin-project = "1.1.10"
 spin = "0.10.0"
-pollster = "0.4.0"
+pollster = "1.0.1"
 url = "2.2"
 uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
 web-time = "1.1.0"
