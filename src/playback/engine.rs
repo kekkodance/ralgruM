@@ -358,12 +358,14 @@ impl RodioEngine {
                     .open_stream_or_fallback()
             })
             .map_err(|_| format!("The audio output device \"{name}\" could not be opened"))?;
-        move_own_streams_to_sink(&sink.name).map_err(|error| {
+        if let Err(error) = move_own_streams_to_sink(&sink.name) {
             // Dropping the stream removes the sink input that could not be
             // routed, so the caller's system-default fallback opens cleanly.
             drop(stream);
-            format!("The audio output device \"{name}\" could not be selected: {error}")
-        })?;
+            return Err(format!(
+                "The audio output device \"{name}\" could not be selected: {error}"
+            ));
+        }
         crate::diagnostics::event(
             "INFO",
             format!(
