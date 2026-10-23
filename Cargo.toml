@@ -16,7 +16,13 @@ live-soundcloud-tests = []
 [dependencies]
 # Cargo.lock pins the tested Zed commit; do not add a direct rev because it would split package identity.
 gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed" }
+# The wayland and x11 features compile GPUI's Linux display backends; without
+# them gpui_platform builds gpui_linux with no backend at all, and every
+# window opens headless (laid out but never shown on screen).
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+    "wayland",
+    "x11",
+] }
 reqwest_client = { git = "https://github.com/zed-industries/zed" }
 gpui-component = { path = "vendor/gpui-component/crates/ui" }
 gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
