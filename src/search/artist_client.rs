@@ -7,11 +7,56 @@ use super::{
     client::{SOUNDCLOUD_CLIENT_ID, SearchClient},
     credential::{DeezerArl, SoundCloudToken},
     detail::{DetailPage, DetailRoute, parse_release_date},
-    models::{ArtistPage, Provider, ProviderError, ResultType},
+    models::{ArtistPage, Provider, ProviderError, ResultType, Track},
     normalize::{normalize_card, normalize_tracks},
 };
 
 impl SearchClient {
+    pub(crate) async fn artist_tracks(
+        &self,
+        provider: Provider,
+        id: &str,
+        deezer_arl: Option<DeezerArl>,
+        soundcloud_token: Option<SoundCloudToken>,
+    ) -> Result<Vec<Track>, ProviderError> {
+        let id = super::detail::validate_id(id)?;
+        match provider {
+            Provider::Deezer => {
+                let session = self.deezer_session(deezer_arl).await?;
+                let response = self
+                    .deezer_gateway(
+                        &session,
+                        "artist.getTopTrack",
+                        json!({"art_id": id, "nb": 2000}),
+                    )
+                    .await?;
+                let (popular, _) = response_data(&response, "artist.getTopTrack")?;
+                let ids = popular
+                    .iter()
+                    .filter_map(|track| value_string(track.get("SNG_ID")))
+                    .collect::<Vec<_>>();
+                let hydrated = if ids.is_empty() {
+                    Vec::new()
+                } else {
+                    let response = self
+                        .deezer_gateway(&session, "song.getListData", json!({"sng_ids": ids}))
+                        .await?;
+                    response_data(&response, "song.getListData")?.0
+                };
+                let tracks = super::detail_client::merge_deezer_tracks(popular, hydrated);
+                Ok(normalize_tracks(Provider::Deezer, &tracks))
+            }
+            Provider::SoundCloud => {
+                let token = soundcloud_token
+                    .ok_or_else(|| ProviderError::new("SoundCloud account required"))?;
+                let tracks = self
+                    .soundcloud_artist_collection(&id, SoundCloudArtistResource::Tracks, &token)
+                    .await?;
+                Ok(normalize_tracks(Provider::SoundCloud, &tracks))
+            }
+        }
+    }
+
     pub(super) async fn artist_detail(
         &self,
         mut route: DetailRoute,

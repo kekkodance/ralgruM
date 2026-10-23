@@ -602,20 +602,24 @@ fn render_local_playlist_header_snapshot(
         .as_ref()
         .ok()
         .and_then(|store| store.artwork_path(&route.id, &page.artwork));
-    let mut actions = vec![render_local_detail_edit(&route.id, host)];
-    actions.push(render_local_detail_more(
-        &Card {
-            kind: Category::Playlists,
-            id: route.id.clone(),
-            title: page.title.clone(),
-            subtitle: page.description.clone(),
-            artwork: page.artwork.clone(),
-            badge: page.tracks.len().to_string(),
-            library_service: Some(Service::Local),
-            ..Card::default()
-        },
+    let card = Card {
+        kind: Category::Playlists,
+        id: route.id.clone(),
+        title: page.title.clone(),
+        subtitle: page.description.clone(),
+        artwork: page.artwork.clone(),
+        badge: page.tracks.len().to_string(),
+        library_service: Some(Service::Local),
+        ..Card::default()
+    };
+    let mut actions = vec![render_playlist_play_control(
         host,
-    ));
+        Service::Local,
+        route.id.clone(),
+        None,
+    )];
+    actions.push(render_local_detail_edit(&route.id, host));
+    actions.push(render_local_detail_more(&card, host));
     render_shared_local_playlist_header(LocalPlaylistHeaderSpec {
         artwork,
         title: page.title.clone(),
@@ -641,6 +645,20 @@ fn render_provider_header_snapshot(
 ) -> AnyElement {
     let route = view.state.route();
     let mut actions = Vec::new();
+    if route.category == Category::Playlists {
+        if let Some(card) = detail_more_card(view) {
+            let service = match route.source {
+                crate::search::Provider::Deezer => Service::Deezer,
+                crate::search::Provider::SoundCloud => Service::SoundCloud,
+            };
+            actions.push(render_playlist_play_control(
+                host,
+                service,
+                route.id.clone(),
+                Some(card),
+            ));
+        }
+    }
     if let Some(favorite) = snapshot.favorite.as_ref() {
         actions.push(render_detail_favorite(favorite, host));
     }
@@ -1344,6 +1362,46 @@ fn render_liked_tracks_play_control(
                 .icon(Icon::default().path(LocalIcon::Play.path()))
                 .on_click(move |_, _, app| {
                     host.update(app, |this, cx| this.play_liked_tracks(service, cx));
+                }),
+        )
+        .into_any_element()
+}
+
+fn render_playlist_play_control(
+    host: &gpui::Entity<LibraryView>,
+    service: Service,
+    playlist_id: String,
+    provider_card: Option<Card>,
+) -> AnyElement {
+    let host = host.clone();
+    let button_id = format!("library-playlist-play-{}-{playlist_id}", service.label());
+    div()
+        .id(format!("{button_id}-tooltip"))
+        .flex_none()
+        .size(px(22.))
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .app_tooltip("Play playlist")
+        .child(
+            Button::new(button_id)
+                .xsmall()
+                .with_size(px(14.666666))
+                .ghost()
+                .size(px(22.))
+                .rounded(px(6.))
+                .text_color(rgb(MUTED))
+                .cursor_pointer()
+                .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
+                .icon(Icon::default().path(LocalIcon::Play.path()))
+                .on_click(move |_, _, app| {
+                    let provider_card = provider_card.clone();
+                    host.update(app, |this, cx| match provider_card {
+                        Some(card) => this.play_collection(card, cx),
+                        None => this.play_local_playlist(playlist_id.clone(), cx),
+                    });
                 }),
         )
         .into_any_element()

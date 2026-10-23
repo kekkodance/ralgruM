@@ -1,6 +1,87 @@
 use super::*;
 
 impl LibraryView {
+    pub(crate) fn play_artist_tracks_now(
+        &mut self,
+        provider: Provider,
+        artist_id: String,
+        artist_title: String,
+        cx: &mut Context<Self>,
+    ) {
+        let artist_id = artist_id.trim().to_owned();
+        if artist_id.is_empty() || !artist_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            return;
+        }
+        let soundcloud_token = self.account.read(cx).soundcloud_token();
+        if provider == Provider::SoundCloud && soundcloud_token.is_none() {
+            crate::toast::push_global(
+                cx,
+                crate::toast::ToastKind::Error,
+                "Could not play artist",
+                Some("A SoundCloud account is required.".into()),
+            );
+            return;
+        }
+        let Ok(client) = crate::search::SearchClient::new() else {
+            crate::toast::push_global(
+                cx,
+                crate::toast::ToastKind::Error,
+                "Could not play artist",
+                Some("The search client is unavailable.".into()),
+            );
+            return;
+        };
+        let deezer_arl = self.account.read(cx).deezer_arl();
+        let action_generation = self.invalidate_playback_actions();
+        let queue_epoch = self.playback.read(cx).state.queue_epoch();
+        let playback = self.playback.clone();
+        let task = self.runtime.spawn(async move {
+            client
+                .artist_tracks(provider, &artist_id, deezer_arl, soundcloud_token)
+                .await
+                .map_err(|error| error.message)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task
+                .await
+                .unwrap_or_else(|_| Err("Artist track request failed".into()));
+            this.update(cx, |this, cx| {
+                let still_current = this.playback_action_generation == action_generation
+                    && this.playback.read(cx).state.queue_epoch() == queue_epoch;
+                if !still_current {
+                    return;
+                }
+                match result {
+                    Ok(tracks) if !tracks.is_empty() => {
+                        let queue = tracks
+                            .iter()
+                            .map(PlaybackTrack::from_search)
+                            .collect::<Vec<_>>();
+                        playback.update(cx, |playback, cx| {
+                            if playback.state.queue_epoch() == queue_epoch {
+                                playback.play_queue(queue, cx);
+                            }
+                        });
+                    }
+                    Ok(_) => crate::toast::push_global(
+                        cx,
+                        crate::toast::ToastKind::Info,
+                        "No tracks to play",
+                        Some(format!("No playable tracks were found for {artist_title}.").into()),
+                    ),
+                    Err(error) => crate::toast::push_global(
+                        cx,
+                        crate::toast::ToastKind::Error,
+                        "Could not play artist",
+                        Some(error.into()),
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(crate) fn play_liked_tracks(&mut self, service: super::Service, cx: &mut Context<Self>) {
         if !matches!(service, super::Service::Deezer | super::Service::SoundCloud)
             || self.state.service != service

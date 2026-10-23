@@ -228,13 +228,6 @@ where
             let queue_empty = host.read(cx).playback.read(cx).state.queue.is_empty();
             let next_enabled = enabled && has_tracks;
             let last_enabled = next_enabled && !queue_empty;
-            let menu = items::library_collection_queue_items(
-                menu,
-                card.clone(),
-                host.clone(),
-                next_enabled,
-                last_enabled,
-            );
             let menu = if entity.kind == EntityKind::Playlist {
                 let play_host = host.clone();
                 let play_card = card.clone();
@@ -253,6 +246,13 @@ where
             } else {
                 menu
             };
+            let menu = items::library_collection_queue_items(
+                menu,
+                card.clone(),
+                host.clone(),
+                next_enabled,
+                last_enabled,
+            );
             let menu = if download_enabled {
                 items::library_collection_download_submenu(
                     menu.separator(),
@@ -666,13 +666,6 @@ where
             let queue_empty = search.read(cx).playback.read(cx).state.queue.is_empty();
             let next_enabled = routable && has_tracks;
             let last_enabled = next_enabled && !queue_empty;
-            let menu = items::collection_queue_items(
-                menu,
-                card.clone(),
-                search.clone(),
-                next_enabled,
-                last_enabled,
-            );
             let menu = if entity.kind == EntityKind::Playlist {
                 let play_search = search.clone();
                 let play_card = card.clone();
@@ -691,6 +684,13 @@ where
             } else {
                 menu
             };
+            let menu = items::collection_queue_items(
+                menu,
+                card.clone(),
+                search.clone(),
+                next_enabled,
+                last_enabled,
+            );
             let menu = if routable && has_tracks {
                 items::collection_download_submenu(
                     menu.separator(),

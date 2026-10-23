@@ -845,6 +845,24 @@ pub(super) fn artist_menu_items<N: TrackMenuHost>(
             }
         }),
     );
+    let play_host = host.clone();
+    let play_provider = entity.provider;
+    let play_id = entity.id.clone();
+    let play_title = entity.title.clone();
+    let play_enabled =
+        valid_artist && matches!(entity.provider, Provider::Deezer | Provider::SoundCloud);
+    let menu = menu.item(action_item(
+        "Play",
+        Some(LocalIcon::Play),
+        !play_enabled,
+        move |_, _, cx| {
+            if play_enabled {
+                play_host.update(cx, |host, cx| {
+                    host.play_artist_tracks(play_provider, play_id.clone(), play_title.clone(), cx);
+                });
+            }
+        },
+    ));
     if !valid_deezer_artist {
         if entity.provider == Provider::SoundCloud {
             let station_host = host.clone();
@@ -1122,6 +1140,7 @@ fn artist_context_order(valid_deezer_artist: bool) -> Vec<&'static str> {
     if valid_deezer_artist {
         vec![
             "favorite",
+            "play",
             "separator",
             "similar-artists",
             "mix",
@@ -1131,7 +1150,13 @@ fn artist_context_order(valid_deezer_artist: bool) -> Vec<&'static str> {
             "copy-link",
         ]
     } else {
-        vec!["favorite-disabled", "separator", "copy-name", "copy-link"]
+        vec![
+            "favorite-disabled",
+            "play-disabled",
+            "separator",
+            "copy-name",
+            "copy-link",
+        ]
     }
 }
 
@@ -1139,6 +1164,7 @@ fn artist_context_order(valid_deezer_artist: bool) -> Vec<&'static str> {
 fn soundcloud_artist_context_order() -> Vec<&'static str> {
     vec![
         "favorite",
+        "play",
         "separator",
         "station",
         "separator",
@@ -1756,11 +1782,12 @@ mod tests {
     }
 
     #[test]
-    fn deezer_artist_menu_order_matches_original_core() {
+    fn deezer_artist_menu_order_places_play_after_favorite() {
         assert_eq!(
             artist_context_order(true),
             vec![
                 "favorite",
+                "play",
                 "separator",
                 "similar-artists",
                 "mix",
@@ -1786,6 +1813,7 @@ mod tests {
             soundcloud_artist_context_order(),
             vec![
                 "favorite",
+                "play",
                 "separator",
                 "station",
                 "separator",

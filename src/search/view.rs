@@ -356,6 +356,18 @@ impl crate::entity_navigation::TrackMenuHost for SearchView {
         self.start_deezer_artist_mix(artist_id, cx);
     }
 
+    fn play_artist_tracks(
+        &mut self,
+        provider: Provider,
+        artist_id: String,
+        artist_title: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.library.update(cx, |library, cx| {
+            library.play_artist_tracks_now(provider, artist_id, artist_title, cx);
+        });
+    }
+
     fn start_soundcloud_artist_station(&mut self, artist_id: String, cx: &mut Context<Self>) {
         self.start_soundcloud_artist_station(artist_id, cx);
     }

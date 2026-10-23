@@ -377,6 +377,18 @@ pub(crate) trait TrackMenuHost: 'static {
     {
     }
 
+    /// Plays an artist's provider-specific track collection as a regular queue.
+    fn play_artist_tracks(
+        &mut self,
+        _provider: Provider,
+        _artist_id: String,
+        _artist_title: String,
+        _cx: &mut Context<Self>,
+    ) where
+        Self: Sized,
+    {
+    }
+
     /// Starts a SoundCloud artist station through the existing infinite
     /// station queue and tail-extension flow.
     fn start_soundcloud_artist_station(&mut self, _artist_id: String, _cx: &mut Context<Self>)
