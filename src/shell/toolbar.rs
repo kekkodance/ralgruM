@@ -935,7 +935,7 @@ pub(super) fn render_top_toolbar(
                 this.submit_search_now(cx);
             }
         }));
-    let viewport_width = f32::from(window.viewport_size().width);
+    let viewport_width = crate::music_ui::window_content_width(window);
     let metrics = crate::music_ui::shell_metrics(viewport_width);
     let toolbar_inset = if metrics.narrow_content {
         metrics.gutter

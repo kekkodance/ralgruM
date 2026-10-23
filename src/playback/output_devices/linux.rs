@@ -1,4 +1,4 @@
-use std::{collections::HashSet, process::Command, thread, time::Duration};
+use std::{collections::HashSet, process::Command, sync::Mutex, thread, time::Duration};
 
 /// PCM exposed by the PulseAudio ALSA plugin. Opening it makes the stream a
 /// pipewire-pulse client, which is what lets the sink be chosen at runtime
@@ -27,7 +27,46 @@ impl LabeledSink {
 /// are what PipeWire tools such as `wpctl` show.
 pub(crate) fn list_sinks() -> Result<Vec<LabeledSink>, String> {
     let listing = run_pactl(&["list", "sinks"])?;
-    Ok(label_sinks(parse_pactl_sinks(&listing)))
+    let sinks = label_sinks(parse_pactl_sinks(&listing));
+    log_inventory(&sinks);
+    Ok(sinks)
+}
+
+/// Logs the sound server inventory whenever it changes. Sinks and sources are
+/// logged together because a missing USB interface is often a capture-only
+/// device, and the picker only lists playback sinks.
+fn log_inventory(sinks: &[LabeledSink]) {
+    static LAST_INVENTORY: Mutex<Option<String>> = Mutex::new(None);
+    let sinks = sinks
+        .iter()
+        .map(|sink| format!("{}={}", sink.name, sink.label))
+        .collect::<Vec<_>>();
+    let sources = run_pactl(&["list", "sources"])
+        .map(|listing| {
+            parse_pactl_sources(&listing)
+                .into_iter()
+                .map(|source| {
+                    if source.description.is_empty() {
+                        source.name
+                    } else {
+                        format!("{}={}", source.name, source.description)
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|error| vec![format!("unavailable: {error}")]);
+    let inventory = format!("sinks: {sinks:?}; sources: {sources:?}");
+    let changed = match LAST_INVENTORY.lock() {
+        Ok(last) if last.as_deref() == Some(inventory.as_str()) => false,
+        Ok(mut last) => {
+            *last = Some(inventory.clone());
+            true
+        }
+        Err(_) => true,
+    };
+    if changed {
+        crate::diagnostics::event("INFO", format!("linux audio {inventory}"));
+    }
 }
 
 /// Finds the sink whose picker label, or legacy node name, matches `value`.
@@ -100,13 +139,21 @@ struct SinkEntry {
 /// node name, while the long form carries the same description PipeWire
 /// shows in its own tools.
 fn parse_pactl_sinks(listing: &str) -> Vec<SinkEntry> {
-    let mut sinks = Vec::new();
+    parse_pactl_entries(listing, "Sink #")
+}
+
+fn parse_pactl_sources(listing: &str) -> Vec<SinkEntry> {
+    parse_pactl_entries(listing, "Source #")
+}
+
+fn parse_pactl_entries(listing: &str, block_prefix: &str) -> Vec<SinkEntry> {
+    let mut entries = Vec::new();
     let mut name = None;
     let mut description = String::new();
     for line in listing.lines() {
         let line = line.trim();
-        if line.starts_with("Sink #") {
-            flush_sink(&mut sinks, &mut name, &mut description);
+        if line.starts_with(block_prefix) {
+            flush_sink(&mut entries, &mut name, &mut description);
             continue;
         }
         if let Some(value) = line.strip_prefix("Name:") {
@@ -115,8 +162,8 @@ fn parse_pactl_sinks(listing: &str) -> Vec<SinkEntry> {
             description = value.trim().to_owned();
         }
     }
-    flush_sink(&mut sinks, &mut name, &mut description);
-    sinks
+    flush_sink(&mut entries, &mut name, &mut description);
+    entries
 }
 
 fn flush_sink(sinks: &mut Vec<SinkEntry>, name: &mut Option<String>, description: &mut String) {
@@ -339,6 +386,25 @@ Sink #73
             [LabeledSink {
                 name: "same".to_owned(),
                 label: "First".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_capture_sources_for_diagnostics() {
+        let listing = "\
+Source #54
+\tState: SUSPENDED
+\tName: alsa_input.usb-fifine_microphone-00.mono-fallback
+\tDescription: fifine Microphone
+\tDriver: PipeWire
+";
+
+        assert_eq!(
+            parse_pactl_sources(listing),
+            [SinkEntry {
+                name: "alsa_input.usb-fifine_microphone-00.mono-fallback".to_owned(),
+                description: "fifine Microphone".to_owned(),
             }]
         );
     }

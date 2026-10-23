@@ -287,6 +287,10 @@ mod windows_impl {
             .is_some_and(|controller| controller.quit_requested)
     }
 
+    pub(super) fn is_installed(cx: &App) -> bool {
+        cx.try_global::<TrayController>().is_some()
+    }
+
     pub(super) fn hide_window(window: &Window) {
         if let Some(hwnd) = media_control::window_handle(window) {
             set_window_visibility(hwnd, false);
@@ -1674,6 +1678,10 @@ mod linux_impl {
             .is_some_and(|controller| controller.quit_requested)
     }
 
+    pub(super) fn is_installed(cx: &App) -> bool {
+        cx.try_global::<TrayController>().is_some()
+    }
+
     pub(super) fn hide_window(window: &Window) {
         // The Windows twin hides the HWND outright (SW_HIDE) so no
         // taskbar button remains. GPUI has no cross-platform hide, so the
@@ -1692,9 +1700,11 @@ mod linux_impl {
         let _ = main_window.update(cx, |_, window, _| {
             // activate is the cross-platform GPUI path: on Wayland it
             // requests an activation token, on X11 it sends
-            // _NET_ACTIVE_WINDOW. Both compositors also un-minimize a
-            // window they activate.
+            // _NET_ACTIVE_WINDOW. KWin does not reliably clear a minimized
+            // Wayland surface from activation alone, so also ask it to
+            // restore and focus the window by caption.
             window.activate_window();
+            crate::linux_window::restore_main_window();
         });
     }
 
@@ -1798,6 +1808,23 @@ pub(crate) fn quit_requested(cx: &App) -> bool {
 
 #[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn quit_requested(_: &App) -> bool {
+    false
+}
+
+/// Whether the tray icon was created for this process. Close-to-tray must not
+/// hide the only window when the tray is missing.
+#[cfg(windows)]
+pub(crate) fn is_installed(cx: &App) -> bool {
+    windows_impl::is_installed(cx)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn is_installed(cx: &App) -> bool {
+    linux_impl::is_installed(cx)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn is_installed(_: &App) -> bool {
     false
 }
 

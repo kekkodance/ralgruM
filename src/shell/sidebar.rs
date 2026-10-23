@@ -771,7 +771,7 @@ pub(super) fn render_sidebar(
     bottom_visual: SidebarBottomVisual,
     badge_visual: SidebarDownloadBadgeVisual,
 ) -> impl IntoElement + use<> {
-    let metrics = crate::music_ui::shell_metrics(f32::from(window.viewport_size().width));
+    let metrics = crate::music_ui::shell_metrics(crate::music_ui::window_content_width(window));
     let discover = app.nav_item(
         "Discover",
         Some(LocalIcon::Compass),

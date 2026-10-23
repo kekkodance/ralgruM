@@ -57,7 +57,7 @@ impl RalgrumApp {
                             Ok(()) => {
                                 this.updater
                                     .update(cx, |updater, _| updater.handoff_started());
-                                this._window_state
+                                this.window_state
                                     .update(cx, |state, cx| state.persist_now(window, cx));
                                 cx.quit();
                             }

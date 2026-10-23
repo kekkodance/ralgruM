@@ -1,6 +1,6 @@
 use gpui::{
-    AnimationExt as _, AnyElement, ClickEvent, Context, Entity, FocusHandle, IntoElement, Render,
-    Task, WeakEntity, Window, div, prelude::*, px, rgb,
+    AnimationExt as _, AnyElement, App, ClickEvent, Context, Entity, FocusHandle, IntoElement,
+    Render, Task, WeakEntity, Window, div, prelude::*, px, rgb,
 };
 use gpui_component::Root;
 use std::sync::Arc;
@@ -124,7 +124,7 @@ pub(crate) struct RalgrumApp {
     settings_category_focus: Vec<FocusHandle>,
     downloads_list_state: gpui::ListState,
     downloads_browser_scroll: BrowserScrollState,
-    _window_state: Entity<WindowStateManager>,
+    window_state: Entity<WindowStateManager>,
 }
 
 fn external_navigation_opener(
@@ -673,6 +673,35 @@ impl RalgrumApp {
             });
         }
     }
+
+    /// Applies the close-to-tray policy for a main-window close request.
+    /// Returns `true` when the window should actually close. Both the native
+    /// close path and the custom Linux titlebar button route through here so
+    /// they cannot disagree about destroying the window.
+    pub(crate) fn should_close(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        let keep_running = self.settings.read(cx).saved().close_to_tray;
+        self.window_state
+            .update(cx, |state, cx| state.persist_now(window, cx));
+        if crate::tray::should_hide_on_close(keep_running, crate::tray::is_installed(cx))
+            && !crate::tray::quit_requested(cx)
+        {
+            crate::tray::hide_window(window);
+            return false;
+        }
+        // The popout is an independent window. Leaving it open would keep the
+        // process alive after the main window is gone, with a tray icon that
+        // can no longer restore it.
+        sidebar_popout::close_popout(cx);
+        true
+    }
+
+    /// Handles a main-window close request from an in-app control.
+    pub(super) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.should_close(window, cx) {
+            window.remove_window();
+        }
+    }
+
     pub(crate) fn new(
         settings: Entity<SettingsView>,
         account: Entity<AccountState>,
@@ -1289,7 +1318,7 @@ impl RalgrumApp {
             )
             .with_uniform_item_height(gpui::px(downloads::DOWNLOAD_ROW_PITCH_PX)),
             downloads_browser_scroll: BrowserScrollState::new(),
-            _window_state: window_state,
+            window_state,
         }
     }
 
@@ -1445,10 +1474,8 @@ mod source_tabs;
 
 impl Render for RalgrumApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let viewport = window.viewport_size();
-        let viewport_width = f32::from(viewport.width);
-        let metrics =
-            crate::music_ui::shell_metrics_for_viewport(viewport_width, f32::from(viewport.height));
+        let (viewport_width, viewport_height) = crate::music_ui::window_content_size(window);
+        let metrics = crate::music_ui::shell_metrics_for_viewport(viewport_width, viewport_height);
         let now = Instant::now();
         if !metrics.narrow_content {
             self.sidebar_width_motion

@@ -90,6 +90,30 @@ pub(crate) fn narrow_content_viewport(width: f32) -> bool {
     width <= MOBILE_MAX
 }
 
+/// Size of the drawable content inside the window frame. On Linux the client
+/// side window border paints a shadow inset around the shell, so the raw
+/// viewport is larger than the area the shell can actually use.
+pub(crate) fn window_content_size(window: &Window) -> (f32, f32) {
+    content_size_from_frame(
+        window.viewport_size(),
+        gpui_component::window_paddings(window),
+    )
+}
+
+fn content_size_from_frame(
+    viewport: gpui::Size<Pixels>,
+    padding: gpui::Edges<Pixels>,
+) -> (f32, f32) {
+    (
+        (f32::from(viewport.width) - f32::from(padding.left) - f32::from(padding.right)).max(0.),
+        (f32::from(viewport.height) - f32::from(padding.top) - f32::from(padding.bottom)).max(0.),
+    )
+}
+
+pub(crate) fn window_content_width(window: &Window) -> f32 {
+    window_content_size(window).0
+}
+
 pub(crate) fn compact_track_provider(content_width: f32) -> bool {
     content_width < TRACK_PROVIDER_LABEL_MIN_WIDTH
 }

@@ -55,7 +55,7 @@ pub(super) fn render_downloads(
     cx.defer(move |cx| {
         refresh.update(cx, |model, cx| model.refresh_file_stats(cx));
     });
-    let metrics = crate::music_ui::shell_metrics(f32::from(window.viewport_size().width));
+    let metrics = crate::music_ui::shell_metrics(crate::music_ui::window_content_width(window));
     let gutter = crate::music_ui::main_content_inset(&metrics);
     let fixed_scroll = FixedListScrollHandle::new(
         app.downloads_list_state.clone(),

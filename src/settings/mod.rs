@@ -918,8 +918,7 @@ fn cache_overview_refresh_needed(
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let viewport = window.viewport_size();
-        let viewport_width = f32::from(viewport.width);
+        let viewport_width = crate::music_ui::window_content_width(window);
         let header_padding = layout::content_padding(viewport_width);
         let category = self.category;
         let panel = div()

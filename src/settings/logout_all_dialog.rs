@@ -32,7 +32,7 @@ impl LogoutAllDialog {
             close_motion: DialogCloseMotion::default(),
         });
         let centered_top = crate::dialog_layout::centered_margin_top(
-            f32::from(window.viewport_size().height),
+            crate::music_ui::window_content_size(window).1,
             240.,
         );
         let dialog_content = dialog.clone();

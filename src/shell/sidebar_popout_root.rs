@@ -77,6 +77,9 @@ impl Render for SidebarPopoutRoot {
             .playback
             .read_with(cx, |model, _| model.state.popout_always_on_top());
         if always_on_top != self.applied_always_on_top {
+            #[cfg(target_os = "linux")]
+            crate::linux_window::set_always_on_top(always_on_top);
+            #[cfg(not(target_os = "linux"))]
             window.set_always_on_top(always_on_top);
             self.applied_always_on_top = always_on_top;
         }

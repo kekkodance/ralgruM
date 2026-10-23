@@ -76,7 +76,7 @@ pub(super) fn open_or_focus_popout(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some("ralgruM".into()),
+                title: Some(crate::platform::POPOUT_WINDOW_TITLE.into()),
                 appears_transparent: true,
                 ..Default::default()
             }),

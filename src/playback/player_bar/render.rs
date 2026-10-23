@@ -9,11 +9,8 @@ fn visible_buffered_end(
 
 impl Render for PlaybackView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let viewport = window.viewport_size();
-        let metrics = crate::music_ui::shell_metrics_for_viewport(
-            f32::from(viewport.width),
-            f32::from(viewport.height),
-        );
+        let (viewport_width, viewport_height) = crate::music_ui::window_content_size(window);
+        let metrics = crate::music_ui::shell_metrics_for_viewport(viewport_width, viewport_height);
         let (
             current,
             status,
@@ -99,7 +96,7 @@ impl Render for PlaybackView {
         let quality_badge_opacity =
             quality_badge_opacity_endpoints(&previous_quality_label, &quality_label);
         let now = Instant::now();
-        let viewport_width = f32::from(viewport.width).max(0.);
+        let viewport_width = viewport_width.max(0.);
         let layout =
             PlayerBarLayout::from_geometry(desktop_player_geometry(viewport_width, compact));
         let layout_visual =

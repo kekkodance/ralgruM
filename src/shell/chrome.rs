@@ -16,15 +16,6 @@ struct TitlebarDragState {
     should_move: bool,
 }
 
-fn activate_title_control(area: WindowControlArea, window: &mut Window) {
-    match area {
-        WindowControlArea::Min => window.minimize_window(),
-        WindowControlArea::Max => window.zoom_window(),
-        WindowControlArea::Close => window.remove_window(),
-        _ => {}
-    }
-}
-
 pub(super) fn render_titlebar(
     _app: &RalgrumApp,
     window: &mut Window,
@@ -91,30 +82,33 @@ pub(super) fn render_titlebar(
                 .text_size(px(11.5))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(0xd4d4d8))
-                .when(f32::from(window.viewport_size().width) <= 768., |this| {
-                    this.child(
-                        div()
-                            .id("mobile-sidebar-toggle")
-                            .focusable()
-                            .tab_stop(true)
-                            .role(Role::Button)
-                            .aria_label("Toggle navigation")
-                            .size(px(32.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(SURFACE_RAISED)))
-                            .focus_visible(|style| {
-                                style.border_1().border_color(rgb(crate::theme::PRIMARY))
-                            })
-                            .app_tooltip("Toggle navigation")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.toggle_mobile_sidebar(cx);
-                            }))
-                            .child(local_icon(LocalIcon::List, MUTED).size(px(15.))),
-                    )
-                })
+                .when(
+                    crate::music_ui::window_content_width(window) <= 768.,
+                    |this| {
+                        this.child(
+                            div()
+                                .id("mobile-sidebar-toggle")
+                                .focusable()
+                                .tab_stop(true)
+                                .role(Role::Button)
+                                .aria_label("Toggle navigation")
+                                .size(px(32.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(SURFACE_RAISED)))
+                                .focus_visible(|style| {
+                                    style.border_1().border_color(rgb(crate::theme::PRIMARY))
+                                })
+                                .app_tooltip("Toggle navigation")
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.toggle_mobile_sidebar(cx);
+                                }))
+                                .child(local_icon(LocalIcon::List, MUTED).size(px(15.))),
+                        )
+                    },
+                )
                 .child(local_icon(LocalIcon::Music, PRIMARY).size(px(10.)))
                 .child("ralgruM"),
         )
@@ -126,16 +120,19 @@ pub(super) fn render_titlebar(
                     LocalIcon::Minus,
                     "Minimize",
                     WindowControlArea::Min,
+                    cx,
                 ))
                 .child(title_control(
                     maximize_icon,
                     maximize_label,
                     WindowControlArea::Max,
+                    cx,
                 ))
                 .child(title_control(
                     LocalIcon::X,
                     "Close",
                     WindowControlArea::Close,
+                    cx,
                 )),
         )
 }
@@ -144,6 +141,7 @@ fn title_control(
     icon: LocalIcon,
     label: &'static str,
     area: WindowControlArea,
+    cx: &Context<RalgrumApp>,
 ) -> impl IntoElement {
     let close = area == WindowControlArea::Close;
 
@@ -175,18 +173,19 @@ fn title_control(
                 cx.stop_propagation();
             })
         })
-        .on_click(move |event, window, cx| {
+        .on_click(cx.listener(move |app, event: &ClickEvent, window, cx| {
             if cfg!(target_os = "linux") {
                 cx.stop_propagation();
-                activate_title_control(area, window);
+            } else if !matches!(event, ClickEvent::Keyboard(_)) {
                 return;
             }
-            if !matches!(event, ClickEvent::Keyboard(_)) {
-                return;
+            match area {
+                WindowControlArea::Min => window.minimize_window(),
+                WindowControlArea::Max => window.zoom_window(),
+                WindowControlArea::Close => app.request_close(window, cx),
+                _ => {}
             }
-
-            activate_title_control(area, window);
-        })
+        }))
         .child(
             div()
                 .size(if close { px(10.5) } else { px(11.) })

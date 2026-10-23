@@ -1095,7 +1095,7 @@ impl Render for LyricsPanel {
                 selected_annotation,
                 self.annotation.scroll(),
                 self.annotation.browser_scroll(),
-                annotation_panel_max_height(f32::from(window.viewport_size().height)),
+                annotation_panel_max_height(crate::music_ui::window_content_size(window).1),
                 cx.listener(|this, _, _, cx| {
                     this.annotation.close();
                     cx.notify();
@@ -1470,7 +1470,7 @@ impl Render for LyricsPanel {
                         if self.detached(cx) {
                             f32::INFINITY
                         } else {
-                            f32::from(window.viewport_size().width)
+                            crate::music_ui::window_content_width(window)
                         },
                         cx.listener(|this, hovered, _, cx| {
                             if *hovered {

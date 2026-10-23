@@ -16,11 +16,12 @@ use super::{
     card_row_has_more, card_row_metrics, carousel_arrow_target_from_pending, carousel_drag_offset,
     carousel_edge_intensity, carousel_edge_trigger, carousel_snap_offset, carousel_target_offset,
     category_tab_tooltip, category_tabs_icon_only, category_tabs_label_width,
-    compact_desktop_viewport, compact_track_provider, effective_content_width, fitted_columns,
-    horizontal_scroll_id, main_content_inset, narrow_content_viewport, row_action_cursor,
-    set_artist_hover, shell_metrics, shell_metrics_for_viewport, should_consume_horizontal_scroll,
-    show_search_result_count, track_artist_text_and_ranges, track_artwork_url,
-    track_provider_column_endpoints, visible_preview_cards,
+    compact_desktop_viewport, compact_track_provider, content_size_from_frame,
+    effective_content_width, fitted_columns, horizontal_scroll_id, main_content_inset,
+    narrow_content_viewport, row_action_cursor, set_artist_hover, shell_metrics,
+    shell_metrics_for_viewport, should_consume_horizontal_scroll, show_search_result_count,
+    track_artist_text_and_ranges, track_artwork_url, track_provider_column_endpoints,
+    visible_preview_cards,
 };
 
 #[test]
@@ -488,6 +489,28 @@ fn horizontal_scroll_ids_are_stable_and_section_qualified() {
     assert_ne!(
         horizontal_scroll_id("search-card-preview-scroll", "Albums", 0),
         horizontal_scroll_id("search-card-preview-scroll", "Artists", 1)
+    );
+}
+
+#[test]
+fn window_content_size_removes_the_client_frame_insets() {
+    use gpui::{Edges, px, size};
+
+    assert_eq!(
+        content_size_from_frame(size(px(1200.), px(800.)), Edges::all(px(12.))),
+        (1176., 776.)
+    );
+    assert_eq!(
+        content_size_from_frame(
+            size(px(1200.), px(800.)),
+            Edges {
+                top: px(0.),
+                right: px(12.),
+                bottom: px(0.),
+                left: px(12.),
+            },
+        ),
+        (1176., 800.)
     );
 }
 

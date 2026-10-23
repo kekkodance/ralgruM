@@ -25,6 +25,8 @@ pub(crate) use app::{
 };
 pub(crate) use domain::smart_mix_title;
 pub(crate) use integrations::{discord, service_auth, service_auth_webview};
+#[cfg(target_os = "linux")]
+pub(crate) use platform::linux_window;
 pub(crate) use platform::{browser_link, external_url, media_control, tray};
 #[cfg(windows)]
 pub(crate) use platform::{windows_chrome, windows_protocol, windows_taskbar};
@@ -254,7 +256,7 @@ fn main() {
                     app_id: Some("ralgruM".into()),
                     inactive_frame_interval: None,
                     titlebar: Some(TitlebarOptions {
-                        title: Some("ralgruM".into()),
+                        title: Some(platform::MAIN_WINDOW_TITLE.into()),
                         appears_transparent: true,
                         ..Default::default()
                     }),
@@ -322,7 +324,7 @@ fn main() {
                             Some(error.into()),
                         );
                     }
-                    let tray_available = tray::install(cx, window, view.downgrade());
+                    tray::install(cx, window, view.downgrade());
                     #[cfg(target_os = "linux")]
                     platform::linux_power::install(cx, view.downgrade());
                     for entity in initial_browser_links.drain(..) {
@@ -332,23 +334,11 @@ fn main() {
                     if let Some(events) = browser_events {
                         start_browser_link_pump(cx, view.downgrade(), events);
                     }
-                    let window_state_on_close = window_state.downgrade();
-                    let settings_on_close = settings.downgrade();
+                    let view_on_close = view.downgrade();
                     window.on_window_should_close(cx, move |window, cx| {
-                        let keep_running = settings_on_close
-                            .upgrade()
-                            .map(|settings| settings.read(cx).saved().close_to_tray)
-                            .unwrap_or(false);
-                        window_state_on_close
-                            .update(cx, |state, cx| state.persist_now(window, cx))
-                            .ok();
-                        if tray::should_hide_on_close(keep_running, tray_available)
-                            && !tray::quit_requested(cx)
-                        {
-                            tray::hide_window(window);
-                            return false;
-                        }
-                        true
+                        view_on_close
+                            .update(cx, |app, cx| app.should_close(window, cx))
+                            .unwrap_or(true)
                     });
                     diagnostics::event("INFO", "main window construction complete");
                     let root = cx.new(|cx| Root::new(view, window, cx));
