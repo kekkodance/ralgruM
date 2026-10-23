@@ -645,19 +645,19 @@ fn render_provider_header_snapshot(
 ) -> AnyElement {
     let route = view.state.route();
     let mut actions = Vec::new();
-    if route.category == Category::Playlists {
-        if let Some(card) = detail_more_card(view) {
-            let service = match route.source {
-                crate::search::Provider::Deezer => Service::Deezer,
-                crate::search::Provider::SoundCloud => Service::SoundCloud,
-            };
-            actions.push(render_playlist_play_control(
-                host,
-                service,
-                route.id.clone(),
-                Some(card),
-            ));
-        }
+    if route.category == Category::Playlists
+        && let Some(card) = detail_more_card(view)
+    {
+        let service = match route.source {
+            crate::search::Provider::Deezer => Service::Deezer,
+            crate::search::Provider::SoundCloud => Service::SoundCloud,
+        };
+        actions.push(render_playlist_play_control(
+            host,
+            service,
+            route.id.clone(),
+            Some(card),
+        ));
     }
     if let Some(favorite) = snapshot.favorite.as_ref() {
         actions.push(render_detail_favorite(favorite, host));

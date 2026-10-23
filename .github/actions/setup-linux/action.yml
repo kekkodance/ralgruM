@@ -26,6 +26,7 @@ runs:
           libgtk-3-dev \
           libwebkit2gtk-4.1-dev \
           libxkbcommon-dev \
+          libxkbcommon-x11-dev \
           libwayland-dev \
           libxcb1-dev \
           libxrandr-dev \
