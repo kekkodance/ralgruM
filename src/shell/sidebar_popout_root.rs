@@ -22,6 +22,11 @@ pub(crate) struct SidebarPopoutRoot {
     window_handle: Option<gpui::WindowHandle<gpui_component::Root>>,
 }
 
+#[derive(Default)]
+struct PopoutDragState {
+    should_move: bool,
+}
+
 impl SidebarPopoutRoot {
     pub(crate) fn new(
         playback: gpui::Entity<PlaybackModel>,
@@ -115,6 +120,8 @@ impl Render for SidebarPopoutRoot {
                         .left(px(crate::motion::lerp(8.0, 0.0, delta)))
                 },
             );
+        let drag_state = window.use_state(cx, |_, _| PopoutDragState::default());
+        let linux = cfg!(target_os = "linux");
         div()
             .size_full()
             .flex()
@@ -133,7 +140,35 @@ impl Render for SidebarPopoutRoot {
                     .id("sidebar-popout-drag-strip")
                     .flex_none()
                     .h(px(24.))
-                    .window_control_area(gpui::WindowControlArea::Drag),
+                    .window_control_area(gpui::WindowControlArea::Drag)
+                    .when(linux, |this| {
+                        this.on_mouse_down_out(
+                            window.listener_for(&drag_state, |state, _, _, _| {
+                                state.should_move = false
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            window.listener_for(&drag_state, |state, _, _, _| {
+                                state.should_move = true;
+                            }),
+                        )
+                        .on_mouse_up(
+                            gpui::MouseButton::Left,
+                            window.listener_for(&drag_state, |state, _, _, _| {
+                                state.should_move = false;
+                            }),
+                        )
+                        .on_mouse_move(window.listener_for(&drag_state, |state, _, window, _| {
+                            if state.should_move {
+                                state.should_move = false;
+                                window.start_window_move();
+                            }
+                        }))
+                        .on_mouse_down(gpui::MouseButton::Right, |event, window, _| {
+                            window.show_window_menu(event.position)
+                        })
+                    }),
             )
             .child(
                 div()

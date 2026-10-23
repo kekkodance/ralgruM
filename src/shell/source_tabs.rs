@@ -12,6 +12,11 @@ use gpui::{
 
 use super::RalgrumApp;
 
+/// The selector tabs measure their text with this exact size and weight.
+/// Both the label renderer and the width reservation use the constants so a
+/// font size change cannot reintroduce clipping on one platform only.
+pub(super) const SELECTOR_LABEL_FONT_SIZE: f32 = 13.;
+
 fn selector_tab_stop(selected: bool, interactive: bool) -> bool {
     selected && interactive
 }
@@ -209,7 +214,7 @@ impl RalgrumApp {
             .border_1()
             .border_color(rgba(0x00000000))
             .text_color(rgb(text))
-            .text_size(px(13.))
+            .text_size(px(SELECTOR_LABEL_FONT_SIZE))
             .font_weight(gpui::FontWeight::MEDIUM)
             .child(
                 div()

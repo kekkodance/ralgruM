@@ -27,6 +27,23 @@ fn normalize_audio_cache_limit_mb(limit_mb: u64) -> u64 {
     }
 }
 
+/// Drops Windows-only audio selections on platforms where the picker does
+/// not offer them. Imported settings can carry `asioMode` from a Windows
+/// machine, and older shared configs may still contain a stale value.
+pub(crate) fn normalize_platform_settings(settings: &mut AppSettings) {
+    #[cfg(windows)]
+    let _ = settings;
+    #[cfg(not(windows))]
+    if settings.asio_mode {
+        crate::diagnostics::event(
+            "INFO",
+            "ignoring the saved ASIO audio mode on a platform without ASIO",
+        );
+        settings.asio_mode = false;
+        settings.asio_driver = None;
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LegacyPreferences {
@@ -531,6 +548,7 @@ fn read_settings(path: &Path) -> Result<StoredSettings, SettingsError> {
             Ok(mut settings) => {
                 settings.audio_cache_limit_mb =
                     normalize_audio_cache_limit_mb(settings.audio_cache_limit_mb);
+                normalize_platform_settings(&mut settings);
                 StoredSettings::Valid(Box::new(settings))
             }
             Err(_) => StoredSettings::Invalid,
@@ -693,6 +711,30 @@ mod tests {
         .unwrap();
         assert!(!legacy.asio_mode);
         assert_eq!(legacy.asio_driver, None);
+    }
+
+    #[test]
+    fn platform_normalization_only_keeps_asio_on_windows() {
+        let mut settings = AppSettings {
+            asio_mode: true,
+            asio_driver: Some("MiniFuse ASIO Driver".into()),
+            ..AppSettings::default()
+        };
+        normalize_platform_settings(&mut settings);
+
+        #[cfg(windows)]
+        {
+            assert!(settings.asio_mode);
+            assert_eq!(
+                settings.asio_driver.as_deref(),
+                Some("MiniFuse ASIO Driver")
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(!settings.asio_mode);
+            assert_eq!(settings.asio_driver, None);
+        }
     }
 
     #[test]

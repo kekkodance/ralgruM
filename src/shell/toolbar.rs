@@ -1,6 +1,6 @@
 use gpui::{
-    AnimationExt as _, AnyElement, App, ClickEvent, Context, CursorStyle, Focusable, IntoElement,
-    KeyDownEvent, MouseButton, Role, Window, div, prelude::*, px, rgb, rgba,
+    AnimationExt as _, AnyElement, App, ClickEvent, Context, CursorStyle, Focusable, FontWeight,
+    IntoElement, KeyDownEvent, MouseButton, Role, Window, div, prelude::*, px, rgb, rgba,
 };
 use gpui_component::input::Input;
 use std::time::Instant;
@@ -389,6 +389,23 @@ fn source_item_width(item: SourceItem, compact: bool) -> f32 {
     }
 }
 
+/// Grows a selector item when the platform font renders its label wider than
+/// the design budget. The extra pixels move into the item width so the icon
+/// and label keep their gap instead of the label being clipped by overflow.
+fn grow_selector_label(window: &Window, label: &str, label_width: &mut f32, full_width: &mut f32) {
+    let measured = crate::ui::text_measure::text_width(
+        window,
+        label,
+        super::source_tabs::SELECTOR_LABEL_FONT_SIZE,
+        FontWeight::MEDIUM,
+    )
+    .ceil();
+    if measured > *label_width {
+        *full_width += measured - *label_width;
+        *label_width = measured;
+    }
+}
+
 fn selector_shell_width(widths: &[f32]) -> f32 {
     2. * SELECTOR_PADDING
         + widths.iter().copied().sum::<f32>()
@@ -671,7 +688,7 @@ pub(super) fn render_top_toolbar(
     };
     let show_search_source = app.nav == super::Nav::Discover;
     let show_library_service = app.nav == super::Nav::Library;
-    let source_items = [
+    let mut source_items = [
         SourceItem {
             label: "All",
             icon: LocalIcon::EarthAmericas,
@@ -697,7 +714,7 @@ pub(super) fn render_top_toolbar(
             label_width: 72.,
         },
     ];
-    let library_items = [
+    let mut library_items = [
         LibraryServiceItem {
             label: "Local",
             icon: LocalIcon::FolderOpen,
@@ -723,6 +740,22 @@ pub(super) fn render_top_toolbar(
             label_width: 72.,
         },
     ];
+    for item in &mut source_items {
+        grow_selector_label(
+            window,
+            item.label,
+            &mut item.label_width,
+            &mut item.full_width,
+        );
+    }
+    for item in &mut library_items {
+        grow_selector_label(
+            window,
+            item.label,
+            &mut item.label_width,
+            &mut item.full_width,
+        );
+    }
     let search_entity = app.search.read(cx).input.clone();
     let show_search_clear = !search_entity.read(cx).value().is_empty();
     let search_clear_active = show_search_source && show_search_clear;

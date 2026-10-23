@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize, de};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
-use super::{navigation_state::AppSettings, navigation_state::SettingsError, paths};
+use super::{
+    navigation_state::AppSettings, navigation_state::SettingsError,
+    navigation_state::normalize_platform_settings, paths,
+};
 
 pub(crate) const SETTINGS_FORMAT: &str = "ralgrum-settings";
 pub(crate) const SETTINGS_SCHEMA_VERSION: u32 = 1;
@@ -135,6 +138,10 @@ fn decode_settings(bytes: &[u8]) -> Result<AppSettings, SettingsTransferError> {
     validate_settings_values(settings)?;
 
     serde_json::from_value(Value::Object(settings.clone()))
+        .map(|mut settings: AppSettings| {
+            normalize_platform_settings(&mut settings);
+            settings
+        })
         .map_err(|_| SettingsTransferError::InvalidFormat)
 }
 

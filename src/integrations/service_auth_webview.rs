@@ -724,6 +724,13 @@ mod platform {
                     "{} sign-in timed out.",
                     session.service.display_name()
                 )));
+                crate::diagnostics::event(
+                    "WARN",
+                    format!(
+                        "sign-in webview timed out service={}",
+                        session.service.display_name()
+                    ),
+                );
                 return ControlFlow::Break;
             }
             if session.closed {
@@ -731,6 +738,13 @@ mod platform {
                     "{} sign-in was cancelled.",
                     session.service.display_name()
                 )));
+                crate::diagnostics::event(
+                    "INFO",
+                    format!(
+                        "sign-in webview cancelled service={}",
+                        session.service.display_name()
+                    ),
+                );
                 return ControlFlow::Break;
             }
             if Instant::now() < session.next_poll {
@@ -761,6 +775,13 @@ mod platform {
         let cookies = match session.webview.cookies_for_url(cookie_url(session.service)) {
             Ok(cookies) => cookies,
             Err(error) => {
+                crate::diagnostics::event(
+                    "WARN",
+                    format!(
+                        "sign-in cookie inspection failed service={}: {error}",
+                        session.service.display_name()
+                    ),
+                );
                 session.result = Some(Err(format!(
                     "Could not inspect the sign-in session: {error}"
                 )));
@@ -774,6 +795,13 @@ mod platform {
             .filter(|value| !value.is_empty());
         match value {
             Some(value) => {
+                crate::diagnostics::event(
+                    "INFO",
+                    format!(
+                        "sign-in cookie observed service={}",
+                        session.service.display_name()
+                    ),
+                );
                 session.desktop_cookie = Some(value);
                 Some(())
             }
@@ -919,6 +947,21 @@ mod platform {
         let Some(mut session) = session else {
             return;
         };
+        let service = session.service.display_name();
+        match session.result.as_ref() {
+            Some(Ok(_)) => crate::diagnostics::event(
+                "INFO",
+                format!("sign-in webview completed service={service}"),
+            ),
+            Some(Err(error)) => crate::diagnostics::event(
+                "WARN",
+                format!("sign-in webview failed service={service}: {error}"),
+            ),
+            None => crate::diagnostics::event(
+                "WARN",
+                format!("sign-in webview finished without a result service={service}"),
+            ),
+        }
         RESULT.with(|result| {
             *result.borrow_mut() = session.result.take();
         });
@@ -939,6 +982,17 @@ mod platform {
     fn run_login(handle: gtk_host::GtkHostHandle, service: Service) -> Result<(), String> {
         let (ready_sender, ready_receiver) = mpsc::channel::<Result<(), String>>();
         handle.submit(move || {
+            crate::diagnostics::event(
+                "INFO",
+                format!(
+                    "sign-in webview constructing service={} display={} wayland={} dmabuf_disabled={}",
+                    service.display_name(),
+                    std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".into()),
+                    std::env::var_os("WAYLAND_DISPLAY").is_some(),
+                    std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER")
+                        .unwrap_or_else(|_| "unset".into()),
+                ),
+            );
             // The profile sweep inside `open_auth_profile` is file I/O that
             // would stall the shared tray pump, but it is bounded and rare
             // (once per sign-in), so it runs inline on the GTK thread.
@@ -987,9 +1041,23 @@ mod platform {
                     }
                     navigation_allowed(&raw_url)
                 });
+            crate::diagnostics::event(
+                "INFO",
+                format!(
+                    "sign-in webview creating WebKitGTK view service={}",
+                    service.display_name()
+                ),
+            );
             let webview = match builder.build_gtk(&container) {
                 Ok(webview) => webview,
                 Err(error) => {
+                    crate::diagnostics::event(
+                        "ERROR",
+                        format!(
+                            "sign-in webview WebKitGTK initialization failed service={}: {error}",
+                            service.display_name()
+                        ),
+                    );
                     let _ =
                         ready_sender.send(Err(format!("Could not initialize WebKitGTK: {error}")));
                     return;
@@ -998,6 +1066,13 @@ mod platform {
             let _ = webview.focus();
             window.show_all();
             window.present();
+            crate::diagnostics::event(
+                "INFO",
+                format!(
+                    "sign-in webview presented service={}",
+                    service.display_name()
+                ),
+            );
             let session = LoginSession {
                 service,
                 started: Instant::now(),
@@ -1036,6 +1111,15 @@ mod platform {
     }
 
     pub(crate) async fn login(service: Service) -> Result<BrowserCredentials, String> {
+        crate::diagnostics::event(
+            "INFO",
+            format!(
+                "sign-in requested service={} display={} wayland={}",
+                service.display_name(),
+                std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".into()),
+                std::env::var_os("WAYLAND_DISPLAY").is_some(),
+            ),
+        );
         let host = gtk_host::spawn()?;
         run_login(host.clone(), service)?;
         // Wait for the state machine to finish on the GTK thread. The host

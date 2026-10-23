@@ -112,12 +112,23 @@ fn start_browser_link_pump(
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    let webkit_dmabuf_defaulted = platform::linux_webkit::disable_dmabuf_renderer_if_unset();
     if updater::helper::dispatch() {
         return;
     }
     let update_confirmation = updater::helper::confirmation_id();
     diagnostics::init();
     diagnostics::event("INFO", "startup begin");
+    #[cfg(target_os = "linux")]
+    diagnostics::event(
+        "INFO",
+        if webkit_dmabuf_defaulted {
+            "WebKit DMA-BUF renderer disabled for Linux compatibility"
+        } else {
+            "WebKit DMA-BUF renderer left at the configured environment value"
+        },
+    );
     let update_handoff_error = updater::helper::take_last_error();
     #[cfg(target_os = "linux")]
     platform::linux_protocol::sync_registration();
@@ -248,6 +259,8 @@ fn main() {
                         ..Default::default()
                     }),
                     app_owns_titlebar_drag: true,
+                    #[cfg(target_os = "linux")]
+                    window_decorations: Some(gpui::WindowDecorations::Client),
                     window_min_size: Some(size(px(900.), px(620.))),
                     ..Default::default()
                 },

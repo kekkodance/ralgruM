@@ -544,27 +544,7 @@ pub(super) fn text_measure_width(
     font_size: f32,
     weight: FontWeight,
 ) -> f32 {
-    if text.is_empty() {
-        return 0.;
-    }
-    let font = Font {
-        family: ui_font_family().into(),
-        weight,
-        ..Font::default()
-    };
-    let run = TextRun {
-        len: text.len(),
-        font,
-        color: Hsla::default(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    window
-        .text_system()
-        .shape_line(text.into(), px(font_size), &[run], None)
-        .width
-        .into()
+    crate::ui::text_measure::text_width(window, text, font_size, weight)
 }
 
 /// Cheap single-line text measurement against an available width, used to

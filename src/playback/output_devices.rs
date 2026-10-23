@@ -19,7 +19,53 @@ pub(crate) fn list_output_devices() -> Vec<String> {
                 .collect::<Vec<String>>()
         })
         .unwrap_or_default();
-    sorted_deduped(&names)
+    let names = sorted_deduped(&names);
+    #[cfg(target_os = "linux")]
+    {
+        linux_picker_output_names(&names)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        names
+    }
+}
+
+/// ALSA exposes several plugin names alongside real cards. The picker keeps
+/// the card entries and only falls back to the sound-server aliases, or to
+/// the raw list, when no card is visible. This keeps entries such as
+/// `default`, `jack`, or `null` from masquerading as selectable hardware.
+#[cfg(any(target_os = "linux", test))]
+fn linux_picker_output_names(names: &[String]) -> Vec<String> {
+    const SOUND_SERVER_ALIASES: &[&str] = &["pipewire", "pulse"];
+
+    let mut cards = Vec::new();
+    let mut servers = Vec::new();
+    for name in names {
+        let key = name.trim().to_ascii_lowercase();
+        let pseudo = matches!(
+            key.as_str(),
+            "default" | "jack" | "oss" | "null" | "sysdefault"
+        ) || key.starts_with("sysdefault:")
+            || key.starts_with("dmix")
+            || key.starts_with("dsnoop");
+        if pseudo {
+            continue;
+        }
+        if SOUND_SERVER_ALIASES.contains(&key.as_str()) {
+            servers.push(name.clone());
+        } else {
+            cards.push(name.clone());
+        }
+    }
+
+    let selected = if !cards.is_empty() {
+        cards
+    } else if !servers.is_empty() {
+        servers
+    } else {
+        names.to_vec()
+    };
+    sorted_deduped(&selected)
 }
 
 /// Finds the output device whose endpoint name is exactly `name`.
@@ -152,5 +198,41 @@ mod tests {
             ]),
             ["a".to_owned(), "b".to_owned()]
         );
+    }
+
+    #[test]
+    fn linux_picker_prefers_real_cards_over_alsa_plugins() {
+        assert_eq!(
+            linux_picker_output_names(&[
+                "default".to_owned(),
+                "fifine Microphone".to_owned(),
+                "jack".to_owned(),
+                "pipewire".to_owned(),
+                "pulse".to_owned(),
+            ]),
+            ["fifine Microphone".to_owned()]
+        );
+    }
+
+    #[test]
+    fn linux_picker_falls_back_to_sound_server_aliases() {
+        assert_eq!(
+            linux_picker_output_names(&[
+                "default".to_owned(),
+                "pipewire".to_owned(),
+                "pulse".to_owned(),
+                "null".to_owned(),
+            ]),
+            ["pipewire".to_owned(), "pulse".to_owned()]
+        );
+    }
+
+    #[test]
+    fn linux_picker_keeps_the_raw_list_when_everything_is_filtered() {
+        assert_eq!(
+            linux_picker_output_names(&["default".to_owned(), "jack".to_owned()]),
+            ["default".to_owned(), "jack".to_owned()]
+        );
+        assert!(linux_picker_output_names(&[]).is_empty());
     }
 }

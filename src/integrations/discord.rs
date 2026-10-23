@@ -311,7 +311,10 @@ fn run_worker(receiver: Receiver<WorkerCommand>, events: Sender<WorkerEvent>) {
             }
             Err(error) => {
                 if retries == 0 {
-                    eprintln!("Discord presence unavailable: {error}");
+                    crate::diagnostics::event(
+                        "WARN",
+                        format!("Discord presence unavailable: {error}"),
+                    );
                 }
                 client = None;
                 let delay = DISCORD_RETRY_BACKOFF[retries.min(DISCORD_RETRY_BACKOFF.len() - 1)];

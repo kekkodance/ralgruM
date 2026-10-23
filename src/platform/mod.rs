@@ -11,6 +11,8 @@ pub(crate) mod linux_instance;
 pub(crate) mod linux_power;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux_protocol;
+#[cfg(target_os = "linux")]
+pub(crate) mod linux_webkit;
 #[cfg(windows)]
 pub(crate) mod windows_browser_link;
 #[cfg(windows)]

@@ -81,6 +81,8 @@ pub(super) fn open_or_focus_popout(
                 ..Default::default()
             }),
             app_owns_titlebar_drag: true,
+            #[cfg(target_os = "linux")]
+            window_decorations: Some(gpui::WindowDecorations::Client),
             focus: true,
             show: true,
             is_resizable: true,

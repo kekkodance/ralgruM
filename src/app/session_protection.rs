@@ -241,7 +241,13 @@ fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use keyring::Entry;
 
-    let entry = Entry::new("ralgruM", "session").map_err(|_| ProtectionError::Unavailable)?;
+    let entry = Entry::new("ralgruM", "session").map_err(|error| {
+        crate::diagnostics::event(
+            "WARN",
+            format!("account session keyring entry creation failed: {error}"),
+        );
+        ProtectionError::Unavailable
+    })?;
     let mut pad = plaintext.to_vec();
     // A fixed XOR constant keeps the transformation length-preserving and
     // reversible, while the pad's entropy comes from being the plaintext
@@ -255,7 +261,13 @@ fn protect_platform(plaintext: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     // attributes with trailing newlines.
     entry
         .set_password(&STANDARD.encode(&pad))
-        .map_err(|_| ProtectionError::Unavailable)?;
+        .map_err(|error| {
+            crate::diagnostics::event(
+                "WARN",
+                format!("account session keyring write failed: {error}"),
+            );
+            ProtectionError::Unavailable
+        })?;
     // The envelope payload is the ciphertext: plaintext XOR pad, where the
     // pad is the XOR-flipped plaintext. Only someone holding the keyring
     // value can recover the session from this file.
@@ -271,15 +283,33 @@ fn unprotect_platform(protected: &[u8]) -> Result<Vec<u8>, ProtectionError> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use keyring::Entry;
 
-    let entry = Entry::new("ralgruM", "session").map_err(|_| ProtectionError::Unavailable)?;
-    let stored = entry
-        .get_password()
-        .map_err(|_| ProtectionError::Unavailable)?;
-    let pad = STANDARD
-        .decode(stored.trim())
-        .map_err(|_| ProtectionError::Platform)?;
+    let entry = Entry::new("ralgruM", "session").map_err(|error| {
+        crate::diagnostics::event(
+            "WARN",
+            format!("account session keyring entry creation failed: {error}"),
+        );
+        ProtectionError::Unavailable
+    })?;
+    let stored = entry.get_password().map_err(|error| {
+        crate::diagnostics::event(
+            "WARN",
+            format!("account session keyring read failed: {error}"),
+        );
+        ProtectionError::Unavailable
+    })?;
+    let pad = STANDARD.decode(stored.trim()).map_err(|error| {
+        crate::diagnostics::event(
+            "WARN",
+            format!("account session keyring value could not be decoded: {error}"),
+        );
+        ProtectionError::Platform
+    })?;
     let mut plaintext = protected.to_vec();
     if plaintext.len() != pad.len() {
+        crate::diagnostics::event(
+            "WARN",
+            "account session keyring value does not match the saved envelope",
+        );
         return Err(ProtectionError::Platform);
     }
     for (byte, pad_byte) in plaintext.iter_mut().zip(pad.iter()) {

@@ -4,14 +4,30 @@ use crate::{
     theme::{BORDER, CHROME, FOREGROUND, MUTED, PRIMARY, SURFACE_RAISED},
 };
 use gpui::{
-    ClickEvent, Context, IntoElement, Role, Window, WindowControlArea, div, prelude::*, px, rgb,
+    ClickEvent, Context, IntoElement, MouseButton, Role, Window, WindowControlArea, div,
+    prelude::*, px, rgb,
 };
+use gpui_component::InteractiveElementExt as _;
 
 use super::RalgrumApp;
 
+#[derive(Default)]
+struct TitlebarDragState {
+    should_move: bool,
+}
+
+fn activate_title_control(area: WindowControlArea, window: &mut Window) {
+    match area {
+        WindowControlArea::Min => window.minimize_window(),
+        WindowControlArea::Max => window.zoom_window(),
+        WindowControlArea::Close => window.remove_window(),
+        _ => {}
+    }
+}
+
 pub(super) fn render_titlebar(
     _app: &RalgrumApp,
-    window: &Window,
+    window: &mut Window,
     cx: &mut Context<RalgrumApp>,
 ) -> impl IntoElement {
     let (maximize_icon, maximize_label) = if window.is_maximized() {
@@ -19,6 +35,8 @@ pub(super) fn render_titlebar(
     } else {
         (LocalIcon::WindowMaximize, "Maximize")
     };
+    let drag_state = window.use_state(cx, |_, _| TitlebarDragState::default());
+    let linux = cfg!(target_os = "linux");
     div()
         .h(px(32.))
         .w_full()
@@ -28,8 +46,35 @@ pub(super) fn render_titlebar(
         .bg(rgb(CHROME))
         .border_b_1()
         .border_color(rgb(BORDER))
+        .when(linux, |this| {
+            this.on_mouse_down_out(window.listener_for(&drag_state, |state, _, _, _| {
+                state.should_move = false;
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                window.listener_for(&drag_state, |state, _, _, _| {
+                    state.should_move = true;
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                window.listener_for(&drag_state, |state, _, _, _| {
+                    state.should_move = false;
+                }),
+            )
+            .on_mouse_move(window.listener_for(
+                &drag_state,
+                |state, _, window, _| {
+                    if state.should_move {
+                        state.should_move = false;
+                        window.start_window_move();
+                    }
+                },
+            ))
+        })
         .child(
             div()
+                .id("main-titlebar-drag-region")
                 .h_full()
                 .flex_1()
                 .flex()
@@ -37,6 +82,12 @@ pub(super) fn render_titlebar(
                 .px(px(11.))
                 .gap(px(7.))
                 .window_control_area(WindowControlArea::Drag)
+                .when(linux, |this| {
+                    this.on_double_click(|_, window, _| window.zoom_window())
+                        .on_mouse_down(MouseButton::Right, |event, window, _| {
+                            window.show_window_menu(event.position)
+                        })
+                })
                 .text_size(px(11.5))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(0xd4d4d8))
@@ -118,17 +169,23 @@ fn title_control(
         })
         .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
         .app_tooltip(label)
-        .on_click(move |event, window, _| {
+        .when(cfg!(target_os = "linux"), |this| {
+            this.on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+            })
+        })
+        .on_click(move |event, window, cx| {
+            if cfg!(target_os = "linux") {
+                cx.stop_propagation();
+                activate_title_control(area, window);
+                return;
+            }
             if !matches!(event, ClickEvent::Keyboard(_)) {
                 return;
             }
 
-            match area {
-                WindowControlArea::Min => window.minimize_window(),
-                WindowControlArea::Max => window.zoom_window(),
-                WindowControlArea::Close => window.remove_window(),
-                _ => {}
-            }
+            activate_title_control(area, window);
         })
         .child(
             div()

@@ -319,32 +319,28 @@ impl SettingsView {
         settings_card()
             .child(settings_card_heading(LocalIcon::Play, "Playback"))
             .child(control_list({
-                let mut playback_rows = vec![
-                    control_row(
-                        "Output device",
-                        "Choose where ralgruM plays audio.",
-                        settings_select(&self.output_device_select, 180.).into_any_element(),
-                    ),
-                    control_row(
-                        "ASIO mode",
-                        "Play through an ASIO driver instead of the Windows audio stack.",
-                        settings_switch(
-                            "asio-mode",
-                            self.draft.asio_mode,
-                            cx.listener(|this, checked: &bool, window, cx| {
-                                this.update_draft_and_persist(
-                                    |draft| draft.asio_mode = *checked,
-                                    cx,
-                                );
-                                // The dropdown contents depend on the mode,
-                                // so the picker re-renders with the other
-                                // list and that mode's saved selection.
-                                this.refresh_output_device_select(window, cx);
-                            }),
-                        )
-                        .into_any_element(),
-                    ),
-                ];
+                let mut playback_rows = vec![control_row(
+                    "Output device",
+                    "Choose where ralgruM plays audio.",
+                    settings_select(&self.output_device_select, 180.).into_any_element(),
+                )];
+                #[cfg(windows)]
+                playback_rows.push(control_row(
+                    "ASIO mode",
+                    "Play through an ASIO driver instead of the Windows audio stack.",
+                    settings_switch(
+                        "asio-mode",
+                        self.draft.asio_mode,
+                        cx.listener(|this, checked: &bool, window, cx| {
+                            this.update_draft_and_persist(|draft| draft.asio_mode = *checked, cx);
+                            // The dropdown contents depend on the mode,
+                            // so the picker re-renders with the other
+                            // list and that mode's saved selection.
+                            this.refresh_output_device_select(window, cx);
+                        }),
+                    )
+                    .into_any_element(),
+                ));
                 playback_rows.extend([
                     control_row(
                         "Seamless transitions",

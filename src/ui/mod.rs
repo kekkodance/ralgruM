@@ -15,5 +15,6 @@ pub(crate) mod music_ui;
 pub(crate) mod playing_indicator;
 pub(crate) mod slider_pointer;
 pub(crate) mod tab_keyboard;
+pub(crate) mod text_measure;
 pub(crate) mod theme;
 pub(crate) mod toast;

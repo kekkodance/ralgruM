@@ -11,10 +11,10 @@ use std::{
 
 use gpui::{
     AccessibleAction, AnimationExt, AnyElement, AnyImageCache, App, Bounds, ClickEvent, Context,
-    Entity, Font, FontWeight, Hitbox, HitboxBehavior, Hsla, ImageCacheError, ImageSource,
-    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ObjectFit, Pixels, Render, RenderImage, Resource, Role, TextRun, Window, canvas, div, img,
-    prelude::*, px, relative, rgb, rgba,
+    Entity, FontWeight, Hitbox, HitboxBehavior, ImageCacheError, ImageSource, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
+    Render, RenderImage, Resource, Role, Window, canvas, div, img, prelude::*, px, relative, rgb,
+    rgba,
 };
 
 use gpui_component::slider::{Slider, SliderState, SliderValue};
@@ -28,10 +28,7 @@ use crate::{
     library::{FavoriteController, FavoriteKey, FavoriteKind, FavoriteState, LibraryView},
     music_ui::TrackArtistNavigation,
     settings::AccountState,
-    theme::{
-        BORDER, FOREGROUND, MUTED, PRIMARY, SCROLLBAR_THUMB, SURFACE, SURFACE_RAISED,
-        ui_font_family,
-    },
+    theme::{BORDER, FOREGROUND, MUTED, PRIMARY, SCROLLBAR_THUMB, SURFACE, SURFACE_RAISED},
     ui::artwork_cache::ArtworkCache,
 };
 

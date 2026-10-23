@@ -536,7 +536,16 @@ fn read_session(path: &Path) -> Result<StoredSession, SessionError> {
     };
     let mut plaintext = match super::session_protection::unprotect(&bytes) {
         Ok(plaintext) => plaintext,
-        Err(_) => return Ok(StoredSession::Invalid),
+        Err(error) => {
+            crate::diagnostics::event(
+                "WARN",
+                format!(
+                    "saved account session could not be unprotected from {}: {error}",
+                    path.display()
+                ),
+            );
+            return Ok(StoredSession::Invalid);
+        }
     };
     let parsed = serde_json::from_slice(&plaintext).ok();
     super::session_protection::wipe(&mut plaintext);
@@ -676,8 +685,13 @@ fn encode_plaintext(session: &AuthSession) -> Result<Vec<u8>, SessionError> {
 
 fn encode_protected(session: &AuthSession) -> Result<Vec<u8>, SessionError> {
     let mut plaintext = encode_plaintext(session)?;
-    let result =
-        super::session_protection::protect(&plaintext).map_err(|_| SessionError::SecureStorage);
+    let result = super::session_protection::protect(&plaintext).map_err(|error| {
+        crate::diagnostics::event(
+            "WARN",
+            format!("account session could not be protected: {error}"),
+        );
+        SessionError::SecureStorage
+    });
     super::session_protection::wipe(&mut plaintext);
     result
 }
