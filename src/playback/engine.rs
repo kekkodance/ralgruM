@@ -24,6 +24,8 @@ use tokio_util::sync::CancellationToken;
 use crate::diagnostics;
 
 use super::output_devices::find_output_device;
+#[cfg(target_os = "linux")]
+use super::output_devices::{PULSE_BRIDGE_PCM, move_own_streams_to_sink, sink_for_label};
 use super::progressive::{
     LandedSuffixSource, ProgressiveCompletion, ProgressiveReader, TimelineSeekSession,
     TimelineSuffixState,
@@ -310,20 +312,66 @@ impl RodioEngine {
         match target {
             AudioOutputTarget::SystemDefault => OutputStreamBuilder::open_default_stream()
                 .map_err(|_| "No usable audio output device was found".to_string()),
-            AudioOutputTarget::Device(name) => {
-                let device = find_output_device(name).ok_or_else(|| {
-                    format!("The audio output device \"{name}\" is not available")
-                })?;
-                OutputStreamBuilder::from_device(device)
-                    .and_then(|builder| {
-                        builder
-                            .with_error_callback(log_output_stream_error)
-                            .open_stream_or_fallback()
-                    })
-                    .map_err(|_| format!("The audio output device \"{name}\" could not be opened"))
-            }
+            AudioOutputTarget::Device(name) => Self::open_device_output_stream(name),
             AudioOutputTarget::AsioDriver(name) => Self::open_asio_output_stream(name),
         }
+    }
+
+    /// Opens the picker's device entry. Other platforms enumerate CPAL
+    /// endpoints; Linux routes through the sound server, since its ALSA card
+    /// PCMs are owned by PipeWire and cannot be opened directly.
+    fn open_device_output_stream(name: &str) -> Result<OutputStream, String> {
+        #[cfg(target_os = "linux")]
+        {
+            Self::open_linux_sink_stream(name)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let device = find_output_device(name)
+                .ok_or_else(|| format!("The audio output device \"{name}\" is not available"))?;
+            OutputStreamBuilder::from_device(device)
+                .and_then(|builder| {
+                    builder
+                        .with_error_callback(log_output_stream_error)
+                        .open_stream_or_fallback()
+                })
+                .map_err(|_| format!("The audio output device \"{name}\" could not be opened"))
+        }
+    }
+
+    /// Opens the PulseAudio ALSA bridge, then moves this process's new
+    /// stream onto the chosen sink. Routing through pipewire-pulse keeps the
+    /// system default sink untouched. The bridge PCM is used because the
+    /// session manager owns the hardware PCMs; a direct card open would
+    /// either fail or bypass the sink selection.
+    #[cfg(target_os = "linux")]
+    fn open_linux_sink_stream(name: &str) -> Result<OutputStream, String> {
+        let sink = sink_for_label(name)
+            .ok_or_else(|| format!("The audio output device \"{name}\" is not available"))?;
+        let bridge = find_output_device(PULSE_BRIDGE_PCM).ok_or_else(|| {
+            "The PulseAudio ALSA bridge is not available for the selected output".to_owned()
+        })?;
+        let stream = OutputStreamBuilder::from_device(bridge)
+            .and_then(|builder| {
+                builder
+                    .with_error_callback(log_output_stream_error)
+                    .open_stream_or_fallback()
+            })
+            .map_err(|_| format!("The audio output device \"{name}\" could not be opened"))?;
+        move_own_streams_to_sink(&sink.name).map_err(|error| {
+            // Dropping the stream removes the sink input that could not be
+            // routed, so the caller's system-default fallback opens cleanly.
+            drop(stream);
+            format!("The audio output device \"{name}\" could not be selected: {error}")
+        })?;
+        crate::diagnostics::event(
+            "INFO",
+            format!(
+                "audio output \"{name}\" is routed to sink \"{}\"",
+                sink.name
+            ),
+        );
+        Ok(stream)
     }
 
     /// Opens a stream through the named ASIO driver, logging the driver's

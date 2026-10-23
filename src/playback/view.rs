@@ -41,6 +41,7 @@ use super::{
     listen_history::{
         DeezerListenSession, ListenHistorySignal, SoundCloudListenReport, deezer_next_media,
     },
+    output_devices,
     progressive::TimelineSuffixState,
     resolver::{ProgressCallback, ProgressUpdate, StreamResolver},
     standby::{self, ArmedStandby, PreparedSource, SinkProbe, StandbyPhase, WatchTick},
@@ -362,8 +363,9 @@ fn pause_silently(set_volume: impl FnOnce(), pause: impl FnOnce()) {
 
 /// Resolves the saved output selection into an engine target. ASIO mode
 /// plays through the saved driver, falling back to the first installed
-/// one. A saved WASAPI endpoint is checked when its stream is opened, so
-/// output changes do not enumerate devices on the UI thread.
+/// one. On Linux the saved sink label is checked against the sound server
+/// before the stream opens; Windows endpoint checks stay deferred to the
+/// stream open so output changes do not enumerate devices on the UI thread.
 fn resolve_saved_output_target(
     asio_mode: bool,
     output_device: Option<&str>,
@@ -373,9 +375,7 @@ fn resolve_saved_output_target(
         let registry_drivers = asio_drivers::list_registry_asio_drivers();
         asio_drivers::effective_target(true, asio_driver, &registry_drivers, output_device, &[])
     } else {
-        output_device
-            .map(|name| AudioOutputTarget::Device(name.to_owned()))
-            .unwrap_or(AudioOutputTarget::SystemDefault)
+        output_devices::resolve_saved_device_target(output_device)
     };
     let saved_name = if asio_mode {
         asio_driver

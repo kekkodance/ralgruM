@@ -2,14 +2,28 @@ use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
 use super::engine::AudioOutputTarget;
 
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod linux;
+
+#[cfg(target_os = "linux")]
+pub(crate) use linux::{PULSE_BRIDGE_PCM, move_own_streams_to_sink, sink_for_label};
+
 /// Picker entry that maps the audio stream onto the system default output
 /// device.
 pub(crate) const SYSTEM_DEFAULT_OUTPUT_LABEL: &str = "System default";
 
-/// Names of every output device attached to the default host, sorted and
-/// deduplicated so the list is stable across calls while devices come and
-/// go. Enumeration only; no audio stream is opened.
+/// Picker labels for the available outputs. Linux reads the sound server's
+/// sinks so the entries match real devices instead of ALSA plugin aliases;
+/// other platforms enumerate the default host. Sorted and deduplicated so
+/// the list stays stable across calls while devices come and go.
 pub(crate) fn list_output_devices() -> Vec<String> {
+    #[cfg(target_os = "linux")]
+    if let Ok(sinks) = linux::list_sinks()
+        && !sinks.is_empty()
+    {
+        return sinks.into_iter().map(|sink| sink.label).collect();
+    }
     let host = rodio::cpal::default_host();
     let names = host
         .output_devices()
@@ -30,10 +44,11 @@ pub(crate) fn list_output_devices() -> Vec<String> {
     }
 }
 
-/// ALSA exposes several plugin names alongside real cards. The picker keeps
-/// the card entries and only falls back to the sound-server aliases, or to
-/// the raw list, when no card is visible. This keeps entries such as
-/// `default`, `jack`, or `null` from masquerading as selectable hardware.
+/// Fallback for when the Linux sound server cannot be queried. ALSA exposes
+/// several plugin names alongside real cards. The picker keeps the card
+/// entries and only falls back to the sound-server aliases, or to the raw
+/// list, when no card is visible. This keeps entries such as `default`,
+/// `jack`, or `null` from masquerading as selectable hardware.
 #[cfg(any(target_os = "linux", test))]
 fn linux_picker_output_names(names: &[String]) -> Vec<String> {
     const SOUND_SERVER_ALIASES: &[&str] = &["pipewire", "pulse"];
@@ -87,6 +102,26 @@ pub(crate) fn resolve_output_target(
             AudioOutputTarget::Device(name.to_owned())
         }
         _ => AudioOutputTarget::SystemDefault,
+    }
+}
+
+/// Resolves the saved picker entry into an engine target. Platforms with a
+/// sound server validate the entry against the same list the picker shows;
+/// the Windows endpoint path stays unchecked until its stream is opened.
+pub(crate) fn resolve_saved_device_target(saved: Option<&str>) -> AudioOutputTarget {
+    #[cfg(target_os = "linux")]
+    {
+        let Some(saved) = saved else {
+            return AudioOutputTarget::SystemDefault;
+        };
+        let available = list_output_devices();
+        resolve_output_target(Some(saved), &available)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        saved
+            .map(|name| AudioOutputTarget::Device(name.to_owned()))
+            .unwrap_or(AudioOutputTarget::SystemDefault)
     }
 }
 
