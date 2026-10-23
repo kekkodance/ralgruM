@@ -10,17 +10,43 @@ inputs:
     required: false
     default: ''
   cache-save-if:
-    description: Whether to save a fresh cache entry. Empty keeps rust-cache's default.
+    description: Whether to save fresh dependency caches. Empty saves the apt cache and keeps rust-cache's default.
     required: false
     default: ''
 runs:
   using: composite
   steps:
+    # The system apt archive directory is root-owned, so the cache lives in
+    # runner.temp and is copied into place before installing. The week in the
+    # key refreshes the archive as Ubuntu ships package updates.
+    - name: Compute apt cache week
+      id: apt-cache-week
+      shell: bash
+      run: echo "week=$(date -u +%Y-%W)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore apt package cache
+      id: apt-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        key: apt-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key }}-${{ steps.apt-cache-week.outputs.week }}-${{ hashFiles('.github/actions/setup-linux/action.yml') }}
+        restore-keys: |
+          apt-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key }}-${{ steps.apt-cache-week.outputs.week }}-
+          apt-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key }}-
+
     - name: Install Linux build dependencies
       shell: bash
+      env:
+        APT_ARCHIVES: ${{ runner.temp }}/apt-archives
       run: |
+        set -euo pipefail
+        mkdir -p "$APT_ARCHIVES"
+        if compgen -G "$APT_ARCHIVES/*.deb" > /dev/null; then
+          sudo cp -n "$APT_ARCHIVES"/*.deb /var/cache/apt/archives/
+        fi
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
+          -o APT::Keep-Downloaded-Packages=true \
           libasound2-dev \
           libdbus-1-dev \
           libgtk-3-dev \
@@ -40,6 +66,14 @@ runs:
           libvulkan-dev \
           pkg-config \
           desktop-file-utils
+        cp -n /var/cache/apt/archives/*.deb "$APT_ARCHIVES"/ 2>/dev/null || true
+
+    - name: Save apt package cache
+      if: ${{ steps.apt-cache.outputs.cache-hit != 'true' && (inputs.cache-save-if == '' || inputs.cache-save-if == 'true') }}
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        key: ${{ steps.apt-cache.outputs.cache-primary-key }}
 
     - name: Check out the private murglar submodule
       if: ${{ inputs.private-token != '' }}
