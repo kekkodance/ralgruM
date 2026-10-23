@@ -240,6 +240,7 @@ fn main() {
                         saved_state,
                         &displays,
                     ),
+                    app_id: Some("ralgruM".into()),
                     inactive_frame_interval: None,
                     titlebar: Some(TitlebarOptions {
                         title: Some("ralgruM".into()),
