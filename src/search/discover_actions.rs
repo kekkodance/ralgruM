@@ -488,7 +488,7 @@ impl SearchView {
                     if playback.state.queue_epoch() != queue_epoch {
                         return;
                     }
-                    playback.replace_queue(queue, 0, cx);
+                    playback.replace_queue_shuffled(queue, cx);
                     playback.set_context(
                         crate::playback::PlaybackContext::SoundCloudCollection { context_urn },
                         cx,

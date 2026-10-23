@@ -191,7 +191,7 @@ impl LibraryView {
                     if playback.state.queue_epoch() != queue_epoch {
                         return;
                     }
-                    playback.replace_queue(queue, 0, cx);
+                    playback.replace_queue_shuffled(queue, cx);
                     playback.set_context(PlaybackContext::SoundCloudStation { seed_track_id }, cx);
                 });
             })
@@ -272,7 +272,7 @@ impl LibraryView {
                     if playback.state.queue_epoch() != queue_epoch {
                         return;
                     }
-                    playback.replace_queue(queue, 0, cx);
+                    playback.replace_queue_shuffled(queue, cx);
                     playback.set_context(PlaybackContext::SoundCloudStation { seed_track_id }, cx);
                 });
             })
@@ -452,7 +452,7 @@ impl LibraryView {
                     if playback.state.queue_epoch() != queue_epoch {
                         return;
                     }
-                    playback.replace_queue(queue, 0, cx);
+                    playback.replace_queue_shuffled(queue, cx);
                     playback.set_context(context.clone(), cx);
                 });
             })

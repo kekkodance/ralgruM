@@ -13,7 +13,7 @@ impl PlaybackModel {
             return;
         }
         if self.state.current_index.is_none() {
-            self.replace_queue(additions, 0, cx);
+            self.play_queue(additions, cx);
             return;
         }
         let should_play = self.state.status == PlaybackStatus::Ended;

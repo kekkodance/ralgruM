@@ -473,6 +473,19 @@ impl PlaybackState {
         self.begin_selection()
     }
 
+    pub(crate) fn shuffle_start_index(&mut self, queue: &[PlaybackTrack]) -> usize {
+        if !self.shuffle_enabled {
+            return 0;
+        }
+        let mut playable_indices = queue
+            .iter()
+            .enumerate()
+            .filter_map(|(index, track)| (!self.content_blocked(track)).then_some(index))
+            .collect::<Vec<_>>();
+        Self::shuffle_indices(&mut playable_indices, &mut self.shuffle_seed);
+        playable_indices.first().copied().unwrap_or(0)
+    }
+
     pub(crate) fn select(&mut self, index: usize) -> Option<u64> {
         self.select_with_history(index, true)
     }

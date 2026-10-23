@@ -11,8 +11,17 @@ impl PlaybackModel {
     }
 
     pub(crate) fn play_queue(&mut self, queue: Vec<PlaybackTrack>, cx: &mut Context<Self>) {
-        self.replace_queue_with_mode(queue, 0, false, cx);
+        self.replace_queue_shuffled(queue, cx);
         self.set_context(crate::playback::PlaybackContext::None, cx);
+    }
+
+    pub(crate) fn replace_queue_shuffled(
+        &mut self,
+        queue: Vec<PlaybackTrack>,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.state.shuffle_start_index(&queue);
+        self.replace_queue_with_mode(queue, index, false, cx);
     }
 
     fn replace_queue_with_mode(
@@ -181,7 +190,7 @@ impl PlaybackModel {
             cx.notify();
             self.refresh_deezer_ai_content(cx);
         } else {
-            self.replace_queue(tracks, 0, cx);
+            self.replace_queue_shuffled(tracks, cx);
             self.set_context(context, cx);
         }
     }
