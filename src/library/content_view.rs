@@ -1374,37 +1374,21 @@ fn render_playlist_play_control(
     provider_card: Option<Card>,
 ) -> AnyElement {
     let host = host.clone();
-    let button_id = format!("library-playlist-play-{}-{playlist_id}", service.label());
-    div()
-        .id(format!("{button_id}-tooltip"))
-        .flex_none()
-        .size(px(22.))
-        .rounded(px(6.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .app_tooltip("Play playlist")
-        .child(
-            Button::new(button_id)
-                .xsmall()
-                .with_size(px(14.666666))
-                .ghost()
-                .size(px(22.))
-                .rounded(px(6.))
-                .text_color(rgb(MUTED))
-                .cursor_pointer()
-                .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
-                .icon(Icon::default().path(LocalIcon::Play.path()))
-                .on_click(move |_, _, app| {
-                    let provider_card = provider_card.clone();
-                    host.update(app, |this, cx| match provider_card {
-                        Some(card) => this.play_collection(card, cx),
-                        None => this.play_local_playlist(playlist_id.clone(), cx),
-                    });
-                }),
-        )
-        .into_any_element()
+    playlist_header_action_button(
+        format!("library-playlist-play-{}-{playlist_id}", service.label()).into(),
+        LocalIcon::Play,
+        MUTED,
+        FOREGROUND,
+        false,
+        "Play playlist",
+        move |_, _, app| {
+            let provider_card = provider_card.clone();
+            host.update(app, |this, cx| match provider_card {
+                Some(card) => this.play_collection(card, cx),
+                None => this.play_local_playlist(playlist_id.clone(), cx),
+            });
+        },
+    )
 }
 
 fn page_count_text(page: &Page) -> String {

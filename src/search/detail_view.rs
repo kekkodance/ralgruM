@@ -783,6 +783,9 @@ fn render_page(
         cx.entity(),
     );
     let mut actions = Vec::new();
+    if let Some(action) = detail_play(route, total, cx) {
+        actions.push(action);
+    }
     if let Some(action) = header_favorite {
         actions.push(action);
     }
@@ -878,6 +881,34 @@ fn detail_edit(
             host.update(app, |this, cx| {
                 this.open_playlist_editor(provider, id.clone(), window, cx);
             });
+        },
+    ))
+}
+
+fn detail_play(
+    route: &DetailRoute,
+    total: usize,
+    cx: &mut gpui::Context<SearchView>,
+) -> Option<AnyElement> {
+    if route.kind != ResultType::Playlists {
+        return None;
+    }
+    let card = detail_route_card(route, total);
+    let host = cx.entity();
+    Some(playlist_header_action_button(
+        format!(
+            "search-play-playlist-{}-{}",
+            route.provider.label(),
+            route.id
+        )
+        .into(),
+        LocalIcon::Play,
+        MUTED,
+        FOREGROUND,
+        false,
+        "Play playlist",
+        move |_, _, app| {
+            host.update(app, |this, cx| this.play_collection(card.clone(), cx));
         },
     ))
 }
