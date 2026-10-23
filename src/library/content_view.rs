@@ -560,6 +560,11 @@ pub(super) fn render_main_header(
         view.state.category,
         view.state.routes.len(),
     );
+    let show_liked_tracks_play_control = liked_tracks_play_control_visible(
+        view.state.service,
+        view.state.category,
+        view.state.routes.len(),
+    );
     if is_provider_detail(view) {
         if is_artist_detail(view) {
             return render_artist_header_snapshot(view, &page, &snapshot, &host);
@@ -576,6 +581,7 @@ pub(super) fn render_main_header(
         detail && small_heading,
         true,
         show_playlist_create_control,
+        show_liked_tracks_play_control,
     )
 }
 
@@ -703,6 +709,16 @@ fn playlist_create_control_visible(
         service,
         Service::Local | Service::Deezer | Service::SoundCloud
     ) && category == Category::Playlists
+        && !is_detail_route(route_depth)
+}
+
+fn liked_tracks_play_control_visible(
+    service: Service,
+    category: Category,
+    route_depth: usize,
+) -> bool {
+    matches!(service, Service::Deezer | Service::SoundCloud)
+        && category == Category::Tracks
         && !is_detail_route(route_depth)
 }
 
@@ -997,6 +1013,7 @@ fn render_page_header_snapshot(
     small_heading: bool,
     root_header: bool,
     show_playlist_create_control: bool,
+    show_liked_tracks_play_control: bool,
 ) -> AnyElement {
     let heading_description = page_header_secondary_copy(
         snapshot.flow_header_prefers_subtitle,
@@ -1009,10 +1026,12 @@ fn render_page_header_snapshot(
         .filter(|_| page_header_shows_platform(snapshot.category, page.platform));
     let show_platform_name = platform.is_some() && detail_heading_has_context(snapshot.route_depth);
     let flow_mode_control = snapshot.flow_mode_control;
+    let show_heading_action_control =
+        show_playlist_create_control || show_liked_tracks_play_control;
     let title_has_intrinsic_width = title_uses_intrinsic_width(
         flow_mode_control,
         platform.is_some(),
-        show_playlist_create_control,
+        show_heading_action_control,
     );
     div()
         .flex()
@@ -1068,13 +1087,12 @@ fn render_page_header_snapshot(
                                 .when(title_has_intrinsic_width, |this| this.flex_initial())
                                 .when(!title_has_intrinsic_width, |this| this.flex_1())
                                 .min_w_0()
-                                .when(flow_mode_control || show_playlist_create_control, |this| {
+                                .when(flow_mode_control || show_heading_action_control, |this| {
                                     this.whitespace_nowrap()
                                 })
-                                .when(
-                                    !flow_mode_control && !show_playlist_create_control,
-                                    |this| this.truncate(),
-                                )
+                                .when(!flow_mode_control && !show_heading_action_control, |this| {
+                                    this.truncate()
+                                })
                                 .child(page.title.clone()),
                         )
                         .when(show_playlist_create_control, |this| {
@@ -1084,6 +1102,18 @@ fn render_page_header_snapshot(
                                     .relative()
                                     .top(px(PLAYLIST_CREATE_OPTICAL_OFFSET_PX))
                                     .child(render_playlist_create_control(host, snapshot.service)),
+                            )
+                        })
+                        .when(show_liked_tracks_play_control, |this| {
+                            this.child(
+                                div()
+                                    .flex_none()
+                                    .relative()
+                                    .top(px(PLAYLIST_CREATE_OPTICAL_OFFSET_PX))
+                                    .child(render_liked_tracks_play_control(
+                                        host,
+                                        snapshot.service,
+                                    )),
                             )
                         })
                         .when(flow_mode_control, |this| {
@@ -1233,6 +1263,14 @@ fn playlist_create_button_id(service: Service) -> &'static str {
     }
 }
 
+fn liked_tracks_play_button_id(service: Service) -> &'static str {
+    match service {
+        Service::Deezer => "play-deezer-liked-tracks",
+        Service::SoundCloud => "play-soundcloud-liked-tracks",
+        Service::Local => "play-local-liked-tracks",
+    }
+}
+
 fn render_playlist_create_control(
     host: &gpui::Entity<LibraryView>,
     service: Service,
@@ -1273,6 +1311,39 @@ fn render_playlist_create_control(
                             this.open_soundcloud_playlist_create(window, cx);
                         }
                     });
+                }),
+        )
+        .into_any_element()
+}
+
+fn render_liked_tracks_play_control(
+    host: &gpui::Entity<LibraryView>,
+    service: Service,
+) -> AnyElement {
+    let host = host.clone();
+    div()
+        .id(format!("{}-tooltip", liked_tracks_play_button_id(service)))
+        .flex_none()
+        .size(px(22.))
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .app_tooltip("Play liked tracks")
+        .child(
+            Button::new(liked_tracks_play_button_id(service))
+                .xsmall()
+                .with_size(px(14.666666))
+                .ghost()
+                .size(px(22.))
+                .rounded(px(6.))
+                .text_color(rgb(MUTED))
+                .cursor_pointer()
+                .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
+                .icon(Icon::default().path(LocalIcon::Play.path()))
+                .on_click(move |_, _, app| {
+                    host.update(app, |this, cx| this.play_liked_tracks(service, cx));
                 }),
         )
         .into_any_element()

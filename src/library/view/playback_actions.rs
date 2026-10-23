@@ -1,6 +1,68 @@
 use super::*;
 
 impl LibraryView {
+    pub(crate) fn play_liked_tracks(&mut self, service: super::Service, cx: &mut Context<Self>) {
+        if !matches!(service, super::Service::Deezer | super::Service::SoundCloud)
+            || self.state.service != service
+            || self.state.category != super::Category::Tracks
+            || self.state.routes.len() != 1
+        {
+            return;
+        }
+
+        let Some(page) = self.state.page.as_ref() else {
+            if service == super::Service::Deezer && self.state.tracks_pipeline_retryable() {
+                self.retry_deezer_tracks_pending(cx);
+            }
+            crate::toast::push_global(
+                cx,
+                crate::toast::ToastKind::Info,
+                "Liked tracks are still loading",
+                Some("Try again after the liked tracks finish loading.".into()),
+            );
+            return;
+        };
+
+        let page_is_complete = service == super::Service::SoundCloud
+            || (page.playlist_removal_proven() && page.tracks.len() == page.raw_loaded_count);
+        if !page_is_complete {
+            if service == super::Service::Deezer && self.state.tracks_pipeline_retryable() {
+                self.retry_deezer_tracks_pending(cx);
+            }
+            crate::toast::push_global(
+                cx,
+                crate::toast::ToastKind::Info,
+                "Liked tracks are still loading",
+                Some("Wait for the full list to finish loading, then try again.".into()),
+            );
+            return;
+        }
+
+        let provider = match service {
+            super::Service::Deezer => Provider::Deezer,
+            super::Service::SoundCloud => Provider::SoundCloud,
+            super::Service::Local => unreachable!(),
+        };
+        let queue = page
+            .tracks
+            .iter()
+            .map(|track| PlaybackTrack::from_library(track, provider))
+            .collect::<Vec<_>>();
+        if queue.is_empty() {
+            crate::toast::push_global(
+                cx,
+                crate::toast::ToastKind::Info,
+                "No liked tracks to play",
+                None,
+            );
+            return;
+        }
+
+        self.invalidate_playback_actions();
+        self.playback
+            .update(cx, |playback, cx| playback.play_queue(queue, cx));
+    }
+
     pub(super) fn invalidate_playback_actions(&mut self) -> u64 {
         self.playback_action_generation = self.playback_action_generation.wrapping_add(1);
         self.extension_observer_key = None;
