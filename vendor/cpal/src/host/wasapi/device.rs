@@ -385,10 +385,14 @@ impl Device {
                 &PKEY_AUDIOENDPOINT_JACKSUBTYPE as *const _ as *const _,
             );
 
-            // Prefer DeviceDesc for name, fall back to FriendlyName
-            let name = device_desc
+            // Prefer the endpoint's friendly name ("Speakers (Minifuse 2)")
+            // for `name`, matching the value the deprecated
+            // `DeviceTrait::name()` returned. DeviceDesc alone is the generic
+            // endpoint class ("Speakers") and collapses every endpoint of the
+            // same type to one label.
+            let name = friendly_name
                 .clone()
-                .or(friendly_name.clone())
+                .or(device_desc.clone())
                 .ok_or_else(|| DeviceNameError::BackendSpecific {
                     err: BackendSpecificError {
                         description: "failed to retrieve device name".to_string(),
@@ -430,10 +434,11 @@ impl Device {
                 builder = builder.driver(iface_name);
             }
 
-            // Add FriendlyName to extended if different from the name we used
-            if let Some(fname) = friendly_name {
-                if device_desc.is_some() && Some(&fname) != device_desc.as_ref() {
-                    builder = builder.add_extended_line(fname);
+            // Keep the generic endpoint description as an extra detail when
+            // it differs from the friendly name used for the label.
+            if let Some(desc) = device_desc {
+                if friendly_name.as_deref() != Some(desc.as_str()) {
+                    builder = builder.add_extended_line(desc);
                 }
             }
 

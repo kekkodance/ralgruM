@@ -130,7 +130,11 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
             .unwrap_or_else(|| Icon::new(IconName::Check));
 
         let content = div()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
             .whitespace_nowrap()
+            .truncate()
             .child(item.render(window, cx).into_any_element());
 
         Some(

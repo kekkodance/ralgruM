@@ -322,7 +322,7 @@ impl SettingsView {
                 let mut playback_rows = vec![control_row(
                     "Output device",
                     "Choose where ralgruM plays audio.",
-                    settings_select(&self.output_device_select, 180.).into_any_element(),
+                    settings_select(&self.output_device_select, 200.).into_any_element(),
                 )];
                 #[cfg(windows)]
                 playback_rows.push(control_row(
