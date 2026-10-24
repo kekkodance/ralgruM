@@ -352,10 +352,7 @@ fn run_worker(receiver: Receiver<WorkerCommand>, events: Sender<WorkerEvent>) {
     }
 }
 
-fn settle_command(
-    receiver: &Receiver<WorkerCommand>,
-    command: &mut WorkerCommand,
-) -> WaitOutcome {
+fn settle_command(receiver: &Receiver<WorkerCommand>, command: &mut WorkerCommand) -> WaitOutcome {
     loop {
         match receiver.recv_timeout(DISCORD_TRANSITION_SETTLE_INTERVAL) {
             Ok(next) => *command = next,
