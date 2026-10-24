@@ -27,14 +27,14 @@ enum AsioRequest {
     Open {
         driver: String,
         /// Reports the opened stream back to the caller.
-        reply: Sender<Result<rodio::OutputStream, String>>,
+        reply: Sender<Result<rodio::MixerDeviceSink, String>>,
     },
     /// Drops streams on the owner thread and acknowledges completion. Every
     /// teardown is synchronous: the next open on the same physical interface
     /// must not race the COM release, and the system-suspend teardown must
     /// finish before the OS freezes all threads.
     Drop {
-        streams: Vec<rodio::OutputStream>,
+        streams: Vec<rodio::MixerDeviceSink>,
         ack: Sender<()>,
     },
 }
@@ -100,14 +100,14 @@ fn owner_thread(receiver: Receiver<AsioRequest>) {
 /// Opens the ASIO output stream on the calling (owner) thread, logging the
 /// driver's live config.
 #[cfg(windows)]
-fn open_stream_on_this_thread(driver: &str) -> Result<rodio::OutputStream, String> {
+fn open_stream_on_this_thread(driver: &str) -> Result<rodio::MixerDeviceSink, String> {
     let device = crate::playback::asio_drivers::find_asio_driver(driver)?;
     let config = device.default_output_config().ok();
-    let stream = rodio::OutputStreamBuilder::from_device(device)
+    let stream = rodio::DeviceSinkBuilder::from_device(device)
         .and_then(|builder| {
             builder
                 .with_error_callback(crate::playback::engine::log_output_stream_error)
-                .open_stream_or_fallback()
+                .open_sink_or_fallback()
         })
         .map_err(|error| format!("The ASIO driver \"{driver}\" could not be opened: {error}"))?;
     if let Some(config) = config {
@@ -115,7 +115,7 @@ fn open_stream_on_this_thread(driver: &str) -> Result<rodio::OutputStream, Strin
             "INFO",
             format!(
                 "ASIO driver \"{driver}\" opened at {} Hz, {} channels, sample format {}",
-                config.sample_rate().0,
+                config.sample_rate(),
                 config.channels(),
                 config.sample_format(),
             ),
@@ -129,7 +129,7 @@ fn open_stream_on_this_thread(driver: &str) -> Result<rodio::OutputStream, Strin
 /// or fails. No other thread may enumerate ASIO drivers while a session is
 /// live: the driver is process-global and a concurrent load poisons it.
 #[cfg(windows)]
-pub(crate) fn open_asio_stream_logged(driver: &str) -> Result<rodio::OutputStream, String> {
+pub(crate) fn open_asio_stream_logged(driver: &str) -> Result<rodio::MixerDeviceSink, String> {
     let (reply_tx, reply_rx) = channel();
     owner_sender()
         .send(AsioRequest::Open {
@@ -145,7 +145,7 @@ pub(crate) fn open_asio_stream_logged(driver: &str) -> Result<rodio::OutputStrea
 /// ASIO does not exist off Windows: every open fails fast instead of
 /// reaching for the Windows-only owner thread.
 #[cfg(not(windows))]
-pub(crate) fn open_asio_stream_logged(_driver: &str) -> Result<rodio::OutputStream, String> {
+pub(crate) fn open_asio_stream_logged(_driver: &str) -> Result<rodio::MixerDeviceSink, String> {
     Err("ASIO is unavailable on this platform".into())
 }
 
@@ -155,7 +155,7 @@ pub(crate) fn open_asio_stream_logged(_driver: &str) -> Result<rodio::OutputStre
 /// system-suspend teardown must finish before the OS freezes all threads or
 /// the Apartment-threaded driver DLL is left half-exited.
 #[cfg(windows)]
-pub(crate) fn drop_asio_streams(streams: Vec<rodio::OutputStream>) {
+pub(crate) fn drop_asio_streams(streams: Vec<rodio::MixerDeviceSink>) {
     let (ack_tx, ack_rx) = channel();
     let request = AsioRequest::Drop {
         streams,
@@ -169,7 +169,7 @@ pub(crate) fn drop_asio_streams(streams: Vec<rodio::OutputStream>) {
 /// ASIO does not exist off Windows: the streams are plain backend streams,
 /// so the teardown drops them in place with no owner thread to synchronize.
 #[cfg(not(windows))]
-pub(crate) fn drop_asio_streams(streams: Vec<rodio::OutputStream>) {
+pub(crate) fn drop_asio_streams(streams: Vec<rodio::MixerDeviceSink>) {
     drop(streams);
 }
 

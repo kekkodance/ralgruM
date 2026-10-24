@@ -12,9 +12,13 @@ use std::sync::{Arc, Mutex};
 #[derive(Parser, Debug)]
 #[command(version, about = "CPAL record_wav example", long_about = None)]
 struct Opt {
-    /// The audio device to use
-    #[arg(short, long, default_value_t = String::from("default"))]
-    device: String,
+    /// The audio device to use.
+    #[arg(short, long)]
+    device: Option<String>,
+
+    /// How long to record, in seconds
+    #[arg(long, default_value_t = 3)]
+    duration: u64,
 
     /// Use the JACK host
     #[cfg(all(
@@ -69,20 +73,23 @@ fn main() -> Result<(), anyhow::Error> {
     let host = cpal::default_host();
 
     // Set up the input device and stream with the default input config.
-    let device = if opt.device == "default" {
-        host.default_input_device()
+    let device = if let Some(device) = opt.device {
+        let id = &device.parse().expect("failed to parse input device id");
+        host.device_by_id(id)
     } else {
-        host.input_devices()?
-            .find(|x| x.name().map(|y| y == opt.device).unwrap_or(false))
+        host.default_input_device()
     }
     .expect("failed to find input device");
 
-    println!("Input device: {}", device.name()?);
+    println!("Input device: {}", device.id()?);
 
-    let config = device
-        .default_input_config()
-        .expect("Failed to get default input config");
-    println!("Default input config: {:?}", config);
+    let config = if device.supports_input() {
+        device.default_input_config()
+    } else {
+        device.default_output_config()
+    }
+    .expect("Failed to get default input/output config");
+    println!("Default input/output config: {config:?}");
 
     // The WAV file we're recording to.
     const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/recorded.wav");
@@ -97,7 +104,7 @@ fn main() -> Result<(), anyhow::Error> {
     let writer_2 = writer.clone();
 
     let err_fn = move |err| {
-        eprintln!("an error occurred on stream: {}", err);
+        eprintln!("an error occurred on stream: {err}");
     };
 
     let stream = match config.sample_format() {
@@ -135,10 +142,10 @@ fn main() -> Result<(), anyhow::Error> {
     stream.play()?;
 
     // Let recording go for roughly three seconds.
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::thread::sleep(std::time::Duration::from_secs(opt.duration));
     drop(stream);
     writer.lock().unwrap().take().unwrap().finalize()?;
-    println!("Recording {} complete!", PATH);
+    println!("Recording {PATH} complete!");
     Ok(())
 }
 
@@ -153,7 +160,7 @@ fn sample_format(format: cpal::SampleFormat) -> hound::SampleFormat {
 fn wav_spec_from_config(config: &cpal::SupportedStreamConfig) -> hound::WavSpec {
     hound::WavSpec {
         channels: config.channels() as _,
-        sample_rate: config.sample_rate().0 as _,
+        sample_rate: config.sample_rate() as _,
         bits_per_sample: (config.sample_format().sample_size() * 8) as _,
         sample_format: sample_format(config.sample_format()),
     }

@@ -129,8 +129,8 @@ async fn buffered_local_seek_keeps_playing_as_the_file_grows() {
     writer.flush().await.unwrap();
     writer.finish().await.unwrap();
 
-    let sample_rate = u64::from(local.sample_rate());
-    let channels = u64::from(local.channels());
+    let sample_rate = u64::from(local.sample_rate().get());
+    let channels = u64::from(local.channels().get());
     let expected = (sample_rate * channels * 8) as usize;
     let decoded = tokio::task::spawn_blocking(move || local.take(expected).count())
         .await
@@ -284,14 +284,14 @@ fn sequential_seeked_decoders_do_not_restart_from_zero() {
 #[test]
 fn bounded_discard_uses_only_the_intra_segment_offset() {
     let samples = (0..10_000).map(|value| value as f32).collect::<Vec<_>>();
-    let mut source = SamplesBuffer::new(1, 1_000, samples);
+    let mut source = SamplesBuffer::new(channel_count(1), sample_rate(1_000), samples);
     discard_decoder_samples(&mut source, Duration::from_millis(7), None).unwrap();
     assert_eq!(source.next(), Some(7.0));
 }
 
 #[test]
 fn bounded_discard_honors_cancellation_before_long_work() {
-    let mut source = SamplesBuffer::new(1, 1_000, vec![0.0; 100_000]);
+    let mut source = SamplesBuffer::new(channel_count(1), sample_rate(1_000), vec![0.0; 100_000]);
     let cancellation = AtomicBool::new(true);
     let error = discard_decoder_samples(&mut source, Duration::from_secs(40), Some(&cancellation))
         .expect_err("cancelled discard must stop before decoding the track prefix");
@@ -684,8 +684,9 @@ fn sample_rms(samples: &[f32]) -> f32 {
 /// standby path is decoded by `decode` from a fully downloaded buffer,
 /// and its M4A variant must carry a completed-buffer reload so an
 /// in-track seek after the auto-advance defers through the discard
-/// reload instead of falling back to the sink seek, which reports
-/// success but silently restarts a fragmented MP4 from zero.
+/// reload. Rodio 0.22 fixed the fragmented MP4 decoder seek, but the
+/// engine keeps M4A on the reload path so complete and progressive M4A
+/// sources position through the same decoder rebuild.
 #[test]
 fn standby_fragmented_m4a_source_seeks_through_the_completed_reload() {
     let Some(file) = make_fragmented_aac_fixture() else {
@@ -723,16 +724,16 @@ fn standby_fragmented_m4a_source_seeks_through_the_completed_reload() {
         "the completed-buffer reload must land in the tone region, RMS was {seeked_rms}"
     );
 
-    // The fallback this replaces: a direct sink seek on the same file
-    // claims success while the decoder restarts from the silent prefix,
-    // which is exactly the auto-advance seek bug.
+    // Rodio 0.21 silently restarted a fragmented MP4 from the silent
+    // prefix here. Rodio 0.22 seeks MP4 correctly, so the direct decoder
+    // seek now also lands in the tone region.
     let mut sink_seeking = RodioEngine::decoder(&progressive_seek.path, AudioFormat::M4a).unwrap();
     assert!(sink_seeking.try_seek(Duration::from_millis(800)).is_ok());
     let sink_samples = sink_seeking.by_ref().take(4_096).collect::<Vec<_>>();
     let sink_rms = sample_rms(&sink_samples);
     assert!(
-        sink_rms < 0.05,
-        "a sink seek on fragmented MP4 must not be trusted, RMS was {sink_rms}"
+        sink_rms > 0.2,
+        "a direct decoder seek on fragmented MP4 should land in the tone region, RMS was {sink_rms}"
     );
 }
 

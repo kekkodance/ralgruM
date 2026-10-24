@@ -13,6 +13,15 @@ pub(crate) use linux::{PULSE_BRIDGE_PCM, move_own_streams_to_sink, sink_for_labe
 /// device.
 pub(crate) const SYSTEM_DEFAULT_OUTPUT_LABEL: &str = "System default";
 
+/// Human-readable endpoint name reported by CPAL. The legacy `name()` call
+/// is deprecated in CPAL 0.17; the description carries the same label.
+pub(crate) fn device_output_name(device: &rodio::cpal::Device) -> Option<String> {
+    device
+        .description()
+        .ok()
+        .map(|description| description.name().to_owned())
+}
+
 /// Picker labels for the available outputs. Linux reads the sound server's
 /// sinks so the entries match real devices instead of ALSA plugin aliases;
 /// other platforms enumerate the default host. Sorted and deduplicated so
@@ -29,7 +38,7 @@ pub(crate) fn list_output_devices() -> Vec<String> {
         .output_devices()
         .map(|devices| {
             devices
-                .filter_map(|device| device.name().ok())
+                .filter_map(|device| device_output_name(&device))
                 .collect::<Vec<String>>()
         })
         .unwrap_or_default();
@@ -88,7 +97,7 @@ pub(crate) fn find_output_device(name: &str) -> Option<rodio::cpal::Device> {
     let host = rodio::cpal::default_host();
     host.output_devices()
         .ok()?
-        .find(|device| device.name().ok().as_deref() == Some(name))
+        .find(|device| device_output_name(device).as_deref() == Some(name))
 }
 
 /// Maps a saved output device setting onto an engine target. A missing name

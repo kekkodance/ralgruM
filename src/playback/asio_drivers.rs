@@ -1,8 +1,8 @@
 use super::engine::AudioOutputTarget;
-use super::output_devices::sorted_deduped;
+use super::output_devices::{device_output_name, sorted_deduped};
 
 #[cfg(windows)]
-use rodio::cpal::traits::{DeviceTrait, HostTrait};
+use rodio::cpal::traits::HostTrait;
 
 /// Names of every installed ASIO driver, read straight from the registry
 /// without loading any driver. The list includes drivers whose hardware is
@@ -49,7 +49,7 @@ pub(crate) fn find_asio_driver(name: &str) -> Result<rodio::cpal::Device, String
         .map_err(|error| format!("ASIO drivers could not be enumerated: {error}"))?;
     devices
         .into_iter()
-        .find(|device| device.name().ok().as_deref() == Some(name))
+        .find(|device| device_output_name(device).as_deref() == Some(name))
         .ok_or_else(|| format!("The installed ASIO driver \"{name}\" could not be loaded"))
 }
 

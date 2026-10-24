@@ -64,7 +64,7 @@ embed-resource = "3.0.11"
 
 
 [target.'cfg(windows)'.dependencies]
-cpal = { version = "0.16.0", features = ["asio"] }
+cpal = { version = "0.17.1", features = ["asio"] }
 raw-window-handle = "0.6"
 tray-icon = { version = "=0.24.1", default-features = false }
 wry = { version = "0.57.0", default-features = false }

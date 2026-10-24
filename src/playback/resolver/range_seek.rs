@@ -1707,8 +1707,8 @@ mod tests {
     /// Mirrors the discard the engine applies to a timeline startup.
     fn discard_samples(decoder: &mut rodio::Decoder<ProgressiveReader>, position: Duration) {
         let target = position.as_nanos()
-            * u128::from(u64::from(decoder.sample_rate()))
-            * u128::from(u64::from(decoder.channels()))
+            * u128::from(decoder.sample_rate().get())
+            * u128::from(decoder.channels().get())
             / 1_000_000_000;
         for _ in 0..target {
             decoder.next();
