@@ -72,7 +72,7 @@ impl SettingsView {
                 control_row(
                     "Audio cache size",
                     "Older cached audio is removed automatically.",
-                    settings_select(&self.cache_limit_select, 100., 140.).into_any_element(),
+                    settings_select(&self.cache_limit_select, 100.).into_any_element(),
                 ),
                 div()
                     .w_full()
@@ -213,7 +213,7 @@ impl SettingsView {
                 control_row(
                     "Start page",
                     "Choose what appears when ralgruM opens.",
-                    settings_select(&self.start_page_select, 130., 160.).into_any_element(),
+                    settings_select(&self.start_page_select, 130.).into_any_element(),
                 ),
                 control_row(
                     "Remember navigation choices",
@@ -322,7 +322,9 @@ impl SettingsView {
                 let mut playback_rows = vec![control_row(
                     "Output device",
                     "Choose where ralgruM plays audio.",
-                    settings_select(&self.output_device_select, 240., 380.).into_any_element(),
+                    settings_select(&self.output_device_select, 200.)
+                        .menu_width(px(240.))
+                        .into_any_element(),
                 )];
                 #[cfg(windows)]
                 playback_rows.push(control_row(
@@ -375,7 +377,7 @@ impl SettingsView {
                     control_row(
                         "Default lyrics provider",
                         "You can still switch providers from the lyrics pane.",
-                        settings_select(&self.lyrics_source_select, 130., 160.).into_any_element(),
+                        settings_select(&self.lyrics_source_select, 130.).into_any_element(),
                     ),
                     control_row(
                         "Share activity with Discord",
@@ -402,11 +404,9 @@ impl SettingsView {
 fn settings_select(
     state: &Entity<SelectState<Vec<SharedString>>>,
     width: f32,
-    menu_width: f32,
 ) -> Select<Vec<SharedString>> {
     Select::new(state)
         .w(px(width))
-        .menu_width(px(menu_width))
         .h(px(34.))
         .text_size(px(11.5))
         .bg(rgb(BACKGROUND))

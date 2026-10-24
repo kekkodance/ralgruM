@@ -98,6 +98,7 @@ impl RenderOnce for SearchableListItemElement {
         h_flex()
             .id(self.id)
             .relative()
+            .w_full()
             .mb(px(2.))
             .gap_x_1()
             .py_1()
@@ -125,7 +126,7 @@ impl RenderOnce for SearchableListItemElement {
                     .items_center()
                     .justify_between()
                     .gap_x_1()
-                    .child(h_flex().w_full().items_center().children(self.children))
+                    .child(h_flex().flex_1().min_w_0().items_center().children(self.children))
                     .when_some(self.check_icon, |this, icon| {
                         this.child(
                             icon.xsmall()

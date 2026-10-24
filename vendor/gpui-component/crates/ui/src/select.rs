@@ -566,7 +566,8 @@ where
                             .child(
                                 div()
                                     .id("title")
-                                    .w_full()
+                                    .flex_1()
+                                    .min_w_0()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .truncate()
