@@ -22,7 +22,8 @@ use crate::{
     browser_scroll::{BrowserScrollState, BrowserScrollTarget, browser_scroll_surface},
     diagnostics,
     navigation_state::{
-        AppSettings, LyricsSource, RightSidebarView, SettingsError, SettingsStore, StartPage,
+        AppSettings, Language, LyricsSource, RightSidebarView, SettingsError, SettingsStore,
+        StartPage,
     },
     playback::{AudioCache, LIMITS_MB, Overview, asio_drivers, output_devices},
     plugins::{PluginStore, PluginStoreError},
@@ -181,6 +182,8 @@ pub(crate) struct SettingsView {
     pub(super) deezer_user_id_input: Entity<InputState>,
     pub(super) soundcloud_desktop: Entity<InputState>,
     pub(super) soundcloud_mobile: Entity<InputState>,
+    pub(super) language_select: Entity<SelectState<Vec<SharedString>>>,
+    rendered_language: Language,
     pub(super) start_page_select: Entity<SelectState<Vec<SharedString>>>,
     pub(super) lyrics_source_select: Entity<SelectState<Vec<SharedString>>>,
     pub(super) output_device_select: Entity<SelectState<Vec<SharedString>>>,
@@ -274,6 +277,7 @@ impl SettingsView {
             }
             Err(error) => (None, AppSettings::default(), Some(error.to_string().into())),
         };
+        crate::i18n::set_language(saved.language);
         let (plugin_store, plugin_error) = match plugin_store {
             Ok(store) => (Some(store), None),
             Err(error) => (None, Some(error.to_string().into())),
@@ -300,11 +304,12 @@ impl SettingsView {
         })
         .detach();
         let saved_for_selects = saved.clone();
-        let username =
-            cx.new(|cx| InputState::new(window, cx).placeholder(MURGLAR_USERNAME_PLACEHOLDER));
+        let username = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(crate::i18n::text(MURGLAR_USERNAME_PLACEHOLDER))
+        });
         let password = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(MURGLAR_PASSWORD_PLACEHOLDER)
+                .placeholder(crate::i18n::text(MURGLAR_PASSWORD_PLACEHOLDER))
                 .masked(true)
         });
         cx.subscribe_in(
@@ -341,25 +346,36 @@ impl SettingsView {
             password,
             deezer_arl: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Paste Deezer ARL cookie")
+                    .placeholder(crate::i18n::text("Paste Deezer ARL cookie"))
                     .masked(true)
             }),
-            deezer_user_id_input: cx
-                .new(|cx| InputState::new(window, cx).placeholder("Optional Deezer user ID")),
+            deezer_user_id_input: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(crate::i18n::text("Optional Deezer user ID"))
+            }),
             soundcloud_desktop: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Paste desktop OAuth token")
+                    .placeholder(crate::i18n::text("Paste desktop OAuth token"))
                     .masked(true)
             }),
             soundcloud_mobile: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Optional mobile OAuth token")
+                    .placeholder(crate::i18n::text("Optional mobile OAuth token"))
                     .masked(true)
             }),
+            language_select: Self::make_select(
+                Language::ALL
+                    .iter()
+                    .map(|language| SharedString::from(language.label())),
+                Some(Self::self_index(saved_for_selects.language, &Language::ALL)),
+                window,
+                cx,
+            ),
+            rendered_language: saved_for_selects.language,
             start_page_select: Self::make_select(
                 StartPage::ALL
                     .iter()
-                    .map(|page| SharedString::from(page.label())),
+                    .map(|page| crate::i18n::shared_text(page.label())),
                 Some(Self::self_index(
                     saved_for_selects.start_page,
                     &StartPage::ALL,
@@ -406,6 +422,7 @@ impl SettingsView {
         // they can clip behind the sticky header. The browser scroll consumes
         // wheel events in the capture phase, so the hook attaches there.
         let close_on_scroll = [
+            this.language_select.clone(),
             this.start_page_select.clone(),
             this.lyrics_source_select.clone(),
             this.output_device_select.clone(),
@@ -419,7 +436,7 @@ impl SettingsView {
             }
         });
         let mut view = this;
-        view.subscribe_selects(cx);
+        view.subscribe_selects(window, cx);
         view.refresh_output_device_select(window, cx);
         view.install_runtime_settings_flush(cx);
         view
@@ -512,14 +529,32 @@ impl SettingsView {
         .detach();
     }
 
-    fn subscribe_selects(&mut self, cx: &mut Context<Self>) {
+    fn subscribe_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.subscribe_in(
+            &self.language_select,
+            window,
+            |this, _, event: &SelectEvent<Vec<SharedString>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && let Some(language) = Language::ALL
+                        .iter()
+                        .find(|language| language.label() == value.as_ref())
+                {
+                    let language = *language;
+                    this.update_draft_and_persist(|draft| draft.language = language, cx);
+                    crate::i18n::set_language(language);
+                    this.refresh_language_controls(window, cx);
+                    cx.refresh_windows();
+                }
+            },
+        )
+        .detach();
         cx.subscribe(
             &self.start_page_select,
             |this, _, event: &SelectEvent<Vec<SharedString>>, cx| {
                 if let SelectEvent::Confirm(Some(value)) = event
                     && let Some(page) = StartPage::ALL
                         .iter()
-                        .find(|page| page.label() == value.as_ref())
+                        .find(|page| crate::i18n::text(page.label()) == value.as_ref())
                 {
                     this.update_draft_and_persist(|draft| draft.start_page = *page, cx);
                 }
@@ -623,11 +658,15 @@ impl SettingsView {
     }
 
     fn reset_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = Self::self_index(self.draft.language, &Language::ALL);
         let start_page = Self::self_index(self.draft.start_page, &StartPage::ALL);
         let lyrics_source = Self::self_index(self.draft.lyrics_source, &LyricsSource::ALL);
         let cache_limit = LIMITS_MB
             .iter()
             .position(|limit| *limit == self.draft.audio_cache_limit_mb);
+        self.language_select.update(cx, |select, cx| {
+            select.set_selected_index(Some(IndexPath::default().row(language)), window, cx)
+        });
         self.start_page_select.update(cx, |select, cx| {
             select.set_selected_index(Some(IndexPath::default().row(start_page)), window, cx)
         });
@@ -642,6 +681,50 @@ impl SettingsView {
             )
         });
         self.refresh_output_device_select(window, cx);
+    }
+
+    pub(crate) fn refresh_language_controls(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let language = crate::i18n::language();
+        if self.rendered_language == language {
+            return;
+        }
+        self.rendered_language = language;
+
+        let selected_language = Self::self_index(language, &Language::ALL);
+        self.language_select.update(cx, |select, cx| {
+            select.set_selected_index(
+                Some(IndexPath::default().row(selected_language)),
+                window,
+                cx,
+            );
+        });
+
+        let start_page_items = StartPage::ALL
+            .iter()
+            .map(|page| crate::i18n::shared_text(page.label()))
+            .collect();
+        let start_page = Self::self_index(self.draft.start_page, &StartPage::ALL);
+        self.start_page_select.update(cx, |select, cx| {
+            select.set_items(start_page_items, window, cx);
+            select.set_selected_index(Some(IndexPath::default().row(start_page)), window, cx);
+        });
+
+        for (input, placeholder) in [
+            (&self.username, MURGLAR_USERNAME_PLACEHOLDER),
+            (&self.password, MURGLAR_PASSWORD_PLACEHOLDER),
+            (&self.deezer_arl, "Paste Deezer ARL cookie"),
+            (&self.deezer_user_id_input, "Optional Deezer user ID"),
+            (&self.soundcloud_desktop, "Paste desktop OAuth token"),
+            (&self.soundcloud_mobile, "Optional mobile OAuth token"),
+        ] {
+            input.update(cx, |input, cx| {
+                input.set_placeholder(crate::i18n::text(placeholder), window, cx)
+            });
+        }
     }
 
     pub(crate) fn select_category(
@@ -963,7 +1046,7 @@ impl Render for SettingsView {
                                 .mb(px(12.))
                                 .text_size(px(12.))
                                 .text_color(rgb(0xf87171))
-                                .child(error),
+                                .child(crate::i18n::shared_text(error)),
                         )
                     })
                     .child(panel),
@@ -1027,7 +1110,7 @@ impl Render for SettingsView {
                             .text_size(px(16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(local_icon(LocalIcon::Settings, FOREGROUND).size_4())
-                            .child("Settings"),
+                            .child(crate::i18n::text("Settings")),
                     )
                     .child(div().text_color(rgb(MUTED)).child("/"))
                     .child(
@@ -1046,7 +1129,7 @@ impl Render for SettingsView {
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(SETTINGS_CATEGORY_BREADCRUMB_TEXT_COLOR))
-                                    .child(self.category.label()),
+                                    .child(crate::i18n::text(self.category.label())),
                             ),
                     ),
             )

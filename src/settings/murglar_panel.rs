@@ -385,7 +385,7 @@ impl SettingsView {
                     settings_card()
                         .id("murglar-account-login")
                         .role(Role::Group)
-                        .aria_label("Murglar account login")
+                        .aria_label(crate::i18n::text("Murglar account login"))
                         .child(
                             div()
                                 .flex()
@@ -394,13 +394,13 @@ impl SettingsView {
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(local_icon(LocalIcon::UserLock, FOREGROUND).size_4())
-                                .child("Account login"),
+                                .child(crate::i18n::text("Account login")),
                         )
                         .child(
                             div()
                                 .id("murglar-username-group")
                                 .role(Role::Group)
-                                .aria_label("Username or email")
+                                .aria_label(crate::i18n::text("Username or email"))
                                 .flex()
                                 .flex_col()
                                 .gap(px(6.))
@@ -412,7 +412,7 @@ impl SettingsView {
                                         .text_size(px(12.))
                                         .text_color(rgb(MUTED))
                                         .child(local_icon(LocalIcon::User, MUTED).size_3())
-                                        .child("Username or email"),
+                                        .child(crate::i18n::text("Username or email")),
                                 )
                                 .child(
                                     text_field_context_menu(
@@ -426,7 +426,7 @@ impl SettingsView {
                             div()
                                 .id("murglar-password-group")
                                 .role(Role::Group)
-                                .aria_label("Password")
+                                .aria_label(crate::i18n::text("Password"))
                                 .flex()
                                 .flex_col()
                                 .gap(px(6.))
@@ -438,7 +438,7 @@ impl SettingsView {
                                         .text_size(px(12.))
                                         .text_color(rgb(MUTED))
                                         .child(local_icon(LocalIcon::Key, MUTED).size_3())
-                                        .child("Password"),
+                                        .child(crate::i18n::text("Password")),
                                 )
                                 .child(
                                     text_field_context_menu(
@@ -465,7 +465,7 @@ impl SettingsView {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(rgb(DANGER))
-                                    .child(message),
+                                    .child(crate::i18n::shared_text(message)),
                             )
                         }),
                 )
@@ -476,7 +476,7 @@ impl SettingsView {
                         .text_size(px(11.5))
                         .line_height(px(16.675))
                         .text_color(rgb(MUTED))
-                        .child(message),
+                        .child(crate::i18n::shared_text(message)),
                 )
             })
             .when_some(session_error, |this, message| {
@@ -485,7 +485,7 @@ impl SettingsView {
                         .text_size(px(11.5))
                         .line_height(px(16.675))
                         .text_color(rgb(DANGER))
-                        .child(message),
+                        .child(crate::i18n::shared_text(message)),
                 )
             })
             .when(device_limit, |this| {
@@ -503,7 +503,7 @@ impl SettingsView {
                     settings_card()
                         .text_size(px(12.5))
                         .text_color(rgb(MUTED))
-                        .child("Refreshing Murglar profile..."),
+                        .child(crate::i18n::text("Refreshing Murglar profile...")),
                 )
                 .when(!has_profile, |this| {
                     this.child(murglar_logout_button(loading, cx))
@@ -547,7 +547,7 @@ impl SettingsView {
                     div()
                         .text_size(px(11.5))
                         .text_color(rgb(MUTED))
-                        .child(status),
+                        .child(crate::i18n::shared_text(status)),
                 )
             })
             .when_some(plans_status, |this, status| {
@@ -555,14 +555,14 @@ impl SettingsView {
                     div()
                         .text_size(px(11.5))
                         .text_color(rgb(MUTED))
-                        .child(status),
+                        .child(crate::i18n::shared_text(status)),
                 )
             })
             .when(signed_in && !loading && !has_profile, |this| {
                 this.child(
                     settings_card()
                         .text_size(px(12.5))
-                        .child("Saved Murglar session"),
+                        .child(crate::i18n::text("Saved Murglar session")),
                 )
                 .child(murglar_logout_button(loading, cx))
             })
@@ -577,7 +577,7 @@ async fn account_task_result<T>(
 
 pub(super) fn fallback(value: &str) -> &str {
     if value.trim().is_empty() {
-        "N/A"
+        crate::i18n::text("N/A")
     } else {
         value
     }
@@ -607,9 +607,13 @@ fn alert(
             div()
                 .text_color(rgb(title_color))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
+                .child(crate::i18n::text(title)),
         )
-        .child(div().text_color(rgb(body_color)).child(body))
+        .child(
+            div()
+                .text_color(rgb(body_color))
+                .child(crate::i18n::text(body)),
+        )
 }
 
 fn profile_field(label: &'static str, value: impl Into<SharedString>) -> impl IntoElement {
@@ -622,7 +626,7 @@ fn profile_field(label: &'static str, value: impl Into<SharedString>) -> impl In
             div()
                 .text_size(px(12.5))
                 .text_color(rgb(MUTED))
-                .child(label),
+                .child(crate::i18n::text(label)),
         )
         .child(
             div()
@@ -657,7 +661,7 @@ fn profile_card(profile: &AccountProfile) -> impl IntoElement {
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(local_icon(LocalIcon::IdCard, FOREGROUND).size(px(13.)))
-                        .child("Murglar profile"),
+                        .child(crate::i18n::text("Murglar profile")),
                 )
                 .child(
                     div()
@@ -670,7 +674,7 @@ fn profile_card(profile: &AccountProfile) -> impl IntoElement {
                         .text_color(rgb(0xc7d2fe))
                         .text_size(px(10.5))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(profile.pass_status.label()),
+                        .child(crate::i18n::text(profile.pass_status.label())),
                 ),
         )
         .child(profile_field("Username", fallback(&profile.username)))
@@ -701,7 +705,7 @@ fn extras_loading_card(copy: &'static str) -> impl IntoElement {
     settings_card()
         .text_size(px(12.5))
         .text_color(rgb(MUTED))
-        .child(copy)
+        .child(crate::i18n::text(copy))
 }
 
 fn murglar_status_button(
@@ -713,7 +717,7 @@ fn murglar_status_button(
         .focusable()
         .tab_stop(true)
         .role(Role::Button)
-        .aria_label("Open Murglar service status")
+        .aria_label(crate::i18n::text("Open Murglar service status"))
         .size(px(34.))
         .mr(px(4.))
         .flex_none()

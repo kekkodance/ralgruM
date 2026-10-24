@@ -91,6 +91,7 @@ impl RalgrumApp {
                 item.label_width,
             ),
         };
+        let label = crate::i18n::text(label);
         let library_route = source.is_none();
         let selected = if library_route {
             self.library.read(cx).selection().0 == service.expect("library item service")

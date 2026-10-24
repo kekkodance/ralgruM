@@ -35,13 +35,13 @@ pub(crate) fn render(
                 .text_size(px(TITLE_SIZE_PX))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(FOREGROUND))
-                .child(title.to_owned()),
+                .child(crate::i18n::shared_text(title)),
         )
         .when(!description.is_empty(), |this| {
             this.child(
                 div()
                     .text_size(px(DESCRIPTION_SIZE_PX))
-                    .child(description.to_owned()),
+                    .child(crate::i18n::shared_text(description)),
             )
         })
         .when_some(action, |this, action| {

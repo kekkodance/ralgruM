@@ -139,8 +139,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Success,
-                "Playlist created",
-                Some("Your new playlist is ready.".into()),
+                crate::i18n::text("Playlist created"),
+                Some(crate::i18n::text("Your new playlist is ready.").into()),
             );
             return true;
         };
@@ -185,7 +185,12 @@ impl LibraryView {
                 Ok(result) => add_tracks_toast_kind(result),
                 Err(_) => crate::toast::ToastKind::Success,
             };
-            crate::toast::push_global(cx, kind, "Playlist created", Some(detail.into()));
+            crate::toast::push_global(
+                cx,
+                kind,
+                crate::i18n::text("Playlist created"),
+                Some(crate::i18n::shared_text(detail)),
+            );
         }
         true
     }
@@ -390,7 +395,12 @@ impl LibraryView {
                 Ok(result) => add_tracks_toast_kind(result),
                 Err(_) => crate::toast::ToastKind::Success,
             };
-            crate::toast::push_global(cx, kind, "Track added", Some(detail.into()));
+            crate::toast::push_global(
+                cx,
+                kind,
+                crate::i18n::text("Track added"),
+                Some(crate::i18n::shared_text(detail)),
+            );
         }
         cx.notify();
         true
@@ -908,7 +918,7 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 add_tracks_toast_kind(addition),
-                "Added to playlist",
+                crate::i18n::text("Added to playlist"),
                 Some(detail),
             );
         }
@@ -1052,10 +1062,10 @@ pub(super) fn add_tracks_toast_detail(
 ) -> String {
     match (result, playlist_title) {
         (AddTracksResult::Added { count: 1 }, Some(title)) => {
-            format!("Track added to {title}.")
+            format!("{} {title}.", crate::i18n::text("Track added to"))
         }
         (AddTracksResult::Added { count }, Some(title)) => {
-            format!("{count} tracks added to {title}.")
+            format!("{count} {} {title}.", crate::i18n::text("tracks added to"))
         }
         _ => result.status_message(),
     }

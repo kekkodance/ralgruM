@@ -326,9 +326,9 @@ fn render_section_header(section: &Section) -> AnyElement {
                     .font_weight(FontWeight::NORMAL)
                     .text_color(rgb(MUTED))
                     .child(format!(
-                        "{} item{}",
+                        "{} {}",
                         section.total,
-                        if section.total == 1 { "" } else { "s" }
+                        crate::i18n::text(if section.total == 1 { "item" } else { "items" })
                     )),
             )
         })
@@ -339,9 +339,9 @@ fn render_section_empty(section: &Section) -> AnyElement {
     div()
         .text_color(rgb(MUTED))
         .child(if section.empty_message.is_empty() {
-            "No items in this section.".to_owned()
+            crate::i18n::text("No items in this section.").into()
         } else {
-            section.empty_message.clone()
+            crate::i18n::shared_text(section.empty_message.as_str())
         })
         .into_any_element()
 }
@@ -406,9 +406,9 @@ fn render_library_section_header(section: &Section, action: Option<AnyElement>) 
                     .font_weight(FontWeight::NORMAL)
                     .text_color(rgb(MUTED))
                     .child(format!(
-                        "{} item{}",
+                        "{} {}",
                         section.total,
-                        if section.total == 1 { "" } else { "s" }
+                        crate::i18n::text(if section.total == 1 { "item" } else { "items" })
                     )),
             )
         })
@@ -455,9 +455,9 @@ pub(super) fn render_section(
             |this| {
                 this.child(div().text_color(rgb(MUTED)).child(
                     if section.empty_message.is_empty() {
-                        "No items in this section.".to_owned()
+                        crate::i18n::shared_text("No items in this section.")
                     } else {
-                        section.empty_message.clone()
+                        crate::i18n::shared_text(section.empty_message.as_str())
                     },
                 ))
             },

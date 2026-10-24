@@ -38,8 +38,8 @@ impl RalgrumApp {
                 push_global(
                     cx,
                     ToastKind::Error,
-                    "Cannot open the release page",
-                    Some(error.into()),
+                    crate::i18n::text("Cannot open the release page"),
+                    Some(crate::i18n::shared_text(error)),
                 );
             }
             return;
@@ -68,8 +68,8 @@ impl RalgrumApp {
                                 push_global(
                                     cx,
                                     ToastKind::Error,
-                                    "Update could not start",
-                                    Some(error.into()),
+                                    crate::i18n::text("Update could not start"),
+                                    Some(crate::i18n::shared_text(error)),
                                 );
                             }
                         })
@@ -83,8 +83,8 @@ impl RalgrumApp {
                     push_global(
                         cx,
                         ToastKind::Error,
-                        "Update could not start",
-                        Some(error.into()),
+                        crate::i18n::text("Update could not start"),
+                        Some(crate::i18n::shared_text(error)),
                     );
                 }
             }
@@ -113,32 +113,55 @@ impl RalgrumApp {
             .map(|release| release.version.to_string());
         let (label, tooltip, enabled) = match (&updater.status, version) {
             (Status::Available, Some(version)) => (
-                format!("Update to v{version}"),
-                format!("Download ralgruM v{version}"),
+                crate::i18n::shared_text(format!("{} v{version}", crate::i18n::text("Update to")))
+                    .to_string(),
+                crate::i18n::shared_text(format!(
+                    "{} ralgruM v{version}",
+                    crate::i18n::text("Download")
+                ))
+                .to_string(),
                 true,
             ),
             (Status::Downloading { received }, Some(version)) => {
                 let total = updater.release.as_ref().map_or(1, |release| release.size);
                 let percent = received.saturating_mul(100) / total;
                 (
-                    format!("Downloading {percent}%"),
-                    format!("Downloading ralgruM v{version}: {percent}%"),
+                    crate::i18n::shared_text(format!(
+                        "{} {percent}%",
+                        crate::i18n::text("Downloading")
+                    ))
+                    .to_string(),
+                    crate::i18n::shared_text(format!(
+                        "{} ralgruM v{version}: {percent}%",
+                        crate::i18n::text("Downloading")
+                    ))
+                    .to_string(),
                     false,
                 )
             }
             (Status::Ready, Some(version)) => (
-                "Restart to update".to_owned(),
-                format!("Install ralgruM v{version} and restart"),
+                crate::i18n::text("Restart to update").to_owned(),
+                crate::i18n::shared_text(format!(
+                    "{} ralgruM v{version} {}",
+                    crate::i18n::text("Install"),
+                    crate::i18n::text("and restart")
+                ))
+                .to_string(),
                 true,
             ),
             (Status::Installing, Some(_)) => (
-                "Preparing update".to_owned(),
-                "Preparing the update helper".to_owned(),
+                crate::i18n::text("Preparing update").to_owned(),
+                crate::i18n::text("Preparing the update helper").to_owned(),
                 false,
             ),
             (Status::Error(error), Some(_)) => (
-                "Open release".to_owned(),
-                format!("Update failed: {error}. Click for the manual download."),
+                crate::i18n::text("Open release").to_owned(),
+                crate::i18n::shared_text(format!(
+                    "{}: {error}. {}.",
+                    crate::i18n::text("Update failed"),
+                    crate::i18n::text("Click for the manual download")
+                ))
+                .to_string(),
                 true,
             ),
             _ => (String::new(), String::new(), false),

@@ -52,6 +52,7 @@ pub(crate) fn danger_secondary_button(
     options: DangerSecondaryButtonOptions,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let label = crate::i18n::text(label);
     let text_color = if disabled {
         DANGER_SECONDARY_DISABLED_TEXT
     } else {
@@ -131,6 +132,7 @@ pub(crate) fn neutral_secondary_button(
     icon_size: f32,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let label = crate::i18n::text(label);
     div()
         .id(id)
         .role(Role::Button)
@@ -257,6 +259,8 @@ fn secondary_action_button_with_icon_size(
     disabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let label = crate::i18n::text(label);
+    let tooltip = crate::i18n::text(tooltip);
     let button = div()
         .id(id)
         .role(Role::Button)

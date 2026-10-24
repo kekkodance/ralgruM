@@ -173,7 +173,7 @@ fn downloads_header(
                         .text_size(px(20.))
                         .font_weight(FontWeight(650.))
                         .text_color(rgb(FOREGROUND))
-                        .child("Downloads"),
+                        .child(crate::i18n::text("Downloads")),
                 )
                 .child(
                     div()
@@ -186,17 +186,17 @@ fn downloads_header(
                                 .flex_none()
                                 .text_size(px(13.))
                                 .text_color(rgb(MUTED))
-                                .child(format!(
+                                .child(crate::i18n::shared_text(format!(
                                     "{} {}",
                                     count,
-                                    if count == 1 { "item" } else { "items" }
-                                )),
+                                    crate::i18n::text(if count == 1 { "item" } else { "items" })
+                                ))),
                         )
                         .child(
                             outline_button(
                                 "downloads-clear",
                                 LocalIcon::ListCheck,
-                                "Clear list",
+                                crate::i18n::text("Clear list"),
                                 has_terminal_jobs,
                             )
                             .when(has_terminal_jobs, |this| {
@@ -209,7 +209,7 @@ fn downloads_header(
                             outline_button(
                                 "downloads-open-folder",
                                 LocalIcon::FolderOpen,
-                                "Open folder",
+                                crate::i18n::text("Open folder"),
                                 true,
                             )
                             .on_click(move |_, _, cx| {
@@ -224,7 +224,11 @@ fn downloads_header(
                 ),
         )
         .when_some(platform_status, |this, status| {
-            this.child(div().text_color(rgb(DANGER)).child(status))
+            this.child(
+                div()
+                    .text_color(rgb(DANGER))
+                    .child(crate::i18n::shared_text(status)),
+            )
         })
 }
 
@@ -242,13 +246,15 @@ fn downloads_empty_state() -> impl IntoElement {
                 .text_size(px(16.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(FOREGROUND))
-                .child("No downloads yet"),
+                .child(crate::i18n::text("No downloads yet")),
         )
         .child(
             div()
                 .text_size(px(13.))
                 .text_color(rgb(MUTED))
-                .child("Downloads will appear here as soon as they are queued."),
+                .child(crate::i18n::text(
+                    "Downloads will appear here as soon as they are queued.",
+                )),
         )
 }
 
@@ -349,9 +355,13 @@ fn status_line(status: &DownloadStatus) -> AnyElement {
                     let percent = ((*downloaded as f64 / (*total).max(1) as f64) * 100.)
                         .round()
                         .min(100.) as u64;
-                    format!("{percent}% · {done} of {}", bytes(*total))
+                    format!(
+                        "{percent}% · {done} {} {}",
+                        crate::i18n::text("of"),
+                        bytes(*total)
+                    )
                 }
-                None => format!("{done} downloaded"),
+                None => format!("{done} {}", crate::i18n::text("downloaded")),
             };
             (MUTED, text)
         }
@@ -367,7 +377,7 @@ fn status_line(status: &DownloadStatus) -> AnyElement {
         .line_height(px(13.125))
         .text_color(rgb(color))
         .truncate()
-        .child(text)
+        .child(crate::i18n::shared_text(text))
         .into_any_element()
 }
 
@@ -439,7 +449,7 @@ fn quality_badge(job: &DownloadJob) -> impl IntoElement {
                 .top(px(-1.))
                 .min_w_0()
                 .truncate()
-                .child(quality_label(job)),
+                .child(crate::i18n::shared_text(quality_label(job))),
         )
 }
 
@@ -474,8 +484,8 @@ fn action_cell(
             Some(
                 icon_action_button(button_id.clone())
                     .role(Role::Button)
-                    .aria_label("Show in File Explorer")
-                    .app_tooltip("Show in File Explorer")
+                    .aria_label(crate::i18n::text("Show in File Explorer"))
+                    .app_tooltip(crate::i18n::text("Show in File Explorer"))
                     .child(
                         local_icon(LocalIcon::FolderOpen, MUTED)
                             .w(px(DOWNLOAD_ACTION_ICON_PX))
@@ -496,6 +506,7 @@ fn action_cell(
                 DownloadStatus::Queued => "Cancel queued download",
                 _ => "Cancel download",
             };
+            let tooltip = crate::i18n::text(tooltip);
             Some(
                 icon_action_button(button_id.clone())
                     .role(Role::Button)
@@ -518,8 +529,8 @@ fn action_cell(
             Some(
                 icon_action_button(button_id.clone())
                     .role(Role::Button)
-                    .aria_label("Retry download")
-                    .app_tooltip("Retry download")
+                    .aria_label(crate::i18n::text("Retry download"))
+                    .app_tooltip(crate::i18n::text("Retry download"))
                     .child(
                         local_icon(LocalIcon::RotateRight, MUTED)
                             .w(px(DOWNLOAD_ACTION_ICON_PX))
@@ -565,7 +576,7 @@ fn outline_button(
         .focusable()
         .tab_stop(enabled)
         .role(Role::Button)
-        .aria_label(label)
+        .aria_label(crate::i18n::text(label))
         .h(px(34.))
         .px(px(16.))
         .flex_none()
@@ -584,7 +595,7 @@ fn outline_button(
         .when(!enabled, |this| this.opacity(0.45))
         .focus_visible(|style| style.border_color(rgb(PRIMARY)))
         .child(local_icon(icon, MUTED).size(px(13.)))
-        .child(label.to_owned())
+        .child(crate::i18n::text(label))
 }
 
 fn bytes(value: u64) -> String {

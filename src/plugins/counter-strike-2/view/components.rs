@@ -136,7 +136,7 @@ impl Render for Cs2SettingsDialog {
                         .text_size(px(11.5))
                         .line_height(relative(1.45))
                         .text_color(rgb(DANGER))
-                        .child(error),
+                        .child(crate::i18n::shared_text(error)),
                 )
             })
             .into_any_element();
@@ -258,7 +258,7 @@ fn dialog_header(dialog_entity: gpui::Entity<Cs2SettingsDialog>) -> impl IntoEle
                 .child(
                     div()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("Counter-Strike 2 Integration"),
+                        .child(crate::i18n::text("Counter-Strike 2 Integration")),
                 ),
         )
         .child(ghost_close_button_with_icon_size(
@@ -272,16 +272,21 @@ fn dialog_header(dialog_entity: gpui::Entity<Cs2SettingsDialog>) -> impl IntoEle
 
 fn status_card(connection: service::ConnectionStatus, match_state: MatchState) -> impl IntoElement {
     let (status, color) = match connection {
-        service::ConnectionStatus::Disabled => ("Disabled".to_owned(), MUTED),
-        service::ConnectionStatus::Waiting => ("Waiting for Counter-Strike 2".to_owned(), MUTED),
-        service::ConnectionStatus::Connected => ("Connected".to_owned(), SUCCESS),
+        service::ConnectionStatus::Disabled => (crate::i18n::text("Disabled").to_owned(), MUTED),
+        service::ConnectionStatus::Waiting => (
+            crate::i18n::text("Waiting for Counter-Strike 2").to_owned(),
+            MUTED,
+        ),
+        service::ConnectionStatus::Connected => {
+            (crate::i18n::text("Connected").to_owned(), SUCCESS)
+        }
         service::ConnectionStatus::Error(error) => (error, DANGER),
     };
     let state = match match_state {
-        MatchState::Inactive => "No active match",
-        MatchState::ActiveRound => "Active round",
-        MatchState::PlayerDead => "Player dead",
-        MatchState::BetweenRounds => "Between rounds",
+        MatchState::Inactive => crate::i18n::text("No active match"),
+        MatchState::ActiveRound => crate::i18n::text("Active round"),
+        MatchState::PlayerDead => crate::i18n::text("Player dead"),
+        MatchState::BetweenRounds => crate::i18n::text("Between rounds"),
     };
     card()
         .child(
@@ -294,7 +299,7 @@ fn status_card(connection: service::ConnectionStatus, match_state: MatchState) -
                     div()
                         .text_size(px(12.5))
                         .font_weight(FontWeight::MEDIUM)
-                        .child(status),
+                        .child(crate::i18n::shared_text(status)),
                 ),
         )
         .child(
@@ -346,7 +351,7 @@ fn action_control(
                     div()
                         .text_size(px(12.5))
                         .font_weight(FontWeight::MEDIUM)
-                        .child(title),
+                        .child(crate::i18n::text(title)),
                 )
                 .child(value_badge(action.label())),
         )
@@ -458,7 +463,7 @@ fn value_badge(value: impl Into<SharedString>) -> impl IntoElement {
         .text_size(px(11.5))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(PRIMARY))
-        .child(value.into())
+        .child(crate::i18n::shared_text(value.into()))
 }
 
 fn fade_card(
@@ -475,14 +480,16 @@ fn fade_card(
             div()
                 .text_size(px(12.5))
                 .font_weight(FontWeight::MEDIUM)
-                .child("Transitions"),
+                .child(crate::i18n::text("Transitions")),
         )
         .child(
             div()
                 .text_size(px(11.5))
                 .line_height(relative(1.45))
                 .text_color(rgb(MUTED))
-                .child("Smooth volume changes when gameplay state changes."),
+                .child(crate::i18n::text(
+                    "Smooth volume changes when gameplay state changes.",
+                )),
         )
         .child(
             div()
@@ -525,7 +532,7 @@ fn fade_row(
                 .items_center()
                 .justify_between()
                 .text_size(px(11.5))
-                .child(label)
+                .child(crate::i18n::text(label))
                 .child(
                     div()
                         .text_color(rgb(MUTED))

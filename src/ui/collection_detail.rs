@@ -508,7 +508,14 @@ pub(crate) fn render_artist_section_header(
                             .flex_none()
                             .text_size(px(11.))
                             .text_color(rgb(MUTED))
-                            .child(format!("{total} found")),
+                            .child(match crate::i18n::language() {
+                                crate::navigation_state::Language::English => {
+                                    format!("{total} found")
+                                }
+                                crate::navigation_state::Language::Italian => {
+                                    format!("{total} risultati")
+                                }
+                            }),
                     )
                     .when_some(action, |this, action| this.child(action)),
             )

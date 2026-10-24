@@ -137,7 +137,7 @@ impl Render for LibraryView {
             .service
             .categories()
             .iter()
-            .map(|category| category.label())
+            .map(|category| crate::i18n::text(category.label()))
             .collect::<Vec<_>>();
         let use_category_tab_icons = category_tabs_icon_only(available_width, &category_labels);
         let category_responsive =
@@ -165,7 +165,7 @@ impl Render for LibraryView {
                             div()
                                 .id("library-category-tabs")
                                 .role(gpui::Role::TabList)
-                                .aria_label("Library category")
+                                .aria_label(crate::i18n::text("Library category"))
                                 .w_full()
                                 .h(px(38.))
                                 .flex()

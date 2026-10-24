@@ -568,7 +568,7 @@ fn remove_button(
     danger_row_action_button(
         SharedString::from(format!("search-track-remove-{index}-{track_id}")),
         LocalIcon::X,
-        "Remove from playlist",
+        crate::i18n::text("Remove from playlist"),
         pending,
         move |_, _, cx| {
             cx.stop_propagation();

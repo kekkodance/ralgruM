@@ -1,8 +1,10 @@
 use std::{path::Path, process::Command};
 
 pub(crate) fn open_downloads_folder(path: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(path)
-        .map_err(|error| format!("The downloads folder could not be created: {error}"))?;
+    std::fs::create_dir_all(path).map_err(|error| {
+        crate::i18n::text("The downloads folder could not be created: {error}")
+            .replace("{error}", &error.to_string())
+    })?;
     open_path(path)
 }
 

@@ -93,13 +93,22 @@ impl AddTracksResult {
 
     pub(crate) fn status_message(self) -> String {
         match self {
-            Self::Added { count: 1 } => "Track added to playlist.".into(),
-            Self::Added { count } => format!("{count} tracks added to playlist."),
-            Self::AlreadyPresent { count: 1 } => "Track was already in that playlist.".into(),
-            Self::AlreadyPresent { .. } => "Those tracks were already in that playlist.".into(),
-            Self::Partial { added, duplicated } => {
-                format!("Added {added} tracks; {duplicated} were already in the playlist.")
+            Self::Added { count: 1 } => crate::i18n::text("Track added to playlist.").into(),
+            Self::Added { count } => {
+                format!("{count} {}", crate::i18n::text("tracks added to playlist."))
             }
+            Self::AlreadyPresent { count: 1 } => {
+                crate::i18n::text("Track was already in that playlist.").into()
+            }
+            Self::AlreadyPresent { .. } => {
+                crate::i18n::text("Those tracks were already in that playlist.").into()
+            }
+            Self::Partial { added, duplicated } => format!(
+                "{} {added} {}; {duplicated} {}.",
+                crate::i18n::text("Added"),
+                crate::i18n::text("tracks"),
+                crate::i18n::text("were already in the playlist")
+            ),
         }
     }
 

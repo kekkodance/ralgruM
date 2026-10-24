@@ -73,9 +73,10 @@ pub(crate) enum PopupMenuArrowEdge {
 
 impl PopupMenuItem {
     pub(crate) fn new(label: impl Into<SharedString>) -> Self {
+        let label: SharedString = label.into();
         Self::Item {
             icon: None,
-            label: label.into(),
+            label: crate::i18n::shared_text(label.as_ref()),
             shortcut: None,
             disabled: false,
             handler: None,
@@ -98,9 +99,10 @@ impl PopupMenuItem {
     }
 
     pub(crate) fn submenu(label: impl Into<SharedString>, menu: Entity<PopupMenu>) -> Self {
+        let label: SharedString = label.into();
         Self::Submenu {
             icon: None,
-            label: label.into(),
+            label: crate::i18n::shared_text(label.as_ref()),
             disabled: false,
             menu,
         }

@@ -1777,7 +1777,7 @@ impl Render for RalgrumApp {
                                 .opacity(0.5)
                                 .focusable()
                                 .tab_stop(true)
-                                .aria_label("Close navigation")
+                                .aria_label(crate::i18n::text("Close navigation"))
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.close_mobile_sidebar(cx)),
                                 )

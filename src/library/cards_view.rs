@@ -304,9 +304,9 @@ pub(super) fn cards_with_snapshot(
                         .tab_stop(true)
                         .role(gpui::Role::Button)
                         .aria_label(if card.kind == Category::Flow {
-                            format!("Play {}", card.title)
+                            format!("{} {}", crate::i18n::text("Play"), card.title)
                         } else {
-                            format!("Open {}", card.title)
+                            format!("{} {}", crate::i18n::text("Open"), card.title)
                         })
                         .cursor_pointer()
                         .focus_visible(|style| {

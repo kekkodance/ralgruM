@@ -290,11 +290,12 @@ pub(crate) fn queue_track_entity(track: &PlaybackTrack) -> MenuEntity {
 }
 
 pub(crate) fn copied_toast(label: &str, cx: &mut gpui::App) {
+    let title = crate::i18n::shared_text(format!("{label} copied"));
     crate::toast::push_global(
         cx,
         crate::toast::ToastKind::Success,
-        format!("{label} copied"),
-        Some("Copied to the clipboard.".into()),
+        title.to_string(),
+        Some(crate::i18n::shared_text("Copied to the clipboard.")),
     );
 }
 

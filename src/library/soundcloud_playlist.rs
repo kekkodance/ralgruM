@@ -376,8 +376,8 @@ pub(super) fn picker_title(provider: Provider) -> &'static str {
 
 pub(super) fn create_dialog_title(provider: Provider) -> &'static str {
     match provider {
-        Provider::Deezer => "Create Deezer playlist",
-        Provider::SoundCloud => "Create SoundCloud playlist",
+        Provider::Deezer => crate::i18n::text("Create Deezer playlist"),
+        Provider::SoundCloud => crate::i18n::text("Create SoundCloud playlist"),
     }
 }
 

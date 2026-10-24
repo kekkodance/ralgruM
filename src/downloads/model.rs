@@ -299,9 +299,24 @@ impl DownloadModel {
         };
         toasts
             .update(cx, |stack, cx| {
-                stack.push(kind, title.to_owned(), description.map(Into::into), cx)
+                stack.push(
+                    kind,
+                    crate::i18n::shared_text(title).to_string(),
+                    description.map(crate::i18n::shared_text),
+                    cx,
+                )
             })
             .ok();
+    }
+
+    fn queued_tracks_message(count: usize) -> String {
+        crate::i18n::text("Queued {count} tracks.").replace("{count}", &count.to_string())
+    }
+
+    fn batch_errors_message(saved: usize, failed: usize) -> String {
+        crate::i18n::text("{saved} saved; {failed} unavailable in that format.")
+            .replace("{saved}", &saved.to_string())
+            .replace("{failed}", &failed.to_string())
     }
 
     pub(crate) fn start(
@@ -1065,9 +1080,12 @@ impl DownloadModel {
                         FinalizeError::DestinationExists => {
                             DownloadTransferError::DestinationExists
                         }
-                        FinalizeError::Io(error) => DownloadTransferError::Failed(format!(
-                            "The completed download could not be moved into place: {error}"
-                        )),
+                        FinalizeError::Io(error) => DownloadTransferError::Failed(
+                            crate::i18n::text(
+                                "The completed download could not be moved into place: {error}",
+                            )
+                            .replace("{error}", &error.to_string()),
+                        ),
                     })
             }
             .await;
@@ -1179,9 +1197,7 @@ impl DownloadModel {
                         self.notify_toast(
                             ToastKind::Warning,
                             "Downloads finished with errors",
-                            Some(format!(
-                                "{saved} saved; {failed} unavailable in that format."
-                            )),
+                            Some(Self::batch_errors_message(saved, failed)),
                             cx,
                         );
                     } else {

@@ -730,8 +730,10 @@ impl SearchView {
                             crate::toast::push_global(
                                 cx,
                                 crate::toast::ToastKind::Warning,
-                                "SoundCloud account required",
-                                Some("Log in to SoundCloud from Settings to continue.".into()),
+                                crate::i18n::text("SoundCloud account required"),
+                                Some(crate::i18n::shared_text(
+                                    "Log in to SoundCloud from Settings to continue.",
+                                )),
                             );
                         }
                         for track in &this.state.groups.tracks {
@@ -935,8 +937,8 @@ impl SearchView {
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Warning,
-            "AI content blocking unavailable",
-            Some(detail.to_owned().into()),
+            crate::i18n::text("AI content blocking unavailable"),
+            Some(crate::i18n::shared_text(detail)),
         );
     }
 }

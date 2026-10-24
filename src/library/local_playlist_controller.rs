@@ -32,11 +32,14 @@ fn local_picker_storage_error(
 }
 
 fn local_added_tracks_message(count: usize) -> String {
-    if count == 1 {
-        "1 track added.".to_owned()
-    } else {
-        format!("{count} tracks added.")
-    }
+    format!(
+        "{count} {}.",
+        crate::i18n::text(if count == 1 {
+            "track added"
+        } else {
+            "tracks added"
+        })
+    )
 }
 
 fn leave_deleted_local_playlist(state: &mut LibraryState, playlist_id: &str) -> bool {
@@ -156,8 +159,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Success,
-                        "Local playlist created",
-                        Some("Your new playlist is ready.".into()),
+                        crate::i18n::text("Local playlist created"),
+                        Some(crate::i18n::text("Your new playlist is ready.").into()),
                     );
                 }
                 completion(result, view, cx);
@@ -191,8 +194,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Success,
-                        "Local playlist created",
-                        Some("Your track was added to the new playlist.".into()),
+                        crate::i18n::text("Local playlist created"),
+                        Some(crate::i18n::text("Your track was added to the new playlist.").into()),
                     );
                 }
                 completion(result, view, cx);
@@ -234,25 +237,26 @@ impl LibraryView {
                 Ok(LocalPlaylistMutationOutcome::Created) => {
                     let detail = if repeated_tracks_collapsed {
                         format!(
-                            "{} unique {} imported. Repeated tracks were collapsed.",
+                            "{} {}. {}",
                             unique_track_count,
-                            if unique_track_count == 1 {
-                                "track"
+                            crate::i18n::text(if unique_track_count == 1 {
+                                "unique track imported"
                             } else {
-                                "tracks"
-                            }
+                                "unique tracks imported"
+                            }),
+                            crate::i18n::text("Repeated tracks were collapsed.")
                         )
                     } else if unique_track_count == 0 {
-                        "Empty playlist imported.".to_owned()
+                        crate::i18n::text("Empty playlist imported.").to_owned()
                     } else {
                         format!(
-                            "{} {} imported.",
+                            "{} {}.",
                             unique_track_count,
-                            if unique_track_count == 1 {
-                                "track"
+                            crate::i18n::text(if unique_track_count == 1 {
+                                "track imported"
                             } else {
-                                "tracks"
-                            }
+                                "tracks imported"
+                            })
                         )
                     };
                     crate::toast::push_global(
@@ -262,9 +266,13 @@ impl LibraryView {
                         } else {
                             crate::toast::ToastKind::Success
                         },
-                        "Imported to Local",
+                        crate::i18n::text("Imported to Local"),
                         Some(if cover_failed {
-                            format!("{detail} The playlist cover could not be imported.").into()
+                            format!(
+                                "{detail} {}",
+                                crate::i18n::text("The playlist cover could not be imported.")
+                            )
+                            .into()
                         } else {
                             detail.into()
                         }),
@@ -301,8 +309,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Success,
-                        "Local playlist updated",
-                        Some("Your changes were saved.".into()),
+                        crate::i18n::text("Local playlist updated"),
+                        Some(crate::i18n::text("Your changes were saved.").into()),
                     );
                 }
                 completion(result, view, cx);
@@ -336,7 +344,7 @@ impl LibraryView {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Success,
-                            "Added to local playlist",
+                            crate::i18n::text("Added to local playlist"),
                             Some(local_added_tracks_message(*count).into()),
                         );
                     }
@@ -344,7 +352,7 @@ impl LibraryView {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Info,
-                            "Already in local playlist",
+                            crate::i18n::text("Already in local playlist"),
                             Some(playlist_title.clone().into()),
                         );
                     }
@@ -375,8 +383,13 @@ impl LibraryView {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Success,
-                            "Local playlist deleted",
-                            Some("The playlist was removed from your Local library.".into()),
+                            crate::i18n::text("Local playlist deleted"),
+                            Some(
+                                crate::i18n::text(
+                                    "The playlist was removed from your Local library.",
+                                )
+                                .into(),
+                            ),
                         );
                         Ok(LocalPlaylistMutationOutcome::Deleted { changed: true })
                     }
@@ -410,7 +423,7 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Success,
-                        "Track removed from local playlist",
+                        crate::i18n::text("Track removed from local playlist"),
                         None,
                     );
                 }
@@ -501,8 +514,8 @@ fn push_local_error(
     crate::toast::push_global(
         cx,
         crate::toast::ToastKind::Error,
-        title,
-        error.map(|error| error.to_string().into()),
+        crate::i18n::text(title),
+        error.map(|error| crate::i18n::shared_text(error.to_string())),
     );
 }
 

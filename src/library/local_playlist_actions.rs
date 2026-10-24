@@ -162,7 +162,7 @@ fn local_playlist_toast(title: &str, message: &str, cx: &mut Context<LibraryView
     crate::toast::push_global(
         cx,
         crate::toast::ToastKind::Warning,
-        title.to_owned(),
-        Some(message.to_owned().into()),
+        crate::i18n::shared_text(title),
+        Some(crate::i18n::shared_text(message)),
     );
 }

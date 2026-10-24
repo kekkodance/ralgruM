@@ -514,7 +514,7 @@ impl Render for ToastStack {
                                     .text_size(px(13.5))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(rgb(0xffffff))
-                                    .child(toast.title.clone()),
+                                    .child(crate::i18n::shared_text(toast.title.clone())),
                             )
                             .when_some(toast.description.clone(), |this, description| {
                                 this.child(
@@ -522,7 +522,7 @@ impl Render for ToastStack {
                                         .mt(px(2.))
                                         .text_size(px(12.))
                                         .text_color(rgb(MUTED))
-                                        .child(description),
+                                        .child(crate::i18n::shared_text(description)),
                                 )
                             })
                             .when(!toast.actions.is_empty(), |this| {

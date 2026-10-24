@@ -31,7 +31,7 @@ pub(super) fn render_search_suggestions(
                 plain_x_button(
                     ("remove-search-history", index),
                     format!("remove-search-history-{index}"),
-                    "Remove from recent searches",
+                    crate::i18n::text("Remove from recent searches"),
                     false,
                 )
                 .on_mouse_down(
@@ -97,7 +97,7 @@ pub(super) fn render_search_suggestions(
             .shadow_lg()
             .occlude()
             .role(Role::ListBox)
-            .aria_label("Search suggestions")
+            .aria_label(crate::i18n::text("Search suggestions"))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.search
                     .update(cx, |search, cx| search.dismiss_suggestions(cx));

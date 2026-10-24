@@ -149,7 +149,7 @@ fn push_text(rows: &mut Vec<(&'static str, String)>, label: &'static str, value:
 
 const INFO_DIALOG_WIDTH: f32 = 440.;
 const INFO_DIALOG_BODY_PADDING: f32 = 18.;
-const INFO_DIALOG_LABEL_WIDTH: f32 = 96.;
+const INFO_DIALOG_LABEL_WIDTH: f32 = 136.;
 const INFO_DIALOG_DESCRIPTION_LINE_HEIGHT: f32 = 18.;
 
 pub(crate) fn format_duration(total_seconds: u64) -> String {
@@ -157,9 +157,17 @@ pub(crate) fn format_duration(total_seconds: u64) -> String {
     let minutes = (total_seconds % 3600) / 60;
     let seconds = total_seconds % 60;
     if hours > 0 {
-        format!("{hours}h {minutes}m")
+        format!(
+            "{hours}{} {minutes}{}",
+            crate::i18n::text("h"),
+            crate::i18n::text("m")
+        )
     } else {
-        format!("{minutes}m {seconds:02}s")
+        format!(
+            "{minutes}{} {seconds:02}{}",
+            crate::i18n::text("m"),
+            crate::i18n::text("s")
+        )
     }
 }
 
@@ -660,6 +668,11 @@ impl Render for AlbumInfoDialog {
                         .flex_col()
                         .gap(px(7.))
                         .children(rows.into_iter().map(|(label, value)| {
+                            let value = if label == "Explicit" {
+                                crate::i18n::shared_text(value)
+                            } else {
+                                gpui::SharedString::from(value)
+                            };
                             div()
                                 .flex()
                                 .gap(px(12.))
@@ -669,7 +682,7 @@ impl Render for AlbumInfoDialog {
                                         .flex_none()
                                         .text_size(px(12.))
                                         .text_color(rgb(MUTED))
-                                        .child(label),
+                                        .child(crate::i18n::text(label)),
                                 )
                                 .child(div().min_w_0().text_size(px(12.5)).child(value))
                         })),
@@ -685,7 +698,7 @@ impl Render for AlbumInfoDialog {
                             div()
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("Description"),
+                                .child(crate::i18n::text("Description")),
                         )
                         .child(
                             div()
@@ -732,9 +745,9 @@ impl Render for AlbumInfoDialog {
                     .border_color(rgb(BORDER))
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(
                         if self.route.kind == ResultType::Playlists {
-                            "About this playlist"
+                            crate::i18n::text("About this playlist")
                         } else {
-                            "About this album"
+                            crate::i18n::text("About this album")
                         },
                     ))
                     .child(ghost_close_button_with_icon_size(

@@ -83,7 +83,7 @@ impl PlaybackModel {
                 crate::toast::push_global(
                     cx,
                     crate::toast::ToastKind::Error,
-                    "Could not restore playback position",
+                    crate::i18n::text("Could not restore playback position"),
                     Some(error.into()),
                 );
             }
@@ -584,11 +584,12 @@ impl PlaybackModel {
                             crate::toast::push_global(
                                 cx,
                                 crate::toast::ToastKind::Error,
-                                "The audio output could not be restored",
+                                crate::i18n::text("The audio output could not be restored"),
                                 Some(
-                                    "Playback was paused. Pick a working output to \
-                                     continue."
-                                        .into(),
+                                    crate::i18n::text(
+                                        "Playback was paused. Pick a working output to continue.",
+                                    )
+                                    .into(),
                                 ),
                             );
                             cx.notify();
@@ -598,7 +599,7 @@ impl PlaybackModel {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Error,
-                            "Could not switch output",
+                            crate::i18n::text("Could not switch output"),
                             Some(error.into()),
                         );
                         if let Some(origin) = this.asio_bridge_origin.take() {
@@ -679,8 +680,10 @@ impl PlaybackModel {
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Error,
-            "The audio output stopped responding",
-            Some("Playback was paused. Pick a working output to continue.".into()),
+            crate::i18n::text("The audio output stopped responding"),
+            Some(
+                crate::i18n::text("Playback was paused. Pick a working output to continue.").into(),
+            ),
         );
         if let Some(playing) = self.state.toggle()
             && playing
@@ -719,8 +722,11 @@ impl PlaybackModel {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "The audio output could not be restored",
-                Some("Playback was paused. Pick a working output to continue.".into()),
+                crate::i18n::text("The audio output could not be restored"),
+                Some(
+                    crate::i18n::text("Playback was paused. Pick a working output to continue.")
+                        .into(),
+                ),
             );
             cx.notify();
         }

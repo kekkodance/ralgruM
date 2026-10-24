@@ -75,7 +75,7 @@ impl PickerPlaylist {
             title: playlist.title.clone(),
             subtitle: nonempty_playlist_text(&playlist.description)
                 .map(str::to_owned)
-                .or_else(|| Some("Local playlist".into())),
+                .or_else(|| Some(crate::i18n::text("Local playlist").into())),
             track_count: Some(playlist.tracks.len() as u64),
             is_private: None,
             local: true,
@@ -212,9 +212,9 @@ pub(super) fn toggle_selection(current: Option<String>, clicked_id: &str) -> Opt
 
 pub(super) fn track_count_label(count: u64) -> String {
     if count == 1 {
-        "1 track".to_owned()
+        format!("1 {}", crate::i18n::text("track"))
     } else {
-        format!("{count} tracks")
+        format!("{count} {}", crate::i18n::text("tracks"))
     }
 }
 
@@ -901,7 +901,7 @@ impl Render for PlaylistPicker {
                                     .items_center()
                                     .justify_center()
                                     .text_color(rgb(MUTED))
-                                    .child("Loading playlists..."),
+                                    .child(crate::i18n::text("Loading playlists...")),
                             ))
                         },
                     )
@@ -951,14 +951,14 @@ impl Render for PlaylistPicker {
                                     LocalIcon::ListUl
                                 },
                                 if local_mode {
-                                    "No Local playlists yet"
+                                    crate::i18n::text("No Local playlists yet")
                                 } else {
-                                    "No editable playlists"
+                                    crate::i18n::text("No editable playlists")
                                 },
                                 if local_mode {
-                                    "Create a Local playlist to get started."
+                                    crate::i18n::text("Create a Local playlist to get started.")
                                 } else {
-                                    "Create a new playlist to get started."
+                                    crate::i18n::text("Create a new playlist to get started.")
                                 },
                                 None,
                             ),
@@ -971,8 +971,8 @@ impl Render for PlaylistPicker {
                                 list_max,
                                 crate::empty_state::render(
                                     LocalIcon::MagnifyingGlass,
-                                    "No matching playlists",
-                                    "Try a different filter.",
+                                    crate::i18n::text("No matching playlists"),
+                                    crate::i18n::text("Try a different filter."),
                                     None,
                                 ),
                             ))
@@ -1050,7 +1050,7 @@ impl Render for PlaylistPicker {
                     .child(secondary_dialog_button_with_disabled(
                         "create-playlist-from-picker",
                         None,
-                        "Create Playlist",
+                        crate::i18n::text("Create Playlist"),
                         self.busy || account_changed,
                         cx.listener(|this, _, window, cx| {
                             if !this.busy {
@@ -1073,7 +1073,7 @@ impl Render for PlaylistPicker {
                                     this.child(secondary_dialog_button_with_disabled(
                                         "retry-playlist-catalog",
                                         None,
-                                        "Retry",
+                                        crate::i18n::text("Retry"),
                                         self.busy,
                                         cx.listener(|this, _, _, cx| {
                                             this.library.update(cx, |library, cx| {
@@ -1095,7 +1095,7 @@ impl Render for PlaylistPicker {
                             .child(secondary_dialog_button_with_disabled(
                                 "cancel-playlist-picker",
                                 None,
-                                "Cancel",
+                                crate::i18n::text("Cancel"),
                                 self.busy,
                                 cx.listener(|this, _, window, cx| {
                                     if !this.busy {
@@ -1106,7 +1106,11 @@ impl Render for PlaylistPicker {
                             .child(primary_button_with_loading(
                                 "confirm-playlist-picker",
                                 Some(LocalIcon::Plus),
-                                if self.busy { "Adding..." } else { "Add track" },
+                                crate::i18n::text(if self.busy {
+                                    "Adding..."
+                                } else {
+                                    "Add track"
+                                }),
                                 !can_confirm(selected_visible, self.busy, account_changed),
                                 self.busy,
                                 cx.listener(|this, _, _, cx| this.submit(cx)),
@@ -1300,11 +1304,13 @@ fn picker_row(
                                             .justify_center()
                                             .relative()
                                             .top(px(PICKER_PRIVACY_OPTICAL_OFFSET_PX))
-                                            .app_tooltip(if playlist.is_private == Some(true) {
-                                                "Private"
-                                            } else {
-                                                "Public"
-                                            })
+                                            .app_tooltip(crate::i18n::text(
+                                                if playlist.is_private == Some(true) {
+                                                    "Private"
+                                                } else {
+                                                    "Public"
+                                                },
+                                            ))
                                             .child(
                                                 local_icon(privacy, MUTED)
                                                     .size(px(PICKER_PRIVACY_ICON_SIZE)),
@@ -1351,17 +1357,20 @@ fn picker_brand_icon(mode: PickerMode) -> impl IntoElement {
 
 fn picker_title(mode: PickerMode) -> &'static str {
     match mode {
-        PickerMode::Local => "Add to Local playlist",
-        PickerMode::Provider(Provider::Deezer) => "Add to Deezer playlist",
-        PickerMode::Provider(Provider::SoundCloud) => "Add to SoundCloud playlist",
+        PickerMode::Local => crate::i18n::text("Add to Local playlist"),
+        PickerMode::Provider(Provider::Deezer) => crate::i18n::text("Add to Deezer playlist"),
+        PickerMode::Provider(Provider::SoundCloud) => {
+            crate::i18n::text("Add to SoundCloud playlist")
+        }
     }
 }
 
 fn error_text(error: impl Into<SharedString>) -> impl IntoElement {
+    let error = error.into();
     div()
         .text_size(px(12.))
         .text_color(rgb(DANGER))
-        .child(error.into())
+        .child(crate::i18n::shared_text(error.as_ref()))
 }
 
 #[cfg(test)]

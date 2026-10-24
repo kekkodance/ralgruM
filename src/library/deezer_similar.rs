@@ -114,31 +114,35 @@ pub(super) fn render(
                         .text_size(px(20.))
                         .font_weight(FontWeight(650.))
                         .truncate()
-                        .child("Similar Artists"),
+                        .child(crate::i18n::text("Similar Artists")),
                 )
                 .child(
                     div()
                         .text_size(px(12.5))
                         .text_color(rgb(MUTED))
                         .truncate()
-                        .child(format!("Artists related to {}", entry.title)),
+                        .child(format!(
+                            "{} {}",
+                            crate::i18n::text("Artists related to"),
+                            entry.title
+                        )),
                 ),
         );
     let body = match &entry.state {
         SimilarArtistsState::Loading => message(
             LocalIcon::UserGroup,
-            "Loading similar artists",
-            "Deezer is finding related artists.",
+            crate::i18n::text("Loading similar artists"),
+            crate::i18n::text("Deezer is finding related artists."),
         ),
         SimilarArtistsState::Empty => message(
             LocalIcon::UserGroup,
-            "No similar artists",
-            "Deezer did not return related artists for this selection.",
+            crate::i18n::text("No similar artists"),
+            crate::i18n::text("Deezer did not return related artists for this selection."),
         ),
         SimilarArtistsState::Failed(_) => message(
             LocalIcon::TriangleExclamation,
-            "Could not load similar artists",
-            "Deezer did not return a related artist list.",
+            crate::i18n::text("Could not load similar artists"),
+            crate::i18n::text("Deezer did not return a related artist list."),
         ),
         SimilarArtistsState::Results(cards) => super::cards_view::cards(
             view,

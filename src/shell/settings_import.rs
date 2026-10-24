@@ -36,6 +36,7 @@ impl RalgrumApp {
         cx: &mut Context<Self>,
     ) {
         self.import_sync_in_progress = true;
+        crate::i18n::set_language(imported.language);
 
         let right_sidebar = right_sidebar_from_stored(&imported);
         self.playback.update(cx, |playback, cx| {
@@ -83,7 +84,8 @@ impl RalgrumApp {
 
         let right_sidebar = self.playback.read(cx).state.right_sidebar;
         self.sync_right_sidebar_transition(right_sidebar, cx);
-        self.settings.update(cx, |settings, _| {
+        self.settings.update(cx, |settings, cx| {
+            settings.refresh_language_controls(window, cx);
             settings.finish_import_sync();
         });
         self.import_sync_in_progress = false;

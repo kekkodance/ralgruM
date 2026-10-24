@@ -246,12 +246,13 @@ pub(super) fn render_card_with_presentation(
             this.focusable()
                 .tab_stop(true)
                 .role(gpui::Role::Button)
-                .aria_label(format!(
-                    "Open {} {} {}",
+                .aria_label(crate::i18n::shared_text(format!(
+                    "{} {} {} {}",
+                    crate::i18n::text("Open"),
                     card.source.label(),
-                    card.kind.label(),
+                    crate::i18n::text(card.kind.label()),
                     card.title
-                ))
+                )))
                 .cursor_pointer()
                 .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
                 .on_click({
@@ -361,7 +362,11 @@ pub(super) fn render_discover_card(
             this.focusable()
                 .tab_stop(true)
                 .role(gpui::Role::Button)
-                .aria_label(format!("{action_label} {}", card.title))
+                .aria_label(crate::i18n::shared_text(format!(
+                    "{} {}",
+                    crate::i18n::text(action_label),
+                    card.title
+                )))
                 .cursor_pointer()
                 .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
                 .on_click(move |_, _, app| {

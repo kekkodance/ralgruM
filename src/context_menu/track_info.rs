@@ -96,7 +96,7 @@ impl TrackInfoState {
         Self {
             status: InfoStatus::Checking {
                 secondary: source
-                    .map(|source| format!("Playing source · {source}"))
+                    .map(|source| format!("{} · {source}", crate::i18n::text("Playing source")))
                     .unwrap_or_else(|| DEFAULT_SECONDARY.to_owned()),
             },
         }
@@ -132,7 +132,7 @@ impl Render for TrackInfoState {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let (primary, secondary, checking) = match &self.status {
             InfoStatus::Checking { secondary } => (
-                "Checking size and bitrate…".to_owned(),
+                crate::i18n::text("Checking size and bitrate…").to_owned(),
                 secondary.clone(),
                 true,
             ),
@@ -173,14 +173,14 @@ impl Render for TrackInfoState {
                             .font_weight(FontWeight::MEDIUM)
                             .truncate()
                             .text_color(rgb(0xf4f4f5))
-                            .child(primary),
+                            .child(crate::i18n::shared_text(primary)),
                     )
                     .child(
                         div()
                             .text_size(px(10.5))
                             .text_color(rgb(MUTED))
                             .truncate()
-                            .child(secondary),
+                            .child(crate::i18n::shared_text(secondary)),
                     ),
             )
     }

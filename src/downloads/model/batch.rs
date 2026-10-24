@@ -97,7 +97,7 @@ impl DownloadModel {
                         model.notify_toast(
                             ToastKind::Info,
                             "Downloads started",
-                            Some(format!("Queued {} tracks.", batch_ids.len())),
+                            Some(Self::queued_tracks_message(batch_ids.len())),
                             cx,
                         );
                         model.start_next(cx);
@@ -158,7 +158,7 @@ impl DownloadModel {
             self.notify_toast(
                 ToastKind::Info,
                 "Downloads started",
-                Some(format!("Queued {} tracks.", self.batch_ids.len())),
+                Some(Self::queued_tracks_message(self.batch_ids.len())),
                 cx,
             );
         }
@@ -178,7 +178,7 @@ impl DownloadModel {
             self.notify_toast(
                 ToastKind::Info,
                 "Downloads started",
-                Some(format!("Queued {} tracks.", self.batch_ids.len())),
+                Some(Self::queued_tracks_message(self.batch_ids.len())),
                 cx,
             );
         }

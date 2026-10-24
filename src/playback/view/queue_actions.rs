@@ -23,15 +23,19 @@ impl PlaybackModel {
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Success,
-            if last {
+            crate::i18n::text(if last {
                 "Added to end of queue"
             } else {
                 "Playing next"
-            },
+            }),
             Some(
                 format!(
-                    "{count} {} added.",
-                    if count == 1 { "track" } else { "tracks" }
+                    "{count} {}",
+                    crate::i18n::text(if count == 1 {
+                        "track added"
+                    } else {
+                        "tracks added"
+                    })
                 )
                 .into(),
             ),

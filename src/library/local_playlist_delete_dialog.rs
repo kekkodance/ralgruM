@@ -161,7 +161,7 @@ impl Render for LocalPlaylistDeleteDialog {
                             .gap(px(8.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(local_icon(LocalIcon::TrashCan, DANGER).size_4())
-                            .child("Delete local playlist"),
+                            .child(crate::i18n::text("Delete local playlist")),
                     ),
             )
             .child(
@@ -176,8 +176,11 @@ impl Render for LocalPlaylistDeleteDialog {
                             .text_size(px(13.))
                             .line_height(relative(1.5))
                             .child(format!(
-                                "Delete \"{}\" from your Local library? This cannot be undone.",
-                                self.title
+                                "{} \"{}\" {}? {}",
+                                crate::i18n::text("Delete"),
+                                self.title,
+                                crate::i18n::text("from your Local library"),
+                                crate::i18n::text("This cannot be undone."),
                             )),
                     )
                     .when_some(self.error.clone(), |this, error| {
@@ -185,7 +188,7 @@ impl Render for LocalPlaylistDeleteDialog {
                             div()
                                 .text_color(rgb(DANGER))
                                 .text_size(px(12.))
-                                .child(error),
+                                .child(crate::i18n::shared_text(error)),
                         )
                     }),
             )
@@ -202,14 +205,14 @@ impl Render for LocalPlaylistDeleteDialog {
                     .child(secondary_dialog_button_with_disabled(
                         "cancel-local-playlist-delete",
                         None,
-                        "Cancel",
+                        crate::i18n::text("Cancel"),
                         false,
                         cx.listener(|this, _, window, cx| request_dialog_close(this, window, cx)),
                     ))
                     .child(danger_secondary_dialog_button_with_disabled(
                         "confirm-local-playlist-delete",
                         Some(LocalIcon::TrashCan),
-                        "Delete playlist",
+                        crate::i18n::text("Delete playlist"),
                         self.busy,
                         cx.listener(|this, _, _, cx| this.submit(cx)),
                     )),

@@ -39,9 +39,10 @@ pub(super) fn styled_submenu_with_icon<F>(
 where
     F: Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 {
+    let label: SharedString = label.into();
     menu.submenu_with_icon(
         Some(Icon::default().path(icon.path())),
-        label,
+        crate::i18n::shared_text(label.as_ref()),
         window,
         cx,
         move |menu, window, cx| style_submenu_popup(f(menu, window, cx), window),
@@ -67,9 +68,10 @@ where
         ) -> gpui_component::menu::PopupMenu
         + 'static,
 {
+    let label: SharedString = label.into();
     menu.submenu_with_icon(
         Some(Icon::default().path(icon.path())),
-        label,
+        crate::i18n::shared_text(label.as_ref()),
         window,
         cx,
         move |menu, window, cx| {

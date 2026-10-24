@@ -27,6 +27,11 @@ impl SearchView {
     }
 
     pub(super) fn ensure_discover(&mut self, cx: &mut Context<Self>) {
+        let language = crate::i18n::language();
+        if self.discover.language() != language {
+            self.cancel_discover_requests();
+            self.discover.set_language(language);
+        }
         if !self.should_show_discover(cx) {
             self.cancel_discover_requests();
             return;
@@ -53,7 +58,7 @@ impl SearchView {
             let provider = *provider;
             let task = self.runtime.spawn(async move {
                 match client {
-                    Ok(client) => discover::load(provider, &client, arl, token).await,
+                    Ok(client) => discover::load(provider, &client, arl, token, language).await,
                     Err(error) => Err(error.message),
                 }
             });
@@ -81,6 +86,7 @@ impl SearchView {
                                 generation,
                                 enrichment_scope.clone(),
                                 enrichment_arl.clone(),
+                                language,
                                 cx,
                             );
                         }
@@ -101,6 +107,7 @@ impl SearchView {
                 generation,
                 self.account_scope.clone(),
                 deezer_arl,
+                language,
                 cx,
             );
         }
@@ -111,6 +118,7 @@ impl SearchView {
         generation: u64,
         account_scope: String,
         arl: Option<DeezerArl>,
+        language: crate::navigation_state::Language,
         cx: &mut Context<Self>,
     ) {
         let Some(arl) = arl else {
@@ -126,9 +134,9 @@ impl SearchView {
         let Ok(client) = self.client.clone() else {
             return;
         };
-        let task = self
-            .runtime
-            .spawn(async move { discover::enrich_smart_mix_titles(&client, arl, ids).await });
+        let task = self.runtime.spawn(async move {
+            discover::enrich_smart_mix_titles(&client, arl, ids, language).await
+        });
         let request_id = self.next_request_id();
         self.smart_mix_enrichment_request = Some(ActiveRequest {
             generation,
@@ -416,8 +424,10 @@ impl SearchView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not play SoundCloud selection",
-                Some("A SoundCloud account is required.".into()),
+                crate::i18n::text("Could not play SoundCloud selection"),
+                Some(crate::i18n::shared_text(
+                    "A SoundCloud account is required.",
+                )),
             );
             return;
         };
@@ -425,8 +435,10 @@ impl SearchView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not play SoundCloud selection",
-                Some("The SoundCloud library client is unavailable.".into()),
+                crate::i18n::text("Could not play SoundCloud selection"),
+                Some(crate::i18n::shared_text(
+                    "The SoundCloud library client is unavailable.",
+                )),
             );
             return;
         };
@@ -466,8 +478,10 @@ impl SearchView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could not play SoundCloud selection",
-                        Some("SoundCloud did not return playable tracks.".into()),
+                        crate::i18n::text("Could not play SoundCloud selection"),
+                        Some(crate::i18n::shared_text(
+                            "SoundCloud did not return playable tracks.",
+                        )),
                     );
                     return;
                 };
@@ -475,8 +489,10 @@ impl SearchView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
-                        "SoundCloud selection is empty",
-                        Some("No playable tracks were returned.".into()),
+                        crate::i18n::text("SoundCloud selection is empty"),
+                        Some(crate::i18n::shared_text(
+                            "No playable tracks were returned.",
+                        )),
                     );
                     return;
                 }

@@ -53,7 +53,7 @@ mod platform {
         let Some(commands) = command_sender() else {
             show_error(
                 cx,
-                "Enable MiniMeters Integration before opening its interface",
+                crate::i18n::text("Enable MiniMeters Integration before opening its interface"),
             );
             return;
         };
@@ -62,7 +62,7 @@ mod platform {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("MiniMeters Integration".into()),
+                    title: Some(crate::i18n::text("MiniMeters Integration").into()),
                     appears_transparent: true,
                     ..Default::default()
                 }),
@@ -242,9 +242,11 @@ mod platform {
                         .justify_center()
                         .text_size(px(12.))
                         .text_color(rgb(MUTED))
-                        .when_some(self.error.clone(), |this, error| this.child(error))
+                        .when_some(self.error.clone(), |this, error| {
+                            this.child(crate::i18n::shared_text(error))
+                        })
                         .when(self.error.is_none() && !self.attached, |this| {
-                            this.child("Opening MiniMeters...")
+                            this.child(crate::i18n::text("Opening MiniMeters..."))
                         }),
                 )
         }
@@ -274,7 +276,7 @@ mod platform {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(0xd4d4d8))
                     .child(local_icon(LocalIcon::WaveSquare, PRIMARY).size(px(10.)))
-                    .child("MiniMeters Integration"),
+                    .child(crate::i18n::text("MiniMeters Integration")),
             )
             .child(
                 div()
@@ -308,7 +310,7 @@ mod platform {
             .focusable()
             .tab_stop(true)
             .role(Role::Button)
-            .aria_label(label)
+            .aria_label(crate::i18n::text(label))
             .w(px(46.))
             .h(px(TITLEBAR_HEIGHT))
             .flex()
@@ -505,7 +507,7 @@ mod platform {
         let Some(commands) = command_sender() else {
             show_error(
                 cx,
-                "Enable MiniMeters Integration before opening its interface",
+                crate::i18n::text("Enable MiniMeters Integration before opening its interface"),
             );
             return;
         };
@@ -514,7 +516,7 @@ mod platform {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("MiniMeters Integration".into()),
+                    title: Some(crate::i18n::text("MiniMeters Integration").into()),
                     appears_transparent: true,
                     ..Default::default()
                 }),
@@ -691,9 +693,11 @@ mod platform {
                         .justify_center()
                         .text_size(px(12.))
                         .text_color(rgb(MUTED))
-                        .when_some(self.error.clone(), |this, error| this.child(error))
+                        .when_some(self.error.clone(), |this, error| {
+                            this.child(crate::i18n::shared_text(error))
+                        })
                         .when(self.error.is_none() && !self.attached, |this| {
-                            this.child("Opening MiniMeters...")
+                            this.child(crate::i18n::text("Opening MiniMeters..."))
                         }),
                 )
         }
@@ -723,7 +727,7 @@ mod platform {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(0xd4d4d8))
                     .child(local_icon(LocalIcon::WaveSquare, PRIMARY).size(px(10.)))
-                    .child("MiniMeters Integration"),
+                    .child(crate::i18n::text("MiniMeters Integration")),
             )
             .child(
                 div()
@@ -757,7 +761,7 @@ mod platform {
             .focusable()
             .tab_stop(true)
             .role(Role::Button)
-            .aria_label(label)
+            .aria_label(crate::i18n::text(label))
             .w(px(46.))
             .h(px(TITLEBAR_HEIGHT))
             .flex()

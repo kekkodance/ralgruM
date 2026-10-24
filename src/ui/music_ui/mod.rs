@@ -738,7 +738,7 @@ fn carousel_arrow(
         .focusable()
         .tab_stop(true)
         .role(gpui::Role::Button)
-        .aria_label(tooltip)
+        .aria_label(crate::i18n::text(tooltip))
         .cursor_pointer()
         .group(hover_group.clone())
         .text_color(rgb(SCROLLBAR_THUMB))
@@ -1322,7 +1322,10 @@ pub(crate) fn track_artist_line(
                 }
             }
         })
-        .aria_label(format!("Artists: {text}"))
+        .aria_label(match crate::i18n::language() {
+            crate::navigation_state::Language::English => format!("Artists: {text}"),
+            crate::navigation_state::Language::Italian => format!("Artisti: {text}"),
+        })
         .child(interactive_text)
         .into_any_element()
 }
@@ -1552,7 +1555,7 @@ pub(crate) fn playlist_header_action_button(
         .focusable()
         .tab_stop(!disabled)
         .role(gpui::Role::Button)
-        .aria_label(tooltip)
+        .aria_label(crate::i18n::text(tooltip))
         .size(px(34.))
         .flex_none()
         .flex()
@@ -1590,7 +1593,7 @@ pub(crate) fn playlist_header_delete_button(
         .focusable()
         .tab_stop(true)
         .role(gpui::Role::Button)
-        .aria_label(tooltip)
+        .aria_label(crate::i18n::text(tooltip))
         .size(px(34.))
         .flex_none()
         .flex()
@@ -1618,7 +1621,7 @@ pub(crate) fn playlist_header_more_button(id: SharedString) -> gpui::Stateful<Di
         .id(id)
         .group(hover_group.clone())
         .role(gpui::Role::Button)
-        .aria_label("More options")
+        .aria_label(crate::i18n::text("More options"))
         .size(px(34.))
         .flex_none()
         .flex()
@@ -1685,7 +1688,7 @@ pub(crate) fn danger_remove_button(
         .border_1()
         .border_color(rgba(0x00000000))
         .role(gpui::Role::Button)
-        .aria_label(tooltip)
+        .aria_label(crate::i18n::text(tooltip))
         .app_tooltip(tooltip)
         .text_size(px(11.))
         .text_color(rgb(0x71717a))
@@ -1763,7 +1766,7 @@ pub(crate) fn danger_row_action_button(
         .border_color(rgba(0x00000000))
         .cursor(row_action_cursor(disabled))
         .role(gpui::Role::Button)
-        .aria_label(tooltip)
+        .aria_label(crate::i18n::text(tooltip))
         .app_tooltip(tooltip)
         .focus_visible(|style| style.border_color(rgb(PRIMARY)))
         .when(disabled, |this| this.opacity(0.4))
@@ -1789,7 +1792,7 @@ pub(crate) fn row_more_button(id: SharedString) -> gpui::Stateful<Div> {
         .justify_center()
         .cursor_pointer()
         .role(gpui::Role::Button)
-        .aria_label("More options")
+        .aria_label(crate::i18n::text("More options"))
         .app_tooltip(row_action_tooltip(LocalIcon::EllipsisVertical))
         .child(
             div()
@@ -1848,7 +1851,7 @@ pub(crate) fn row_download_button(id: SharedString) -> gpui::Stateful<Div> {
         .justify_center()
         .cursor_pointer()
         .role(gpui::Role::Button)
-        .aria_label("Download")
+        .aria_label(crate::i18n::text("Download"))
         .app_tooltip(row_action_tooltip(LocalIcon::Download))
         .child(
             div()
@@ -1949,7 +1952,7 @@ pub(crate) fn ghost_icon_button_with_nudge(
         .focusable()
         .tab_stop(true)
         .role(gpui::Role::Button)
-        .aria_label(label)
+        .aria_label(crate::i18n::text(label))
         .size(px(28.))
         .flex_none()
         .flex()
@@ -1992,7 +1995,7 @@ pub(crate) fn ghost_icon_button_with_nudge(
 }
 
 fn row_action_tooltip(icon: LocalIcon) -> &'static str {
-    match icon {
+    crate::i18n::text(match icon {
         LocalIcon::Download => "Download",
         LocalIcon::TrashCan => "Remove",
         LocalIcon::X => "Remove",
@@ -2002,7 +2005,7 @@ fn row_action_tooltip(icon: LocalIcon) -> &'static str {
         LocalIcon::ChevronUp => "Move up",
         LocalIcon::ChevronDown => "Move down",
         _ => "Action",
-    }
+    })
 }
 
 #[cfg(test)]

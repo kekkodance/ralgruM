@@ -304,8 +304,8 @@ fn collection_toast(title: &str, message: String, cx: &mut Context<SearchView>) 
     crate::toast::push_global(
         cx,
         crate::toast::ToastKind::Warning,
-        title.to_owned(),
-        Some(gpui::SharedString::from(message)),
+        crate::i18n::shared_text(title),
+        Some(crate::i18n::shared_text(message)),
     );
 }
 

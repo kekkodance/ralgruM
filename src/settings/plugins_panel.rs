@@ -34,7 +34,7 @@ impl SettingsView {
                     this.child(
                         settings_card()
                             .text_color(rgb(crate::theme::DANGER))
-                            .child(error),
+                            .child(crate::i18n::shared_text(error)),
                     )
                 },
             )
@@ -106,7 +106,7 @@ impl SettingsView {
                     .text_size(px(12.5))
                     .line_height(px(18.75))
                     .text_color(rgb(MUTED))
-                    .child(plugin.description),
+                    .child(crate::i18n::shared_text(plugin.description)),
             )
             .into_any_element()
     }
@@ -209,7 +209,7 @@ fn plugin_icon_action_button(
         .id(id)
         .when(!disabled, |this| this.group(hover_group.clone()))
         .role(Role::Button)
-        .aria_label(aria_label)
+        .aria_label(crate::i18n::text(aria_label))
         .size(px(34.))
         .flex_none()
         .flex()

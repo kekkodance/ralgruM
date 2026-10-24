@@ -113,7 +113,7 @@ impl Render for LogoutAllDialog {
                             .gap(px(8.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(local_icon(LocalIcon::LogOut, FOREGROUND).size_4())
-                            .child("Log out of all services?"),
+                            .child(crate::i18n::text("Log out of all services?")),
                     ),
             )
             .child(
@@ -124,7 +124,9 @@ impl Render for LogoutAllDialog {
                     .p(px(18.))
                     .bg(rgb(BACKGROUND))
                     .child(div().text_size(px(13.)).line_height(relative(1.5)).child(
-                        "This signs you out of Murglar, SoundCloud, and Deezer on this device.",
+                        crate::i18n::text(
+                            "This signs you out of Murglar, SoundCloud, and Deezer on this device.",
+                        ),
                     )),
             )
             .child(

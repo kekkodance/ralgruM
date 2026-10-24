@@ -604,7 +604,10 @@ impl Render for PlaylistDialog {
                                 )
                                 .size_4(),
                             )
-                            .child(format!("Edit {} playlist", self.provider.label())),
+                            .child(crate::i18n::shared_text(format!(
+                                "Edit {} playlist",
+                                self.provider.label()
+                            ))),
                     ),
             )
             .child(
@@ -648,7 +651,7 @@ impl Render for PlaylistDialog {
                             div()
                                 .text_color(rgb(DANGER))
                                 .text_size(px(12.))
-                                .child(error),
+                                .child(crate::i18n::shared_text(error)),
                         )
                     }),
             )
@@ -665,7 +668,7 @@ impl Render for PlaylistDialog {
                     .child(secondary_dialog_button_with_disabled(
                         "cancel-playlist-edit",
                         None,
-                        "Cancel",
+                        crate::i18n::text("Cancel"),
                         controls_busy,
                         cx.listener(|this, _, window, cx| {
                             if can_close_dialog(this.busy, this.choosing_cover) {
@@ -676,7 +679,7 @@ impl Render for PlaylistDialog {
                     .child(primary_button_with_loading(
                         "save-playlist-edit",
                         Some(LocalIcon::Check),
-                        if busy { "Saving..." } else { "Save changes" },
+                        crate::i18n::text(if busy { "Saving..." } else { "Save changes" }),
                         controls_busy,
                         busy,
                         cx.listener(|this, _, _, cx| this.save(cx)),

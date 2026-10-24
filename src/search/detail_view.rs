@@ -524,7 +524,7 @@ fn render_artist_section_list(
 }
 
 fn render_artist_section_heading(
-    title: &str,
+    title: &'static str,
     section_kind: ArtistSection,
     total: usize,
     loaded_count: usize,
@@ -534,7 +534,7 @@ fn render_artist_section_heading(
     _app: &gpui::App,
 ) -> AnyElement {
     artist_section_header(
-        title,
+        crate::i18n::text(title),
         section_kind,
         total,
         loaded_count,
@@ -621,7 +621,11 @@ fn artist_section_action(
             .focusable()
             .tab_stop(true)
             .role(gpui::Role::Button)
-            .aria_label(if is_expanded { "View less" } else { "View all" })
+            .aria_label(crate::i18n::text(if is_expanded {
+                "View less"
+            } else {
+                "View all"
+            }))
             .px(px(7.))
             .py(px(3.))
             .rounded(px(6.))
@@ -644,14 +648,18 @@ fn artist_section_action(
                     });
                 }
             })
-            .child(if is_expanded { "View less" } else { "View all" })
+            .child(crate::i18n::text(if is_expanded {
+                "View less"
+            } else {
+                "View all"
+            }))
             .into_any_element(),
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn artist_section(
-    title: &str,
+    title: &'static str,
     section_kind: ArtistSection,
     total: usize,
     loaded_count: usize,
@@ -719,7 +727,7 @@ fn artist_cards_section(
 
 #[allow(clippy::too_many_arguments)]
 fn section_with_action(
-    title: &str,
+    title: &'static str,
     section_kind: ArtistSection,
     total: usize,
     loaded_count: usize,
@@ -730,7 +738,7 @@ fn section_with_action(
 ) -> AnyElement {
     let host = cx.entity();
     render_shared_artist_section(
-        title,
+        crate::i18n::text(title),
         total,
         loaded_count,
         expanded == Some(section_kind),
@@ -876,7 +884,7 @@ fn detail_edit(
         MUTED,
         FOREGROUND,
         false,
-        "Edit",
+        crate::i18n::text("Edit"),
         move |_, window, app| {
             host.update(app, |this, cx| {
                 this.open_playlist_editor(provider, id.clone(), window, cx);
@@ -906,7 +914,7 @@ fn detail_play(
         MUTED,
         FOREGROUND,
         false,
-        "Play playlist",
+        crate::i18n::text("Play playlist"),
         move |_, _, app| {
             host.update(app, |this, cx| this.play_collection(card.clone(), cx));
         },
@@ -950,7 +958,7 @@ fn detail_favorite(
             FOREGROUND
         },
         pending,
-        "Favorite",
+        crate::i18n::text("Favorite"),
         move |_, _, app| {
             host.update(app, |this, cx| {
                 this.toggle_collection_favorite(card.clone(), value.unwrap_or(false), cx);
@@ -1007,10 +1015,14 @@ fn detail_message(icon: LocalIcon, color: u32, title: &str, description: &str) -
                 .mb(px(4.))
                 .text_size(px(16.))
                 .text_color(rgb(FOREGROUND))
-                .child(title.to_owned()),
+                .child(crate::i18n::shared_text(title)),
         )
         .when(!description.is_empty(), |this| {
-            this.child(div().text_size(px(13.)).child(description.to_owned()))
+            this.child(
+                div()
+                    .text_size(px(13.))
+                    .child(crate::i18n::shared_text(description)),
+            )
         })
         .into_any_element()
 }

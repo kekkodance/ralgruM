@@ -570,8 +570,16 @@ pub(super) fn dialog_max_height(viewport_height: f32) -> f32 {
 pub(super) fn initial_tracks_copy(count: usize) -> String {
     match count {
         0 => String::new(),
-        1 => "This playlist will start with 1 selected track.".into(),
-        n => format!("This playlist will start with {n} selected tracks."),
+        1 => format!(
+            "{} 1 {}.",
+            crate::i18n::text("This playlist will start with"),
+            crate::i18n::text("selected track")
+        ),
+        n => format!(
+            "{} {n} {}.",
+            crate::i18n::text("This playlist will start with"),
+            crate::i18n::text("selected tracks")
+        ),
     }
 }
 

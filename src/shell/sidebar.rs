@@ -247,10 +247,12 @@ impl RalgrumApp {
         badge_visual: SidebarDownloadBadgeVisual,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let element_id = label;
+        let label = crate::i18n::text(label);
         let text = if selected { FOREGROUND } else { MUTED };
 
         div()
-            .id(label)
+            .id(element_id)
             .focusable()
             .tab_stop(true)
             .role(Role::Button)
@@ -262,7 +264,7 @@ impl RalgrumApp {
             .relative()
             .items_center()
             .px(px(SIDEBAR_NAV_HORIZONTAL_PADDING_PX))
-            .group(label)
+            .group(element_id)
             .rounded(px(6.))
             .when(selected, |this| this.bg(rgb(BORDER)))
             .when(!selected, |this| this.bg(rgba(0x00000000)))
@@ -304,7 +306,7 @@ impl RalgrumApp {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .group_hover(label, |style| style.invisible())
+                                .group_hover(element_id, |style| style.invisible())
                                 .child(local_icon(icon, text).size(px(SIDEBAR_ICON_GLYPH_SIZE))),
                         )
                         .child(
@@ -315,7 +317,7 @@ impl RalgrumApp {
                                 .items_center()
                                 .justify_center()
                                 .invisible()
-                                .group_hover(label, |style| style.visible())
+                                .group_hover(element_id, |style| style.visible())
                                 .child(
                                     local_icon(icon, FOREGROUND).size(px(SIDEBAR_ICON_GLYPH_SIZE)),
                                 ),
@@ -406,7 +408,7 @@ impl RalgrumApp {
         let index = category.index();
         let focus = self.settings_category_focus[index].clone();
         let tab_focus = self.settings_category_focus.clone();
-        let label = category.label();
+        let label = crate::i18n::text(category.label());
         let id = match category {
             SettingsCategory::General => "settings-category-general",
             SettingsCategory::Murglar => "settings-category-murglar",
@@ -516,11 +518,11 @@ impl RalgrumApp {
     }
 
     fn full_settings_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let label = if self.settings_mode {
+        let label = crate::i18n::text(if self.settings_mode {
             "Back"
         } else {
             "Open settings"
-        };
+        });
         let icon = if self.settings_mode {
             LocalIcon::ArrowLeft
         } else {
@@ -594,11 +596,11 @@ impl RalgrumApp {
         interactive: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let label = if self.settings_mode {
+        let label = crate::i18n::text(if self.settings_mode {
             "Back"
         } else {
             "Settings"
-        };
+        });
         let icon = if self.settings_mode {
             LocalIcon::ArrowLeft
         } else {
@@ -698,7 +700,7 @@ impl RalgrumApp {
         };
         let button = danger_secondary_button(
             id,
-            "Log Out All",
+            crate::i18n::text("Log Out All"),
             false,
             options,
             cx.listener(|this, _, window, cx| {
@@ -708,7 +710,9 @@ impl RalgrumApp {
             }),
         );
         button
-            .when(compact, |this| this.app_tooltip_right(LOGOUT_ALL_TOOLTIP))
+            .when(compact, |this| {
+                this.app_tooltip_right(crate::i18n::text(LOGOUT_ALL_TOOLTIP))
+            })
             .tab_stop(interactive)
             .when(!interactive, |this| this.invisible())
     }
@@ -732,7 +736,7 @@ impl RalgrumApp {
         let button = neutral_secondary_button(
             id,
             LocalIcon::FileImport,
-            "Import / Export",
+            crate::i18n::text("Import / Export"),
             options,
             SETTINGS_SECONDARY_SMALL_ICON_SIZE,
             cx.listener(|this, _, window, cx| {
@@ -741,7 +745,7 @@ impl RalgrumApp {
         );
         button
             .when(compact, |this| {
-                this.app_tooltip_right(SETTINGS_TRANSFER_TOOLTIP)
+                this.app_tooltip_right(crate::i18n::text(SETTINGS_TRANSFER_TOOLTIP))
             })
             .tab_stop(interactive)
             .when(!interactive, |this| this.invisible())
@@ -887,7 +891,7 @@ pub(super) fn render_sidebar(
                 div()
                     .id("settings-category-tabs")
                     .role(Role::TabList)
-                    .aria_label("Settings categories")
+                    .aria_label(crate::i18n::text("Settings categories"))
                     .w_full()
                     .flex()
                     .flex_col()
@@ -975,7 +979,7 @@ fn sidebar_bottom(
                                 .flex()
                                 .items_center()
                                 .gap(px(4.))
-                                .child("Premium:")
+                                .child(crate::i18n::text("Premium:"))
                                 .child(
                                     div()
                                         .relative()
@@ -992,13 +996,13 @@ fn sidebar_bottom(
                                 .flex()
                                 .items_center()
                                 .gap(px(4.))
-                                .child("Pass:")
+                                .child(crate::i18n::text("Pass:"))
                                 .child({
                                     let (value, color) = sidebar_pass_value(sidebar_pass);
                                     div()
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(rgb(color))
-                                        .child(value)
+                                        .child(crate::i18n::shared_text(value))
                                 }),
                         ),
                 ),

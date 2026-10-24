@@ -112,7 +112,7 @@ impl FavoriteController {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Favorite failed",
+                        crate::i18n::text("Favorite failed"),
                         Some(error.clone().into()),
                     );
                 }
@@ -146,7 +146,7 @@ impl FavoriteController {
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Error,
-            "Favorite failed",
+            crate::i18n::text("Favorite failed"),
             Some(error.to_owned().into()),
         );
     }
@@ -366,7 +366,7 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Favorite failed",
+                crate::i18n::text("Favorite failed"),
                 Some(error.clone().into()),
             );
         }

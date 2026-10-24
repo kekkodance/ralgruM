@@ -432,8 +432,10 @@ impl LibraryView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search this library page..."));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::text("Search this library page..."))
+        });
         cx.subscribe(&input, move |_, _, event, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
@@ -1690,7 +1692,8 @@ impl LibraryView {
         };
         let (from_gap, target_gap) = responsive.endpoints(7., 0.);
         let (from_padding, target_padding) = responsive.endpoints(8., 0.);
-        let label_width = crate::music_ui::category_tab_text_width(category.label());
+        let localized_label = crate::i18n::text(category.label());
+        let label_width = crate::music_ui::category_tab_text_width(localized_label);
         let (from_label_width, target_label_width) = responsive.endpoints(label_width, 0.);
         let (from_opacity, target_opacity) = responsive.endpoints(1., 0.);
         let label = div()
@@ -1699,7 +1702,7 @@ impl LibraryView {
             .whitespace_nowrap()
             .max_w(px(target_label_width))
             .opacity(target_opacity)
-            .child(category.label())
+            .child(localized_label)
             .with_animation(
                 (
                     ElementId::from(("library-category-label", index)),
@@ -1725,7 +1728,7 @@ impl LibraryView {
             .track_focus(&focus)
             .tab_stop(selected)
             .role(gpui::Role::Tab)
-            .aria_label(category.label())
+            .aria_label(localized_label)
             .aria_selected(selected)
             .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
             .min_w_0()
@@ -1754,7 +1757,7 @@ impl LibraryView {
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .when_some(
-                category_tab_tooltip(responsive.target_compact, category.label()),
+                category_tab_tooltip(responsive.target_compact, localized_label),
                 |this, tooltip| this.app_tooltip(tooltip),
             )
             .hover(|style| style.text_color(rgb(FOREGROUND)))

@@ -521,11 +521,13 @@ fn render_entry(
 
 fn render_account_required(provider: Provider, host: &Entity<SearchView>) -> AnyElement {
     let (title, description) = crate::empty_state::discover_account_required_copy(provider.label());
+    let title = crate::i18n::shared_text(title);
+    let description = crate::i18n::shared_text(description);
     let click_host = host.clone();
     let action = primary_button(
         format!("discover-account-settings-{provider:?}"),
         Some(LocalIcon::Settings),
-        "Open account settings",
+        crate::i18n::text("Open account settings"),
         move |_, window, app| {
             click_host.update(app, |view, cx| {
                 view.open_account_settings(window, cx);
@@ -537,8 +539,8 @@ fn render_account_required(provider: Provider, host: &Entity<SearchView>) -> Any
         .w_full()
         .child(crate::empty_state::render(
             LocalIcon::UserLock,
-            title,
-            description,
+            title.as_ref(),
+            description.as_ref(),
             Some(action),
         ))
         .into_any_element()
@@ -923,7 +925,12 @@ fn render_status(
             this.focusable()
                 .tab_stop(true)
                 .role(gpui::Role::Button)
-                .aria_label(format!("Retry {} Discover", provider.label()))
+                .aria_label(crate::i18n::shared_text(format!(
+                    "{} {} {}",
+                    crate::i18n::text("Retry"),
+                    provider.label(),
+                    crate::i18n::text("Discover")
+                )))
                 .cursor_pointer()
                 .px(px(10.))
                 .py(px(6.))
@@ -955,7 +962,7 @@ fn render_status(
                         });
                     }
                 })
-                .child("Try again")
+                .child(crate::i18n::text("Try again"))
         });
     gpui::div()
         .w_full()
@@ -978,7 +985,7 @@ fn render_status(
                         .min_w_0()
                         .flex_1()
                         .truncate()
-                        .child(description.to_owned()),
+                        .child(crate::i18n::shared_text(description)),
                 )
                 .when(retry, |this| this.child(retry_button)),
         )
@@ -1004,7 +1011,7 @@ fn static_heading(provider: Provider, title: &str, subtitle: Option<&str>) -> An
                         .text_size(px(15.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(FOREGROUND))
-                        .child(title.to_owned()),
+                        .child(crate::i18n::shared_text(title)),
                 )
                 .when_some(subtitle, |this, subtitle| {
                     this.child(
@@ -1013,7 +1020,7 @@ fn static_heading(provider: Provider, title: &str, subtitle: Option<&str>) -> An
                             .truncate()
                             .text_size(px(12.))
                             .text_color(rgb(MUTED))
-                            .child(subtitle.to_owned()),
+                            .child(crate::i18n::shared_text(subtitle)),
                     )
                 }),
         )

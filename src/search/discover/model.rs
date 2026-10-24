@@ -66,6 +66,16 @@ struct CachedChannel {
 
 const MAX_CACHED_CHANNELS: usize = 8;
 
+fn smart_title_cache_scope(
+    account_scope: &str,
+    language: crate::navigation_state::Language,
+) -> String {
+    match language {
+        crate::navigation_state::Language::English => account_scope.to_owned(),
+        crate::navigation_state::Language::Italian => format!("{account_scope}:locale:it"),
+    }
+}
+
 impl Default for DiscoverChannelState {
     fn default() -> Self {
         Self {
@@ -98,6 +108,7 @@ impl Default for DiscoverProviderState {
 #[derive(Clone, Debug)]
 pub(crate) struct DiscoverState {
     account_scope: String,
+    language: crate::navigation_state::Language,
     next_generation: u64,
     deezer: DiscoverProviderState,
     soundcloud: DiscoverProviderState,
@@ -110,10 +121,13 @@ pub(crate) struct DiscoverState {
 
 impl DiscoverState {
     pub(crate) fn new(account_scope: String) -> Self {
-        let smart_titles = SmartTitleCache::load(&account_scope);
+        let language = crate::i18n::language();
+        let smart_titles =
+            SmartTitleCache::load(&smart_title_cache_scope(&account_scope, language));
         let skeleton_shapes = SkeletonShapesCache::load(&account_scope);
         Self {
             account_scope,
+            language,
             next_generation: 0,
             deezer: DiscoverProviderState::default(),
             soundcloud: DiscoverProviderState::default(),
@@ -130,6 +144,22 @@ impl DiscoverState {
             Provider::Deezer => &self.deezer,
             Provider::SoundCloud => &self.soundcloud,
         }
+    }
+
+    pub(crate) fn language(&self) -> crate::navigation_state::Language {
+        self.language
+    }
+
+    pub(crate) fn set_language(&mut self, language: crate::navigation_state::Language) {
+        if self.language == language {
+            return;
+        }
+        self.language = language;
+        self.next_generation = self.next_generation.wrapping_add(1);
+        self.deezer = DiscoverProviderState::default();
+        self.soundcloud = DiscoverProviderState::default();
+        self.smart_titles =
+            SmartTitleCache::load(&smart_title_cache_scope(&self.account_scope, language));
     }
 
     pub(crate) fn ready_generation(&self, provider: Provider) -> Option<u64> {
@@ -161,7 +191,8 @@ impl DiscoverState {
         self.channel = DiscoverChannelState::default();
         self.channel_cache.clear();
         self.channel_cache_order.clear();
-        self.smart_titles = SmartTitleCache::load(&self.account_scope);
+        self.smart_titles =
+            SmartTitleCache::load(&smart_title_cache_scope(&self.account_scope, self.language));
         self.skeleton_shapes = SkeletonShapesCache::load(&self.account_scope);
     }
 

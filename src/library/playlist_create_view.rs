@@ -132,7 +132,7 @@ impl Render for PlaylistCreateDialog {
                             div()
                                 .text_size(px(12.))
                                 .text_color(rgb(DANGER))
-                                .child(error),
+                                .child(crate::i18n::shared_text(error)),
                         )
                     }),
             )
@@ -196,9 +196,9 @@ fn dialog_footer(
             d.child(secondary_dialog_button(
                 "retry-create-initial-add",
                 if busy {
-                    "Retrying..."
+                    crate::i18n::text("Retrying...")
                 } else {
-                    "Retry adding track"
+                    crate::i18n::text("Retry adding track")
                 },
                 disabled,
                 cx.listener(|this, _, _, cx| this.retry_initial_add(cx)),
@@ -206,7 +206,7 @@ fn dialog_footer(
         })
         .child(secondary_dialog_button(
             "cancel-create-playlist",
-            "Cancel",
+            crate::i18n::text("Cancel"),
             disabled,
             cx.listener(|this, _, window, cx| {
                 if this.generation.is_none() && !this.choosing_cover {
@@ -218,9 +218,9 @@ fn dialog_footer(
             "save-create-playlist",
             LocalIcon::Plus,
             if busy {
-                "Creating..."
+                crate::i18n::text("Creating...")
             } else {
-                "Create playlist"
+                crate::i18n::text("Create playlist")
             },
             disabled,
             cx.listener(|this, _, _, cx| this.save(cx)),

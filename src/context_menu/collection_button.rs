@@ -23,7 +23,7 @@ pub(crate) fn collection_download_button(
     Button::new(format!("collection-download-{id}"))
         .small()
         .icon(Icon::default().path(LocalIcon::Download.path()))
-        .label("Download")
+        .label(crate::i18n::shared_text("Download"))
         .dropdown_menu(move |menu, window, cx| {
             let (deezer_arl, soundcloud_token, murglar_token) = {
                 let account_snapshot = account.read(cx);

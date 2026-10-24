@@ -942,7 +942,7 @@ fn centered_lyrics_message(
                 .text_size(px(16.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(FOREGROUND))
-                .child(heading),
+                .child(crate::i18n::text(heading)),
         )
         .child(
             div()
@@ -981,9 +981,10 @@ fn empty_lyrics_state(provider: LyricsProvider, reason: &EmptyLyricsReason) -> A
             false,
         ),
     };
-    let mut description_text = StyledText::new(description);
+    let localized_description = crate::i18n::text(description);
+    let mut description_text = StyledText::new(localized_description);
     if emphasize_genius {
-        let start = description
+        let start = localized_description
             .find("Genius")
             .expect("Musixmatch empty-state copy contains Genius");
         description_text = description_text.with_highlights([(
@@ -1002,7 +1003,7 @@ fn loading_lyrics_state() -> AnyElement {
     centered_lyrics_message(
         LocalIcon::MagnifyingGlass,
         "Finding lyrics",
-        StyledText::new("Searching for lyrics for this track..."),
+        StyledText::new(crate::i18n::text("Searching for lyrics for this track...")),
     )
 }
 
@@ -1253,23 +1254,22 @@ impl Render for LyricsPanel {
                         Status::Empty => (
                             LocalIcon::CompactDisc,
                             "No lyrics found",
-                            "Neither provider has lyrics for this track.".to_owned(),
+                            StyledText::new(crate::i18n::text(
+                                "Neither provider has lyrics for this track.",
+                            )),
                         ),
                         Status::Error(error) => (
                             LocalIcon::TriangleExclamation,
                             "Lyrics failed to load",
-                            error.clone(),
+                            StyledText::new(error.clone()),
                         ),
                         _ => (
                             LocalIcon::QuoteRight,
                             "No track playing",
-                            "Play a track to view lyrics.".to_owned(),
+                            StyledText::new(crate::i18n::text("Play a track to view lyrics.")),
                         ),
                     };
-                    vec![
-                        centered_lyrics_message(icon, heading, StyledText::new(description))
-                            .into_any_element(),
-                    ]
+                    vec![centered_lyrics_message(icon, heading, description).into_any_element()]
                 }
             }
         };
@@ -1321,7 +1321,7 @@ impl Render for LyricsPanel {
                                         div()
                                             .text_size(px(15.5))
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .child("Lyrics"),
+                                            .child(crate::i18n::text("Lyrics")),
                                     ),
                             )
                             .when(self.detached(cx), |this| {
@@ -1334,9 +1334,9 @@ impl Render for LyricsPanel {
                                         LocalIcon::ThumbtackSlash
                                     },
                                     if playback.read(cx).state.popout_always_on_top() {
-                                        "Disable always on top"
+                                        crate::i18n::text("Disable always on top")
                                     } else {
-                                        "Enable always on top"
+                                        crate::i18n::text("Enable always on top")
                                     },
                                     12.,
                                     0.,
@@ -1355,7 +1355,7 @@ impl Render for LyricsPanel {
                                 this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "lyrics-detach",
                                     LocalIcon::ArrowUpRightFromSquare,
-                                    "Pop out",
+                                    crate::i18n::text("Pop out"),
                                     12.,
                                     1.,
                                     {

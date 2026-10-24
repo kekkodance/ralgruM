@@ -24,7 +24,7 @@ pub(super) const DESCRIPTION_PLACEHOLDER: &str = "What is this playlist about?";
 
 pub(super) fn title_input(mut input: InputState, target: PlaylistFormTarget) -> InputState {
     let limits = limits(target);
-    input = input.placeholder(TITLE_PLACEHOLDER);
+    input = input.placeholder(crate::i18n::text(TITLE_PLACEHOLDER));
     input.validate(move |value, _| {
         value.chars().count() <= limits.title_max_chars && !value.chars().any(char::is_control)
     })
@@ -35,7 +35,7 @@ pub(super) fn description_input(input: InputState, _target: PlaylistFormTarget) 
         .multi_line(true)
         .rows(4)
         .submit_on_enter(false)
-        .placeholder(DESCRIPTION_PLACEHOLDER)
+        .placeholder(crate::i18n::text(DESCRIPTION_PLACEHOLDER))
 }
 
 pub(super) fn truncate_input(value: &str, max_chars: usize) -> String {
@@ -103,7 +103,7 @@ pub(super) fn field(label: &'static str, input: impl IntoElement) -> impl IntoEl
                 .text_color(rgb(FOREGROUND))
                 .text_size(px(12.))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .child(label),
+                .child(crate::i18n::text(label)),
         )
         .child(input)
 }
@@ -173,7 +173,7 @@ where
         .focusable()
         .tab_stop(!disabled)
         .role(Role::CheckBox)
-        .aria_label("Private playlist")
+        .aria_label(crate::i18n::text("Private playlist"))
         .aria_toggled(if checked {
             Toggled::True
         } else {
@@ -209,7 +209,7 @@ where
             div()
                 .text_size(px(12.))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .child("Private playlist"),
+                .child(crate::i18n::text("Private playlist")),
         )
         .child(
             Switch::new(switch_id)

@@ -213,7 +213,7 @@ impl Render for PlaybackView {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .app_tooltip("Download")
+                    .app_tooltip(crate::i18n::text("Download"))
                     .child(hover_icon(
                         "player-download",
                         LocalIcon::Download.path(),
@@ -251,7 +251,7 @@ impl Render for PlaybackView {
                     None,
                     !download_available(None),
                     true,
-                    "Download",
+                    crate::i18n::text("Download"),
                     {
                         let listener = cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
@@ -276,7 +276,7 @@ impl Render for PlaybackView {
                 selected,
                 None,
                 current.is_none(),
-                "Lyrics",
+                crate::i18n::text("Lyrics"),
                 move |_, _, cx| model.update(cx, |model, cx| model.toggle_lyrics(cx)),
             )
         };
@@ -290,7 +290,7 @@ impl Render for PlaybackView {
                 selected,
                 None,
                 current.is_none(),
-                "Queue",
+                crate::i18n::text("Queue"),
                 move |_, _, cx| model.update(cx, |model, cx| model.toggle_queue(cx)),
             )
         };
@@ -298,12 +298,17 @@ impl Render for PlaybackView {
         let artist_navigation = current.as_ref().and_then(|track| {
             current_artist_navigation(track, status, self.external_track_navigation.as_ref())
         });
-        let title_for_motion = current_track_title(current.as_ref(), status);
-        let subtitle_for_motion = current_subtitle(current.as_ref(), status, loading_from_cache);
+        let title_for_motion =
+            crate::i18n::shared_text(current_track_title(current.as_ref(), status));
+        let subtitle_for_motion = crate::i18n::shared_text(current_subtitle(
+            current.as_ref(),
+            status,
+            loading_from_cache,
+        ));
         let rendered_artist_for_motion = rendered_current_artist_text(
             current.as_ref(),
             status,
-            subtitle_for_motion,
+            subtitle_for_motion.as_ref(),
             artist_navigation.as_ref(),
         );
         // The track's flags are known from the moment it is queued, so the
@@ -314,7 +319,7 @@ impl Render for PlaybackView {
         let intrinsic_text_width = (!narrow && favorite_key.is_some()).then(|| {
             current_text_intrinsic_width(
                 window,
-                title_for_motion,
+                title_for_motion.as_ref(),
                 &rendered_artist_for_motion,
                 show_explicit_badge,
                 show_ai_badge,
@@ -415,7 +420,7 @@ impl Render for PlaybackView {
                 Some(FAVORITE_PINK),
                 favorite_pending,
                 true,
-                "Favorite Track",
+                crate::i18n::text("Favorite Track"),
                 {
                     let listener = cx.listener(|this, _, _, cx| {
                         cx.stop_propagation();
@@ -546,7 +551,7 @@ impl Render for PlaybackView {
                         shuffle_enabled,
                         current.is_some(),
                         14.,
-                        "Shuffle",
+                        crate::i18n::text("Shuffle"),
                         {
                             let model = self.model.clone();
                             move |_, _, cx| model.update(cx, |model, cx| model.toggle_shuffle(cx))
@@ -558,7 +563,7 @@ impl Render for PlaybackView {
                         false,
                         previous_enabled,
                         12.,
-                        "Previous",
+                        crate::i18n::text("Previous"),
                         {
                             let model = self.model.clone();
                             move |_, _, cx| model.update(cx, |model, cx| model.previous(cx))
@@ -578,7 +583,7 @@ impl Render for PlaybackView {
                         false,
                         next_enabled,
                         12.,
-                        "Next",
+                        crate::i18n::text("Next"),
                         {
                             let model = self.model.clone();
                             move |_, _, cx| {

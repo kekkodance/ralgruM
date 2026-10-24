@@ -2,6 +2,7 @@ use reqwest::{Url, header};
 use serde_json::{Value, json};
 
 use super::model::{DiscoverAction, DiscoverItem, DiscoverSection};
+use crate::navigation_state::Language;
 use crate::search::credential::SoundCloudToken;
 use crate::search::models::{Card, Provider, ResultType};
 use crate::search::{SearchClient, normalize, release_date, soundcloud_service_url};
@@ -11,14 +12,14 @@ const LIMIT: &str = "10";
 const OFFSET: &str = "0";
 const LINKED_PARTITIONING: &str = "1";
 const APP_VERSION: &str = "1788853345";
-const APP_LOCALE: &str = "en";
 const SYSTEM_PLAYLIST_TRACK_LIMIT: usize = 500;
 
 pub(crate) async fn load(
     client: &SearchClient,
     token: Option<SoundCloudToken>,
+    language: Language,
 ) -> Result<Vec<DiscoverSection>, String> {
-    let url = request_url().map_err(str::to_owned)?;
+    let url = request_url(language).map_err(str::to_owned)?;
     let mut request = client.http().get(url);
     if let Some(token) = token.as_ref() {
         request = request.header(
@@ -41,7 +42,7 @@ pub(crate) async fn load(
     parse_home(&value)
 }
 
-pub(crate) fn request_url() -> Result<Url, &'static str> {
+pub(crate) fn request_url(language: Language) -> Result<Url, &'static str> {
     let mut url = Url::parse(API).map_err(|_| "Invalid SoundCloud Discover endpoint")?;
     url.query_pairs_mut()
         .append_pair("client_id", crate::search::client::SOUNDCLOUD_CLIENT_ID)
@@ -49,7 +50,7 @@ pub(crate) fn request_url() -> Result<Url, &'static str> {
         .append_pair("offset", OFFSET)
         .append_pair("linked_partitioning", LINKED_PARTITIONING)
         .append_pair("app_version", APP_VERSION)
-        .append_pair("app_locale", APP_LOCALE);
+        .append_pair("app_locale", language.locale_code());
     Ok(url)
 }
 
@@ -295,7 +296,7 @@ mod tests {
 
     #[test]
     fn request_matches_captured_mixed_selection_contract() {
-        let url = request_url().unwrap();
+        let url = request_url(Language::English).unwrap();
         assert_eq!(url.path(), "/mixed-selections");
         assert_eq!(
             url.query_pairs().collect::<Vec<_>>(),

@@ -276,7 +276,10 @@ impl Render for PlaylistDeleteDialog {
                                 )
                                 .size_4(),
                             )
-                            .child(format!("Delete {} playlist", self.provider.label())),
+                            .child(crate::i18n::shared_text(format!(
+                                "Delete {} playlist",
+                                self.provider.label()
+                            ))),
                     ),
             )
             .child(
@@ -291,9 +294,12 @@ impl Render for PlaylistDeleteDialog {
                             .text_size(px(13.))
                             .line_height(relative(1.5))
                             .child(format!(
-                                "Delete \"{}\" from {}? This cannot be undone.",
+                                "{} \"{}\" {} {}? {}",
+                                crate::i18n::text("Delete"),
                                 self.playlist.title,
+                                crate::i18n::text("from"),
                                 self.provider.label(),
+                                crate::i18n::text("This cannot be undone."),
                             )),
                     )
                     .when_some(self.error.clone(), |this, error| {
@@ -301,7 +307,7 @@ impl Render for PlaylistDeleteDialog {
                             div()
                                 .text_color(rgb(DANGER))
                                 .text_size(px(12.))
-                                .child(error),
+                                .child(crate::i18n::shared_text(error)),
                         )
                     }),
             )
@@ -318,7 +324,7 @@ impl Render for PlaylistDeleteDialog {
                     .child(secondary_dialog_button_with_disabled(
                         "cancel-playlist-delete",
                         None,
-                        "Cancel",
+                        crate::i18n::text("Cancel"),
                         self.busy,
                         cx.listener(|this, _, window, cx| {
                             if !this.busy {
@@ -330,9 +336,9 @@ impl Render for PlaylistDeleteDialog {
                         "confirm-playlist-delete",
                         Some(LocalIcon::TrashCan),
                         if self.busy {
-                            "Deleting..."
+                            crate::i18n::text("Deleting...")
                         } else {
-                            "Delete playlist"
+                            crate::i18n::text("Delete playlist")
                         },
                         self.busy,
                         self.busy,

@@ -31,13 +31,16 @@ impl PlaybackModel {
 
         let Some(arl) = self.account.read(cx).deezer_arl() else {
             self.warn_ai_lookup_unavailable(
-                "Sign in to Deezer so ralgruM can identify AI generated tracks.",
+                crate::i18n::text("Sign in to Deezer so ralgruM can identify AI generated tracks."),
                 cx,
             );
             return;
         };
         let Ok(client) = self.ai_client.clone() else {
-            self.warn_ai_lookup_unavailable("The AI metadata client could not be created.", cx);
+            self.warn_ai_lookup_unavailable(
+                crate::i18n::text("The AI metadata client could not be created."),
+                cx,
+            );
             return;
         };
 
@@ -99,8 +102,8 @@ impl PlaybackModel {
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Warning,
-            "AI content blocking unavailable",
-            Some(detail.to_owned().into()),
+            crate::i18n::text("AI content blocking unavailable"),
+            Some(crate::i18n::shared_text(detail)),
         );
     }
 }

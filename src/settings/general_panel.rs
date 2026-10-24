@@ -23,6 +23,7 @@ use super::{
 
 impl SettingsView {
     pub(super) fn render_general(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let language = self.render_language_section();
         let behavior = self.render_behavior_section(cx);
         let playback = self.render_playback_settings(cx);
         let cache_and_storage = self.render_cache_and_storage_section(cx);
@@ -36,7 +37,18 @@ impl SettingsView {
             .flex()
             .flex_col()
             .gap(px(14.))
-            .children([heading, behavior, playback, cache_and_storage])
+            .children([heading, language, behavior, playback, cache_and_storage])
+            .into_any_element()
+    }
+
+    fn render_language_section(&self) -> AnyElement {
+        settings_card()
+            .child(settings_card_heading(LocalIcon::EarthAmericas, "Language"))
+            .child(control_list(vec![control_row(
+                "App language",
+                "Choose the language used throughout ralgruM.",
+                settings_select(&self.language_select, 130.).into_any_element(),
+            )]))
             .into_any_element()
     }
 
@@ -72,7 +84,7 @@ impl SettingsView {
                 control_row(
                     "Audio cache size",
                     "Older cached audio is removed automatically.",
-                    settings_select(&self.cache_limit_select, 100.).into_any_element(),
+                    settings_select(&self.cache_limit_select, 116.).into_any_element(),
                 ),
                 div()
                     .w_full()
@@ -95,7 +107,7 @@ impl SettingsView {
                                     .line_height(px(15.625))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(FOREGROUND))
-                                    .child("Downloads folder"),
+                                    .child(crate::i18n::text("Downloads folder")),
                             )
                             .child(
                                 div()
@@ -406,6 +418,7 @@ fn settings_select(
     Select::new(state)
         .w(px(width))
         .h(px(34.))
+        .cursor_pointer()
         .text_size(px(11.5))
         .bg(rgb(BACKGROUND))
         .pl(px(10.))
@@ -442,13 +455,13 @@ fn control_row(title: &'static str, description: &'static str, control: AnyEleme
                         .line_height(px(15.625))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(FOREGROUND))
-                        .child(title),
+                        .child(crate::i18n::text(title)),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
                         .text_color(rgb(MUTED))
-                        .child(description),
+                        .child(crate::i18n::text(description)),
                 ),
         )
         .child(div().flex_none().child(control))
@@ -511,7 +524,11 @@ fn cache_usage_box(status: String, visual: CacheMeterVisual) -> Div {
                 .justify_between()
                 .gap(px(12.))
                 .text_size(px(11.))
-                .child(div().text_color(rgb(MUTED)).child("Audio cache"))
+                .child(
+                    div()
+                        .text_color(rgb(MUTED))
+                        .child(crate::i18n::text("Audio cache")),
+                )
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
@@ -543,13 +560,14 @@ fn cache_used_fraction(overview: Option<&crate::playback::Overview>) -> f32 {
 
 fn cache_status(overview: Option<&crate::playback::Overview>) -> String {
     let Some(overview) = overview else {
-        return "Calculating...".into();
+        return crate::i18n::text("Calculating...").into();
     };
-    format!(
-        "{} of {} used",
-        format_storage_size(overview.used_bytes),
-        format_storage_size(overview.max_bytes),
-    )
+    let used = format_storage_size(overview.used_bytes);
+    let max = format_storage_size(overview.max_bytes);
+    match crate::i18n::language() {
+        crate::navigation_state::Language::English => format!("{used} of {max} used"),
+        crate::navigation_state::Language::Italian => format!("{used} di {max} utilizzati"),
+    }
 }
 
 fn format_storage_size(bytes: u64) -> String {

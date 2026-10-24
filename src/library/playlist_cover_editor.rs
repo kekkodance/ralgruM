@@ -84,7 +84,7 @@ pub(super) fn cover_editor<T: PlaylistCoverEditor>(
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_size(px(12.))
                 .text_color(rgb(FOREGROUND))
-                .child("Cover image"),
+                .child(crate::i18n::text("Cover image")),
         )
         .when(!has_cover, |d| {
             d.child(cover_chooser(false, disabled, dialog.provider(), cx))
@@ -108,9 +108,9 @@ fn cover_chooser<T: PlaylistCoverEditor>(
     cx: &mut Context<T>,
 ) -> impl IntoElement {
     let label = if has_cover {
-        "Change cover image"
+        crate::i18n::text("Change cover image")
     } else {
-        "Choose cover image"
+        crate::i18n::text("Choose cover image")
     };
     div()
         .id("choose-playlist-cover")
@@ -230,7 +230,9 @@ fn crop_panel<T: PlaylistCoverEditor>(
                             .text_size(px(10.5))
                             .line_height(relative(1.35))
                             .text_color(rgb(MUTED))
-                            .child("Drag to reposition. Scroll or use the slider to zoom."),
+                            .child(crate::i18n::text(
+                                "Drag to reposition. Scroll or use the slider to zoom.",
+                            )),
                     )
                 }),
         )
@@ -247,7 +249,9 @@ fn crop_preview<T: PlaylistCoverEditor>(
         .focusable()
         .tab_stop(!disabled)
         .role(Role::Image)
-        .aria_label("Cover crop. Use the arrow keys or drag to reposition the image")
+        .aria_label(crate::i18n::text(
+            "Cover crop. Use the arrow keys or drag to reposition the image",
+        ))
         .relative()
         .w(px(preview_size))
         .h(px(preview_size))
@@ -375,7 +379,7 @@ fn zoom_control<T: PlaylistCoverEditor>(
                 .focusable()
                 .tab_stop(!disabled)
                 .role(Role::Group)
-                .aria_label("Cover image zoom")
+                .aria_label(crate::i18n::text("Cover image zoom"))
                 .h(px(ZOOM_CONTROL_HEIGHT))
                 .flex_1()
                 .relative()

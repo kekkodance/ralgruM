@@ -727,6 +727,11 @@ impl Render for TrackInfoDialog {
             .gap(px(7.))
             .pr(px(10.))
             .children(rows.into_iter().map(|(label, value)| {
+                let value = if label == "Explicit" {
+                    crate::i18n::shared_text(value.as_str())
+                } else {
+                    value.into()
+                };
                 div()
                     .flex()
                     .gap(px(12.))
@@ -737,7 +742,7 @@ impl Render for TrackInfoDialog {
                             .text_size(px(12.))
                             .line_height(px(INFO_DIALOG_ROW_LINE_HEIGHT))
                             .text_color(rgb(MUTED))
-                            .child(label),
+                            .child(crate::i18n::text(label)),
                     )
                     .child(
                         div()
@@ -835,7 +840,11 @@ impl Render for TrackInfoDialog {
                     .py(px(14.))
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Track info"))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(crate::i18n::text("Track info")),
+                    )
                     .child(ghost_close_button_with_icon_size(
                         "track-info-close",
                         10.,

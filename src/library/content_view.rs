@@ -549,6 +549,15 @@ pub(super) fn render_main_header(
             fallback_description,
         )
     };
+    let page = if !detail {
+        Page {
+            title: crate::i18n::shared_text(page.title.as_str()).to_string(),
+            description: crate::i18n::shared_text(page.description.as_str()).to_string(),
+            ..page
+        }
+    } else {
+        page
+    };
     let host = cx.entity();
     let snapshot = if detail {
         page_header_snapshot(view, cx)
@@ -1171,7 +1180,7 @@ fn render_page_header_snapshot(
                                                 .text_size(px(11.5))
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .text_color(rgb(color))
-                                                .child(platform.label()),
+                                                .child(crate::i18n::text(platform.label())),
                                         )
                                     }),
                             )
@@ -1303,7 +1312,7 @@ fn render_playlist_create_control(
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .app_tooltip("Create playlist")
+        .app_tooltip(crate::i18n::text("Create playlist"))
         .child(
             Button::new(playlist_create_button_id(service))
                 .xsmall()
@@ -1348,7 +1357,7 @@ fn render_liked_tracks_play_control(
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .app_tooltip("Play liked tracks")
+        .app_tooltip(crate::i18n::text("Play liked tracks"))
         .child(
             Button::new(liked_tracks_play_button_id(service))
                 .xsmall()
@@ -1380,7 +1389,7 @@ fn render_playlist_play_control(
         MUTED,
         FOREGROUND,
         false,
-        "Play playlist",
+        crate::i18n::text("Play playlist"),
         move |_, _, app| {
             let provider_card = provider_card.clone();
             host.update(app, |this, cx| match provider_card {
@@ -1392,16 +1401,14 @@ fn render_playlist_play_control(
 }
 
 fn page_count_text(page: &Page) -> String {
-    format!(
-        "{} {}{}",
-        page.total,
-        if page.count_noun.is_empty() {
-            "item"
-        } else {
-            &page.count_noun
-        },
-        if page.total == 1 { "" } else { "s" }
-    )
+    let noun = match (page.count_noun.as_str(), page.total == 1) {
+        ("track", true) => crate::i18n::text("track"),
+        ("track", false) => crate::i18n::text("tracks"),
+        ("item", true) | ("", true) => crate::i18n::text("item"),
+        ("item", false) | ("", false) => crate::i18n::text("items"),
+        (noun, _) => noun,
+    };
+    format!("{} {noun}", page.total)
 }
 
 fn detail_heading_has_context(route_depth: usize) -> bool {
@@ -1442,7 +1449,7 @@ fn open_account_settings_action(cx: &mut Context<LibraryView>) -> AnyElement {
     primary_button(
         "library-open-account-settings",
         Some(LocalIcon::Settings),
-        "Open account settings",
+        crate::i18n::text("Open account settings"),
         cx.listener(|this, _, window, cx| {
             this.open_settings(window, cx);
         }),
@@ -1471,10 +1478,14 @@ fn message(
                 .text_size(px(16.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(FOREGROUND))
-                .child(title.to_owned()),
+                .child(crate::i18n::shared_text(title)),
         )
         .when(!description.is_empty(), |this| {
-            this.child(div().text_size(px(13.)).child(description.to_owned()))
+            this.child(
+                div()
+                    .text_size(px(13.))
+                    .child(crate::i18n::shared_text(description)),
+            )
         })
         .when_some(action, |this, action| {
             this.child(div().mt(px(14.)).child(action))

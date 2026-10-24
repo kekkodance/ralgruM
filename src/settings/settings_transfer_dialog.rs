@@ -107,8 +107,8 @@ impl SettingsTransferDialog {
         let settings = self.settings.clone();
         cx.spawn_in(window, async move |this, cx| {
             let file_picker = rfd::AsyncFileDialog::new()
-                .add_filter("JSON settings", &["json"])
-                .set_title("Import settings")
+                .add_filter(crate::i18n::text("JSON settings"), &["json"])
+                .set_title(crate::i18n::text("Import settings"))
                 .pick_file();
             let Some(file) = file_picker.await else {
                 return;
@@ -147,8 +147,8 @@ impl SettingsTransferDialog {
         let settings = self.settings.clone();
         cx.spawn_in(window, async move |this, cx| {
             let file_picker = rfd::AsyncFileDialog::new()
-                .add_filter("JSON settings", &["json"])
-                .set_title("Export settings")
+                .add_filter(crate::i18n::text("JSON settings"), &["json"])
+                .set_title(crate::i18n::text("Export settings"))
                 .set_file_name("ralgrum-settings.json")
                 .save_file();
             let Some(file) = file_picker.await else {
@@ -231,7 +231,7 @@ impl Render for SettingsTransferDialog {
                             .items_center()
                             .gap(px(8.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Import / Export"),
+                            .child(crate::i18n::text("Import / Export")),
                     ),
             )
             .child(
@@ -246,7 +246,9 @@ impl Render for SettingsTransferDialog {
                             .text_size(px(13.))
                             .line_height(relative(1.5))
                             .child(
-                                "Save a copy of your settings, or restore them from a settings file.",
+                                crate::i18n::text(
+                                    "Save a copy of your settings, or restore them from a settings file.",
+                                ),
                             ),
                     )
                     .child(
@@ -255,7 +257,9 @@ impl Render for SettingsTransferDialog {
                             .line_height(relative(1.45))
                             .text_color(rgb(MUTED))
                             .child(
-                                "Accounts and sign-in details stay on this device and are never included.",
+                                crate::i18n::text(
+                                    "Accounts and sign-in details stay on this device and are never included.",
+                                ),
                             ),
                     ),
             )

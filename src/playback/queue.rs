@@ -42,15 +42,17 @@ const QUEUE_BOTTOM_PADDING_PX: f32 = 16.;
 
 fn queue_title(context: &PlaybackContext) -> &'static str {
     match context {
-        PlaybackContext::SoundCloudStation { .. } => "Station",
-        PlaybackContext::DeezerTrackMix { .. } | PlaybackContext::DeezerArtistMix { .. } => "Mix",
+        PlaybackContext::SoundCloudStation { .. } => crate::i18n::text("Station"),
+        PlaybackContext::DeezerTrackMix { .. } | PlaybackContext::DeezerArtistMix { .. } => {
+            crate::i18n::text("Mix")
+        }
         PlaybackContext::DeezerFlow { kind, .. } => match kind {
-            crate::playback::DeezerFlowKind::Flow => "Flow",
-            crate::playback::DeezerFlowKind::SmartMix => "Mix",
+            crate::playback::DeezerFlowKind::Flow => crate::i18n::text("Flow"),
+            crate::playback::DeezerFlowKind::SmartMix => crate::i18n::text("Mix"),
         },
         PlaybackContext::None
         | PlaybackContext::DeezerLibraryTracks { .. }
-        | PlaybackContext::SoundCloudCollection { .. } => "Queue",
+        | PlaybackContext::SoundCloudCollection { .. } => crate::i18n::text("Queue"),
     }
 }
 
@@ -709,7 +711,7 @@ impl Render for QueuePanel {
                                 this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "queue-detach",
                                     LocalIcon::ArrowUpRightFromSquare,
-                                    "Pop out",
+                                    crate::i18n::text("Pop out"),
                                     12.,
                                     1.,
                                     {
@@ -733,9 +735,9 @@ impl Render for QueuePanel {
                                         LocalIcon::ThumbtackSlash
                                     },
                                     if playback.read(cx).state.popout_always_on_top() {
-                                        "Disable always on top"
+                                        crate::i18n::text("Disable always on top")
                                     } else {
-                                        "Enable always on top"
+                                        crate::i18n::text("Enable always on top")
                                     },
                                     12.,
                                     0.,
@@ -803,12 +805,12 @@ impl Render for QueuePanel {
                                                 px(-1.),
                                             ))),
                                     )
-                                    .child("Up next"),
+                                    .child(crate::i18n::text("Up next")),
                             )
                             .child(div().text_color(rgb(MUTED)).child(if count == 1 {
-                                "1 track".to_owned()
+                                format!("1 {}", crate::i18n::text("track"))
                             } else {
-                                format!("{count} tracks")
+                                format!("{count} {}", crate::i18n::text("tracks"))
                             })),
                     ),
             )
@@ -834,7 +836,7 @@ fn loading_queue_row() -> gpui::AnyElement {
         .items_center()
         .px(px(10.))
         .text_color(rgb(MUTED))
-        .child("Loading more tracks...")
+        .child(crate::i18n::text("Loading more tracks..."))
         .into_any_element()
 }
 
@@ -860,9 +862,9 @@ fn empty_queue_state(extend_in_flight: bool) -> impl IntoElement {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(FOREGROUND))
                 .child(if extend_in_flight {
-                    "Loading more tracks"
+                    crate::i18n::text("Loading more tracks")
                 } else {
-                    "Nothing up next"
+                    crate::i18n::text("Nothing up next")
                 }),
         )
         .child(
@@ -871,9 +873,9 @@ fn empty_queue_state(extend_in_flight: bool) -> impl IntoElement {
                 .line_height(px(19.5))
                 .text_color(rgb(MUTED))
                 .child(if extend_in_flight {
-                    "Extending this personalized queue."
+                    crate::i18n::text("Extending this personalized queue.")
                 } else {
-                    "You've reached the end of the queue."
+                    crate::i18n::text("You've reached the end of the queue.")
                 }),
         )
 }

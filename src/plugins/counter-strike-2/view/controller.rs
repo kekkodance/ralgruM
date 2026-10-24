@@ -141,8 +141,13 @@ impl Cs2SettingsDialog {
                     Ok(_) => crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Success,
-                        "Counter-Strike 2 integration installed",
-                        Some("Restart Counter-Strike 2 if it is currently running.".into()),
+                        crate::i18n::text("Counter-Strike 2 integration installed"),
+                        Some(
+                            crate::i18n::text(
+                                "Restart Counter-Strike 2 if it is currently running.",
+                            )
+                            .into(),
+                        ),
                     ),
                     Err(error) => this.error = Some(error.into()),
                 }

@@ -62,6 +62,41 @@ impl LegacyPreferences {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Language {
+    English,
+    Italian,
+}
+
+impl Default for Language {
+    fn default() -> Self {
+        let locale = sys_locale::get_locale().unwrap_or_default();
+        match locale.split(['-', '_']).next() {
+            Some(language) if language.eq_ignore_ascii_case("it") => Self::Italian,
+            _ => Self::English,
+        }
+    }
+}
+
+impl Language {
+    pub(crate) const ALL: [Self; 2] = [Self::English, Self::Italian];
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Italian => "Italiano",
+        }
+    }
+
+    pub(crate) const fn locale_code(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::Italian => "it",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum StartPage {
@@ -208,6 +243,7 @@ impl Default for LibraryCategories {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct AppSettings {
+    pub(crate) language: Language,
     #[serde(deserialize_with = "deserialize_start_page")]
     pub(crate) start_page: StartPage,
     pub(crate) remember_navigation: bool,
@@ -385,6 +421,7 @@ where
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            language: Language::default(),
             start_page: StartPage::Last,
             remember_navigation: true,
             last_main_tab: MainDestination::Discover,
@@ -630,6 +667,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(AppSettings::default()).unwrap(),
             json!({
+                "language": "english",
                 "startPage": "last",
                 "rememberNavigation": true,
                 "lastMainTab": "search",

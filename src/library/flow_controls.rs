@@ -160,8 +160,8 @@ fn render_mode_selector_with_ids(
         // Keep the tooltip anchored to this stable 22px wrapper. The selected
         // mode belongs in the popup's checked state, not in the tooltip text,
         // so opening the menu cannot move the tooltip as its width changes.
-        .app_tooltip(mode_label)
-        .aria_label(mode_label)
+        .app_tooltip(crate::i18n::text(mode_label))
+        .aria_label(crate::i18n::text(mode_label))
         .child(
             Button::new(selector_id)
                 .xsmall()
@@ -181,7 +181,7 @@ fn render_mode_selector_with_ids(
                         |menu, (option, label)| {
                             let host = menu_host.clone();
                             menu.item(crate::context_menu::compact_checked_action_item(
-                                label,
+                                crate::i18n::text(label),
                                 option == mode,
                                 move |_, _, app| {
                                     host.update(app, |this, cx| match target {

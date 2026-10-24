@@ -663,7 +663,7 @@ impl Render for LocalPlaylistDialog {
                             div()
                                 .text_color(rgb(DANGER))
                                 .text_size(px(12.))
-                                .child(error),
+                                .child(crate::i18n::shared_text(error)),
                         )
                     }),
             )
@@ -680,7 +680,7 @@ impl Render for LocalPlaylistDialog {
                     .child(secondary_dialog_button_with_disabled(
                         "cancel-local-playlist",
                         None,
-                        "Cancel",
+                        crate::i18n::text("Cancel"),
                         busy,
                         cx.listener(|this, _, window, cx| request_dialog_close(this, window, cx)),
                     ))
@@ -688,9 +688,9 @@ impl Render for LocalPlaylistDialog {
                         "save-local-playlist",
                         Some(LocalIcon::Check),
                         if editing {
-                            "Save changes"
+                            crate::i18n::text("Save changes")
                         } else {
-                            "Create playlist"
+                            crate::i18n::text("Create playlist")
                         },
                         busy,
                         busy,

@@ -773,8 +773,14 @@ impl PlaybackModel {
         crate::toast::push_global(
             cx,
             crate::toast::ToastKind::Error,
-            "Playback error",
-            Some(format!("Could not play \"{}\": {error}", track.title).into()),
+            crate::i18n::text("Playback error"),
+            Some(
+                crate::i18n::format_template(
+                    "Could not play \"{}\": {}",
+                    &[track.title.as_str(), &error],
+                )
+                .into(),
+            ),
         );
         if self.state.first_upcoming_index().is_some()
             && self.consecutive_failures < MAX_CONSECUTIVE_AUTO_SKIPS
@@ -1314,7 +1320,7 @@ impl PlaybackModel {
             Err(error) => crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not seek",
+                crate::i18n::text("Could not seek"),
                 Some(error.into()),
             ),
         }
@@ -1498,7 +1504,7 @@ impl PlaybackModel {
                         crate::toast::push_global(
                             cx,
                             crate::toast::ToastKind::Error,
-                            "Could not seek",
+                            crate::i18n::text("Could not seek"),
                             Some(error.into()),
                         );
                         false

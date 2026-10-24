@@ -156,10 +156,10 @@ pub(super) fn render_current(
     }
     let block_width = desktop_layout.map_or(380., |layout| layout.side_width);
     let artwork = if narrow { 44. } else { 60. };
-    let title = current_track_title(track, status);
-    let subtitle = current_subtitle(track, status, loading_from_cache);
+    let title = crate::i18n::shared_text(current_track_title(track, status));
+    let subtitle = crate::i18n::shared_text(current_subtitle(track, status, loading_from_cache));
     let rendered_artist =
-        rendered_current_artist_text(track, status, subtitle, artist_navigation.as_ref());
+        rendered_current_artist_text(track, status, subtitle.as_ref(), artist_navigation.as_ref());
     // The track's flags are known from the moment it is queued, so the badges
     // appear together with the title instead of popping in after loading.
     let show_ai = track.is_some_and(|track| track.ai_generated);
@@ -191,9 +191,9 @@ pub(super) fn render_current(
                     false,
                 )
             })
-            .unwrap_or_else(|| div().child(subtitle.to_owned()).into_any_element())
+            .unwrap_or_else(|| div().child(subtitle.clone()).into_any_element())
     } else {
-        div().child(subtitle.to_owned()).into_any_element()
+        div().child(subtitle.clone()).into_any_element()
     };
     let overflow_tooltip =
         |el: gpui::Stateful<gpui::Div>, text: &str, fits: Option<bool>| match fits {
@@ -224,15 +224,15 @@ pub(super) fn render_current(
                         .text_size(px(14.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(FOREGROUND))
-                        .child(title.to_owned()),
-                    title,
+                        .child(title.clone()),
+                    title.as_ref(),
                     text_width.map(|width| {
                         let badge_width = if show_explicit { 19. } else { 0. }
                             + if show_ai { 23. } else { 0. }
                             + if show_go_plus { 31. } else { 0. };
                         text_fits(
                             window,
-                            title,
+                            title.as_ref(),
                             14.,
                             FontWeight::SEMIBOLD,
                             px((width - badge_width).max(0.)),

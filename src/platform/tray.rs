@@ -656,7 +656,7 @@ mod windows_impl {
                     self.row(
                         0,
                         "tray-open",
-                        TRAY_MENU_LABELS[0],
+                        crate::i18n::text(TRAY_MENU_LABELS[0]),
                         LocalIcon::WindowRestore,
                         TRAY_MENU_ACTIONS[0],
                         cx,
@@ -665,7 +665,7 @@ mod windows_impl {
                     self.row(
                         1,
                         "tray-settings",
-                        TRAY_MENU_LABELS[1],
+                        crate::i18n::text(TRAY_MENU_LABELS[1]),
                         LocalIcon::Settings,
                         TRAY_MENU_ACTIONS[1],
                         cx,
@@ -674,7 +674,7 @@ mod windows_impl {
                     self.row(
                         2,
                         "tray-quit",
-                        TRAY_MENU_LABELS[2],
+                        crate::i18n::text(TRAY_MENU_LABELS[2]),
                         LocalIcon::X,
                         TRAY_MENU_ACTIONS[2],
                         cx,
@@ -1630,8 +1630,13 @@ mod linux_impl {
     fn build_menu() -> Result<Menu, String> {
         let menu = Menu::new();
         for (label, id) in TRAY_MENU_LABELS.iter().zip(TRAY_MENU_ITEM_IDS) {
-            menu.append(&MenuItem::with_id(MenuId::new(id), *label, true, None))
-                .map_err(|error| format!("could not build the tray menu: {error}"))?;
+            menu.append(&MenuItem::with_id(
+                MenuId::new(id),
+                crate::i18n::text(label),
+                true,
+                None,
+            ))
+            .map_err(|error| format!("could not build the tray menu: {error}"))?;
         }
         Ok(menu)
     }

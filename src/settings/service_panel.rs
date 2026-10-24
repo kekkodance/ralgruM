@@ -24,14 +24,14 @@ pub(super) fn panel_heading(title: &'static str, copy: &'static str) -> impl Int
             div()
                 .text_size(px(15.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
+                .child(crate::i18n::text(title)),
         )
         .child(
             div()
                 .text_size(px(12.5))
                 .text_color(rgb(MUTED))
                 .line_height(px(18.75))
-                .child(copy),
+                .child(crate::i18n::text(copy)),
         )
 }
 
@@ -56,7 +56,7 @@ pub(super) fn settings_card_heading(icon: LocalIcon, title: &'static str) -> Div
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(FOREGROUND))
         .child(local_icon(icon, MUTED).size(px(13.)))
-        .child(title)
+        .child(crate::i18n::text(title))
 }
 
 impl SettingsView {
@@ -83,9 +83,12 @@ impl SettingsView {
             .spawn(async move { service_auth::soundcloud_identity(&client, &token).await });
         let account = self.account.downgrade();
         cx.spawn(async move |_, cx| {
-            let result = task
-                .await
-                .unwrap_or_else(|error| Err(format!("The profile task failed: {error}")));
+            let result = task.await.unwrap_or_else(|error| {
+                Err(crate::i18n::format_template(
+                    "The profile task failed: {}",
+                    &[&error.to_string()],
+                ))
+            });
             account
                 .update(cx, |account, cx| {
                     if account.library_scope() != scope {
@@ -115,9 +118,12 @@ impl SettingsView {
             .spawn(async move { service_auth::deezer_identity(&client, &arl).await });
         let account = self.account.downgrade();
         cx.spawn(async move |_, cx| {
-            let result = task
-                .await
-                .unwrap_or_else(|error| Err(format!("The profile task failed: {error}")));
+            let result = task.await.unwrap_or_else(|error| {
+                Err(crate::i18n::format_template(
+                    "The profile task failed: {}",
+                    &[&error.to_string()],
+                ))
+            });
             account
                 .update(cx, |account, cx| {
                     if account.library_scope() != scope {
@@ -312,14 +318,14 @@ impl SettingsView {
                                             div()
                                                 .text_size(px(12.5))
                                                 .font_weight(FontWeight::MEDIUM)
-                                                .child(history_title),
+                                                .child(crate::i18n::text(history_title)),
                                         )
                                         .child(
                                             div()
                                                 .text_size(px(11.5))
                                                 .line_height(px(16.675))
                                                 .text_color(rgb(MUTED))
-                                                .child(history_description),
+                                                .child(crate::i18n::text(history_description)),
                                         ),
                                 )
                                 .child(
@@ -404,7 +410,7 @@ impl SettingsView {
                             div()
                                 .text_size(px(11.5))
                                 .text_color(rgb(MUTED))
-                                .child("Loading account profile..."),
+                                .child(crate::i18n::text("Loading account profile...")),
                         )
                     })
                     .when_some(status, |this, status| this.child(inline_status(status, false)))
@@ -471,7 +477,7 @@ fn service_heading(service: Service, icon: LocalIcon, accent: u32, copy: &'stati
                 .text_size(px(12.5))
                 .text_color(rgb(MUTED))
                 .line_height(px(18.75))
-                .child(copy),
+                .child(crate::i18n::text(copy)),
         )
 }
 
@@ -535,14 +541,14 @@ fn provider_preference_row(
                     div()
                         .text_size(px(12.5))
                         .font_weight(FontWeight::MEDIUM)
-                        .child(title),
+                        .child(crate::i18n::text(title)),
                 )
                 .child(
                     div()
                         .text_size(px(11.5))
                         .line_height(px(16.675))
                         .text_color(rgb(MUTED))
-                        .child(description),
+                        .child(crate::i18n::text(description)),
                 ),
         )
         .child(settings_switch(id, checked, on_click))
@@ -556,7 +562,7 @@ fn service_card_heading(icon: LocalIcon, accent: u32) -> Div {
         .text_size(px(13.))
         .font_weight(FontWeight::MEDIUM)
         .child(local_icon(icon, accent).size(px(14.)))
-        .child("Sign in")
+        .child(crate::i18n::text("Sign in"))
 }
 
 fn service_identity_row(
@@ -600,7 +606,7 @@ fn service_identity_row(
                         .text_color(rgb(MUTED))
                         .whitespace_nowrap()
                         .truncate()
-                        .child("Connected"),
+                        .child(crate::i18n::text("Connected")),
                 ),
         )
 }
@@ -638,7 +644,7 @@ fn inline_status(status: SharedString, error: bool) -> Div {
         .text_size(px(11.5))
         .line_height(px(16.675))
         .text_color(rgb(if error { DANGER } else { MUTED }))
-        .child(status)
+        .child(crate::i18n::shared_text(status))
 }
 
 fn credential_fields(view: &SettingsView, service: Service) -> impl IntoElement {
@@ -666,7 +672,12 @@ fn labeled_input(
         .flex()
         .flex_col()
         .gap(px(7.))
-        .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(label))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(MUTED))
+                .child(crate::i18n::text(label)),
+        )
         .child(text_field_context_menu(Input::new(input), input.clone()))
 }
 

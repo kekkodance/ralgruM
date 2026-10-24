@@ -158,7 +158,7 @@ impl SearchView {
             }
             InputEvent::Focus => {
                 this.input.update(cx, |input, cx| {
-                    input.set_placeholder(SEARCH_PLACEHOLDER, window, cx);
+                    input.set_placeholder(crate::i18n::text(SEARCH_PLACEHOLDER), window, cx);
                 });
                 this.suggestions.set_focused(true);
                 this.refresh_suggestions(cx);

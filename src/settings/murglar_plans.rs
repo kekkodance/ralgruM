@@ -74,14 +74,16 @@ pub(super) fn card(
                 .text_size(px(13.))
                 .font_weight(FontWeight::MEDIUM)
                 .child(local_icon(LocalIcon::Layers, FOREGROUND).size(px(13.)))
-                .child("Premium and Pass plans"),
+                .child(crate::i18n::text("Premium and Pass plans")),
         )
         .child(
             div()
                 .text_size(px(11.5))
                 .line_height(px(17.25))
                 .text_color(rgb(MUTED))
-                .child("Prices and payment methods loaded directly from Murglar."),
+                .child(crate::i18n::text(
+                    "Prices and payment methods loaded directly from Murglar.",
+                )),
         );
 
     if let Some(plan) = &plans.premium {
@@ -156,7 +158,7 @@ fn plan_entry(
         plan.title.clone()
     };
     let price = if plan.price.trim().is_empty() {
-        "Price unavailable".to_owned()
+        crate::i18n::text("Price unavailable").to_owned()
     } else {
         plan.price.clone()
     };
@@ -197,7 +199,7 @@ fn plan_entry(
                 11.5
             }))
             .font_weight(FontWeight::SEMIBOLD)
-            .child(title.clone()),
+            .child(crate::i18n::shared_text(title.clone())),
     );
     if best_deal {
         title_row = title_row.child(
@@ -214,7 +216,7 @@ fn plan_entry(
                 .text_color(rgb(0xc7d2fe))
                 .text_size(px(9.5))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child("Best deal"),
+                .child(crate::i18n::text("Best deal")),
         );
     }
     let mut title_copy = div().min_w_0().flex().flex_col().child(title_row);
@@ -227,7 +229,7 @@ fn plan_entry(
                 .text_size(px(PREMIUM_PLAN_DESCRIPTION_SIZE_PX))
                 .line_height(px(14.7))
                 .text_color(rgb(MUTED))
-                .child(description.to_owned()),
+                .child(crate::i18n::shared_text(description)),
         );
     }
 
@@ -236,7 +238,7 @@ fn plan_entry(
         .focusable()
         .tab_stop(can_expand)
         .role(Role::Button)
-        .aria_label(title.clone())
+        .aria_label(crate::i18n::shared_text(title.clone()))
         .flex()
         .items_center()
         .justify_between()
@@ -435,9 +437,9 @@ fn has_subscription_separator(index: usize) -> bool {
 
 fn payment_methods_label(has_methods: bool) -> &'static str {
     if has_methods {
-        "Choose payment method"
+        crate::i18n::text("Choose payment method")
     } else {
-        "No payment methods available"
+        crate::i18n::text("No payment methods available")
     }
 }
 

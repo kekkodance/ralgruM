@@ -261,14 +261,13 @@ fn cache_header(count: usize, gutter: f32) -> AnyElement {
                                 .text_size(px(20.))
                                 .font_weight(FontWeight(650.))
                                 .text_color(rgb(FOREGROUND))
-                                .child("Cache"),
+                                .child(crate::i18n::text("Cache")),
                         )
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .text_color(rgb(MUTED))
-                                .child("Tracks you've played before, cached for offline playback."),
-                        ),
+                        .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(
+                            crate::i18n::text(
+                                "Tracks you've played before, cached for offline playback.",
+                            ),
+                        )),
                 )
                 .child(
                     div()
@@ -277,7 +276,7 @@ fn cache_header(count: usize, gutter: f32) -> AnyElement {
                         .text_color(rgb(MUTED))
                         .child(format!(
                             "{count} {}",
-                            if count == 1 { "track" } else { "tracks" }
+                            crate::i18n::text(if count == 1 { "track" } else { "tracks" })
                         )),
                 ),
         )
@@ -704,11 +703,16 @@ fn provider(provider: PlaybackProvider) -> Provider {
 
 fn empty_cache_state(loading: bool) -> impl IntoElement {
     let (title, description) = if loading {
-        ("Loading cache", "Checking complete cached tracks.")
+        (
+            crate::i18n::text("Loading cache"),
+            crate::i18n::text("Checking complete cached tracks."),
+        )
     } else {
         (
-            "No cached tracks yet",
-            "Fully cached tracks will appear here after they are played or prefetched.",
+            crate::i18n::text("No cached tracks yet"),
+            crate::i18n::text(
+                "Fully cached tracks will appear here after they are played or prefetched.",
+            ),
         )
     };
     div()

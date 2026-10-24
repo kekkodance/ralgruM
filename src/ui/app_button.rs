@@ -188,7 +188,7 @@ pub(crate) fn danger_secondary_button_with_loading(
     loading: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    let label = label.into();
+    let label = crate::i18n::shared_text(label.into().as_ref());
     let is_disabled = disabled || loading;
     let text_color = if is_disabled {
         DANGER_SECONDARY_DISABLED_TEXT
@@ -284,7 +284,7 @@ fn secondary_page_action_button_with_palette(
     palette: ButtonPalette,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    let label = label.into();
+    let label = crate::i18n::shared_text(label.into().as_ref());
     div()
         .id(id)
         .focusable()
@@ -384,7 +384,7 @@ fn primary_button_with_dimensions(
     loading: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    let label = label.into();
+    let label = crate::i18n::shared_text(label.into().as_ref());
     div()
         .id(id)
         .focusable()

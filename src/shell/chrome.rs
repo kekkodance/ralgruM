@@ -91,7 +91,7 @@ pub(super) fn render_titlebar(
                                 .focusable()
                                 .tab_stop(true)
                                 .role(Role::Button)
-                                .aria_label("Toggle navigation")
+                                .aria_label(crate::i18n::text("Toggle navigation"))
                                 .size(px(32.))
                                 .flex()
                                 .items_center()
@@ -101,7 +101,7 @@ pub(super) fn render_titlebar(
                                 .focus_visible(|style| {
                                     style.border_1().border_color(rgb(crate::theme::PRIMARY))
                                 })
-                                .app_tooltip("Toggle navigation")
+                                .app_tooltip(crate::i18n::text("Toggle navigation"))
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.toggle_mobile_sidebar(cx);
                                 }))
@@ -144,10 +144,12 @@ fn title_control(
     cx: &Context<RalgrumApp>,
 ) -> impl IntoElement {
     let close = area == WindowControlArea::Close;
+    let group_id = label;
+    let label = crate::i18n::text(label);
 
     div()
-        .id(label)
-        .group(label)
+        .id(group_id)
+        .group(group_id)
         .focusable()
         .tab_stop(true)
         .role(Role::Button)
@@ -194,7 +196,7 @@ fn title_control(
                     div()
                         .absolute()
                         .inset_0()
-                        .group_hover(label, |style| style.invisible())
+                        .group_hover(group_id, |style| style.invisible())
                         .child(local_icon(icon, MUTED).size_full()),
                 )
                 .child(
@@ -202,7 +204,7 @@ fn title_control(
                         .absolute()
                         .inset_0()
                         .invisible()
-                        .group_hover(label, |style| style.visible())
+                        .group_hover(group_id, |style| style.visible())
                         .child(
                             local_icon(icon, if close { 0xffffff } else { FOREGROUND }).size_full(),
                         ),

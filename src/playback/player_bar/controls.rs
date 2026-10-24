@@ -37,6 +37,7 @@ pub(super) fn transport_button(
     label: &'static str,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let label = crate::i18n::text(label);
     div()
         .id(id)
         .when(enabled, |this| this.group(id))
@@ -79,7 +80,7 @@ pub(super) fn repeat_button(
         .focusable()
         .tab_stop(enabled)
         .role(Role::Button)
-        .aria_label(mode.label())
+        .aria_label(crate::i18n::text(mode.label()))
         .relative()
         .size(px(REPEAT_CONTROL_SIZE_PX))
         .flex()
@@ -90,7 +91,7 @@ pub(super) fn repeat_button(
         .border_1()
         .border_color(rgba(0x00000000))
         .focus_visible(|style| style.border_color(rgb(PRIMARY)))
-        .app_tooltip(mode.label())
+        .app_tooltip(crate::i18n::text(mode.label()))
         .child(hover_icon(
             "repeat",
             LocalIcon::Repeat.path(),
@@ -126,7 +127,7 @@ pub(super) fn volume_button(model: Entity<PlaybackModel>, level: VolumeIconLevel
         .focusable()
         .tab_stop(true)
         .role(Role::Button)
-        .aria_label("Mute / Unmute")
+        .aria_label(crate::i18n::text("Mute / Unmute"))
         .size(px(VOLUME_MUTE_BUTTON_PX))
         .rounded(px(6.))
         .flex()
@@ -137,7 +138,7 @@ pub(super) fn volume_button(model: Entity<PlaybackModel>, level: VolumeIconLevel
         .border_color(rgba(0x00000000))
         .hover(|style| style.bg(rgb(BORDER)))
         .focus_visible(|style| style.border_color(rgb(PRIMARY)))
-        .app_tooltip("Mute / Unmute")
+        .app_tooltip(crate::i18n::text("Mute / Unmute"))
         .child(volume_icon(level))
         .on_click(move |_, window, cx| model.update(cx, |model, cx| model.toggle_mute(window, cx)))
         .into_any_element()
@@ -231,7 +232,7 @@ pub(super) fn close_button(
         .focusable()
         .tab_stop(true)
         .role(Role::Button)
-        .aria_label("Close Player")
+        .aria_label(crate::i18n::text("Close Player"))
         .absolute()
         .top(px(5.))
         .right(px(CLOSE_PLAYER_RIGHT_PX))
@@ -246,7 +247,7 @@ pub(super) fn close_button(
         .hover(|style| style.opacity(1.))
         .focus_visible(|style| style.opacity(1.).border_color(rgb(PRIMARY)))
         .app_tooltip_with_gap_and_end_inset(
-            "Close Player",
+            crate::i18n::text("Close Player"),
             px(close_player_tooltip_gap(compact)),
             px(CLOSE_PLAYER_RIGHT_PX),
         )
@@ -297,7 +298,7 @@ pub(super) fn play_pause_button(
         .focusable()
         .tab_stop(enabled)
         .role(Role::Button)
-        .aria_label(if playing { "Pause" } else { "Play" })
+        .aria_label(crate::i18n::text(if playing { "Pause" } else { "Play" }))
         .size(px(36.))
         .rounded_full()
         .flex()
@@ -310,7 +311,7 @@ pub(super) fn play_pause_button(
         .when(enabled, |this| this.hover(|style| style.opacity(0.85)))
         .when(!enabled, |this| this.opacity(0.55))
         .focus_visible(|style| style.border_color(rgb(PRIMARY)))
-        .app_tooltip(if playing { "Pause" } else { "Play" })
+        .app_tooltip(crate::i18n::text(if playing { "Pause" } else { "Play" }))
         .child(local_icon_svg(
             if playing {
                 LocalIcon::Pause.path()
@@ -334,6 +335,7 @@ pub(super) fn bare_action_button(
     label: &'static str,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let label = crate::i18n::text(label);
     bare_action_button_with_interactivity(
         id,
         icon_path,
@@ -357,6 +359,7 @@ pub(super) fn bare_action_button_with_interactivity(
     label: &'static str,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let label = crate::i18n::text(label);
     let (color, hover_color, selected_background) = bare_action_visual(selected, selected_accent);
     let button = div()
         .id(id)

@@ -103,7 +103,7 @@ fn author_row() -> Div {
             .focusable()
             .tab_stop(true)
             .role(Role::Button)
-            .aria_label("Open kekkodance on GitHub")
+            .aria_label(crate::i18n::text("Open kekkodance on GitHub"))
             .rounded(px(3.))
             .border_1()
             .border_color(rgba(0x00000000))
@@ -144,7 +144,12 @@ fn notice_line(name: &'static str, note: &'static str) -> Div {
         .text_size(px(12.5))
         .line_height(px(18.75))
         .child(div().flex_none().text_color(rgb(FOREGROUND)).child(name))
-        .child(div().flex_none().text_color(rgb(MUTED)).child(note))
+        .child(
+            div()
+                .flex_none()
+                .text_color(rgb(MUTED))
+                .child(crate::i18n::shared_text(note)),
+        )
 }
 
 fn font_awesome_notice() -> Div {
@@ -176,7 +181,7 @@ fn linked_notice_line(
                 .focusable()
                 .tab_stop(true)
                 .role(Role::Button)
-                .aria_label(format!("Open {name}"))
+                .aria_label(crate::i18n::shared_text(format!("Open {name}")))
                 .relative()
                 .top(px(NOTICE_LINK_OPTICAL_OFFSET_PX))
                 .flex_none()
@@ -204,7 +209,12 @@ fn linked_notice_line(
                 })
                 .child(name),
         )
-        .child(div().flex_none().text_color(rgb(MUTED)).child(note))
+        .child(
+            div()
+                .flex_none()
+                .text_color(rgb(MUTED))
+                .child(crate::i18n::shared_text(note)),
+        )
 }
 
 fn card_heading(icon: LocalIcon, title: &'static str) -> Div {
@@ -222,5 +232,5 @@ fn card_heading(icon: LocalIcon, title: &'static str) -> Div {
                 .flex_none()
                 .child(local_icon(icon, MUTED).size(px(13.))),
         )
-        .child(title)
+        .child(crate::i18n::text(title))
 }

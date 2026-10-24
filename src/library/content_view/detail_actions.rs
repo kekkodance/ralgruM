@@ -301,7 +301,7 @@ pub(super) fn render_detail_delete(
     let host = host.clone();
     playlist_header_delete_button(
         format!("library-delete-playlist-{}-{id}", provider.label()).into(),
-        "Delete playlist",
+        crate::i18n::text("Delete playlist"),
         move |_, window, app| {
             host.update(app, |this, cx| {
                 this.open_playlist_delete(provider, id.clone(), window, cx)

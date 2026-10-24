@@ -62,7 +62,12 @@ pub(crate) fn action_row(
     local_icon: Option<LocalIcon>,
     menu_width: f32,
 ) -> gpui::AnyElement {
-    action_row_with_icon_color(label, local_icon, menu_width, None)
+    action_row_with_icon_color(
+        crate::i18n::shared_text(label.as_ref()),
+        local_icon,
+        menu_width,
+        None,
+    )
 }
 
 fn action_row_with_icon_color(
@@ -199,7 +204,7 @@ pub(crate) fn danger_action_row(
                 .font_weight(FontWeight(450.))
                 .truncate()
                 .overflow_hidden()
-                .child(label),
+                .child(crate::i18n::shared_text(label.as_ref())),
         )
         .into_any_element()
 }
@@ -1492,8 +1497,10 @@ pub(super) fn variant_row(
     label: impl Into<SharedString>,
     detail: impl Into<SharedString>,
 ) -> gpui::AnyElement {
-    let label = label.into();
-    let detail = detail.into();
+    let label: SharedString = label.into();
+    let detail: SharedString = detail.into();
+    let label = crate::i18n::shared_text(label.as_ref());
+    let detail = crate::i18n::shared_text(detail.as_ref());
     div()
         .w_full()
         .max_w_full()

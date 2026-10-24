@@ -617,7 +617,7 @@ where
             this.focusable()
                 .tab_stop(true)
                 .role(Role::Button)
-                .aria_label(aria_label)
+                .aria_label(crate::i18n::text(aria_label))
                 .hover(|style| {
                     style
                         .border_color(rgb(SCROLLBAR_THUMB))
@@ -625,7 +625,7 @@ where
                         .text_color(rgb(FOREGROUND))
                 })
                 .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
-                .app_tooltip(tooltip)
+                .app_tooltip(crate::i18n::text(tooltip))
         })
         .on_click(move |event, window, cx| {
             crate::ui::app_tooltip::dismiss_global(cx);
@@ -743,7 +743,7 @@ pub(super) fn render_top_toolbar(
     for item in &mut source_items {
         grow_selector_label(
             window,
-            item.label,
+            crate::i18n::text(item.label),
             &mut item.label_width,
             &mut item.full_width,
         );
@@ -751,7 +751,7 @@ pub(super) fn render_top_toolbar(
     for item in &mut library_items {
         grow_selector_label(
             window,
-            item.label,
+            crate::i18n::text(item.label),
             &mut item.label_width,
             &mut item.full_width,
         );
@@ -818,12 +818,12 @@ pub(super) fn render_top_toolbar(
                 .min_w_0()
                 .truncate()
                 .whitespace_nowrap()
-                .child(SEARCH_PLACEHOLDER),
+                .child(crate::i18n::text(SEARCH_PLACEHOLDER)),
         );
     let clear_search = plain_x_button(
         "clear-search",
         "clear-search",
-        "Clear search",
+        crate::i18n::text("Clear search"),
         search_clear_active,
     )
     .absolute()
@@ -833,7 +833,7 @@ pub(super) fn render_top_toolbar(
     .when(search_clear_settled_hidden, |this| this.invisible())
     .when(!search_clear_active, |this| this.cursor(CursorStyle::Arrow))
     .when(search_clear_active, |this| {
-        this.app_tooltip("Clear search")
+        this.app_tooltip(crate::i18n::text("Clear search"))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -879,7 +879,7 @@ pub(super) fn render_top_toolbar(
     let clear_library = plain_x_button(
         "clear-library-search",
         "clear-library-search",
-        "Clear library search",
+        crate::i18n::text("Clear library search"),
         show_library_service && show_library_clear,
     )
     .absolute()
@@ -888,7 +888,7 @@ pub(super) fn render_top_toolbar(
     .when(!show_library_clear, |this| this.invisible())
     .when(!show_library_clear, |this| this.cursor(CursorStyle::Arrow))
     .when(show_library_clear, |this| {
-        this.app_tooltip("Clear library search")
+        this.app_tooltip(crate::i18n::text("Clear library search"))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -911,7 +911,7 @@ pub(super) fn render_top_toolbar(
         .focusable()
         .tab_stop(show_search_source)
         .role(Role::Button)
-        .aria_label("Search")
+        .aria_label(crate::i18n::text("Search"))
         .absolute()
         .top(px(4.))
         .right(px(4.))
@@ -927,7 +927,7 @@ pub(super) fn render_top_toolbar(
         .hover(|style| style.opacity(0.9))
         .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
         .child(local_icon(LocalIcon::ArrowRight, crate::theme::FOREGROUND).size(px(12.)))
-        .app_tooltip("Search")
+        .app_tooltip(crate::i18n::text("Search"))
         .on_click(cx.listener(RalgrumApp::submit_search))
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
             if crate::tab_keyboard::is_activation_key(event.keystroke.key.as_str()) {
@@ -1096,7 +1096,7 @@ pub(super) fn render_top_toolbar(
         .border_color(rgb(BORDER))
         .bg(rgb(SURFACE_RAISED))
         .role(Role::TabList)
-        .aria_label("Search source or library service")
+        .aria_label(crate::i18n::text("Search source or library service"))
         .child(selector_indicator(
             "music-selector-platform",
             platform_indicator,
@@ -1286,7 +1286,7 @@ pub(super) fn render_top_toolbar(
             div()
                 .id("music-search")
                 .role(Role::Group)
-                .aria_label("Music search")
+                .aria_label(crate::i18n::text("Music search"))
                 .relative()
                 .h(px(38.))
                 .flex_1()

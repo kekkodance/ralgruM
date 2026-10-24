@@ -17,8 +17,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not play artist",
-                Some("A SoundCloud account is required.".into()),
+                crate::i18n::text("Could not play artist"),
+                Some(crate::i18n::text("A SoundCloud account is required.").into()),
             );
             return;
         }
@@ -26,8 +26,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not play artist",
-                Some("The search client is unavailable.".into()),
+                crate::i18n::text("Could not play artist"),
+                Some(crate::i18n::text("The search client is unavailable.").into()),
             );
             return;
         };
@@ -66,13 +66,19 @@ impl LibraryView {
                     Ok(_) => crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
-                        "No tracks to play",
-                        Some(format!("No playable tracks were found for {artist_title}.").into()),
+                        crate::i18n::text("No tracks to play"),
+                        Some(
+                            format!(
+                                "{} {artist_title}.",
+                                crate::i18n::text("No playable tracks were found for")
+                            )
+                            .into(),
+                        ),
                     ),
                     Err(error) => crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could not play artist",
+                        crate::i18n::text("Could not play artist"),
                         Some(error.into()),
                     ),
                 }
@@ -98,8 +104,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Info,
-                "Liked tracks are still loading",
-                Some("Try again after the liked tracks finish loading.".into()),
+                crate::i18n::text("Liked tracks are still loading"),
+                Some(crate::i18n::text("Try again after the liked tracks finish loading.").into()),
             );
             return;
         };
@@ -113,8 +119,11 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Info,
-                "Liked tracks are still loading",
-                Some("Wait for the full list to finish loading, then try again.".into()),
+                crate::i18n::text("Liked tracks are still loading"),
+                Some(
+                    crate::i18n::text("Wait for the full list to finish loading, then try again.")
+                        .into(),
+                ),
             );
             return;
         }
@@ -133,7 +142,7 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Info,
-                "No liked tracks to play",
+                crate::i18n::text("No liked tracks to play"),
                 None,
             );
             return;
@@ -217,8 +226,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not start SoundCloud station",
-                Some("A SoundCloud account is required.".into()),
+                crate::i18n::text("Could not start SoundCloud station"),
+                Some(crate::i18n::text("A SoundCloud account is required.").into()),
             );
             return;
         };
@@ -226,8 +235,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not start SoundCloud station",
-                Some("The SoundCloud library client is unavailable.".into()),
+                crate::i18n::text("Could not start SoundCloud station"),
+                Some(crate::i18n::text("The SoundCloud library client is unavailable.").into()),
             );
             return;
         };
@@ -249,8 +258,11 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could not start SoundCloud station",
-                        Some("SoundCloud did not return a playable station.".into()),
+                        crate::i18n::text("Could not start SoundCloud station"),
+                        Some(
+                            crate::i18n::text("SoundCloud did not return a playable station.")
+                                .into(),
+                        ),
                     );
                     return;
                 };
@@ -258,8 +270,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
-                        "SoundCloud station is empty",
-                        Some("No playable tracks were returned.".into()),
+                        crate::i18n::text("SoundCloud station is empty"),
+                        Some(crate::i18n::text("No playable tracks were returned.").into()),
                     );
                     return;
                 };
@@ -296,8 +308,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not start SoundCloud station",
-                Some("A SoundCloud account is required.".into()),
+                crate::i18n::text("Could not start SoundCloud station"),
+                Some(crate::i18n::text("A SoundCloud account is required.").into()),
             );
             return;
         };
@@ -305,8 +317,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not start SoundCloud station",
-                Some("The SoundCloud library client is unavailable.".into()),
+                crate::i18n::text("Could not start SoundCloud station"),
+                Some(crate::i18n::text("The SoundCloud library client is unavailable.").into()),
             );
             return;
         };
@@ -330,8 +342,11 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could not start SoundCloud station",
-                        Some("SoundCloud did not return a playable station.".into()),
+                        crate::i18n::text("Could not start SoundCloud station"),
+                        Some(
+                            crate::i18n::text("SoundCloud did not return a playable station.")
+                                .into(),
+                        ),
                     );
                     return;
                 };
@@ -339,8 +354,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
-                        "SoundCloud station is empty",
-                        Some("No playable tracks were returned.".into()),
+                        crate::i18n::text("SoundCloud station is empty"),
+                        Some(crate::i18n::text("No playable tracks were returned.").into()),
                     );
                     return;
                 };
@@ -384,8 +399,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not update recommendations",
-                Some("A Deezer account is required.".into()),
+                crate::i18n::text("Could not update recommendations"),
+                Some(crate::i18n::text("A Deezer account is required.").into()),
             );
             return;
         };
@@ -394,8 +409,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not update recommendations",
-                Some("The Deezer library client is unavailable.".into()),
+                crate::i18n::text("Could not update recommendations"),
+                Some(crate::i18n::text("The Deezer library client is unavailable.").into()),
             );
             return;
         };
@@ -417,14 +432,20 @@ impl LibraryView {
                     Ok(()) => crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Success,
-                        "Recommendation updated",
-                        Some("Deezer will show fewer similar recommendations.".into()),
+                        crate::i18n::text("Recommendation updated"),
+                        Some(
+                            crate::i18n::text("Deezer will show fewer similar recommendations.")
+                                .into(),
+                        ),
                     ),
                     Err(_) => crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could not update recommendations",
-                        Some("Deezer did not confirm the recommendation change.".into()),
+                        crate::i18n::text("Could not update recommendations"),
+                        Some(
+                            crate::i18n::text("Deezer did not confirm the recommendation change.")
+                                .into(),
+                        ),
                     ),
                 }
                 cx.notify();
@@ -450,8 +471,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not start Deezer mix",
-                Some("A Deezer account is required.".into()),
+                crate::i18n::text("Could not start Deezer mix"),
+                Some(crate::i18n::text("A Deezer account is required.").into()),
             );
             return;
         };
@@ -460,8 +481,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not start Deezer mix",
-                Some("The Deezer library client is unavailable.".into()),
+                crate::i18n::text("Could not start Deezer mix"),
+                Some(crate::i18n::text("The Deezer library client is unavailable.").into()),
             );
             return;
         };
@@ -507,8 +528,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could not start Deezer mix",
-                        Some("Deezer did not return a playable mix.".into()),
+                        crate::i18n::text("Could not start Deezer mix"),
+                        Some(crate::i18n::text("Deezer did not return a playable mix.").into()),
                     );
                     return;
                 };
@@ -519,8 +540,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
-                        "Deezer mix is empty",
-                        Some("No playable tracks were returned.".into()),
+                        crate::i18n::text("Deezer mix is empty"),
+                        Some(crate::i18n::text("No playable tracks were returned.").into()),
                     );
                     return;
                 }
@@ -584,8 +605,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not start Deezer Flow",
-                Some("A Deezer account is required.".into()),
+                crate::i18n::text("Could not start Deezer Flow"),
+                Some(crate::i18n::text("A Deezer account is required.").into()),
             );
             return;
         };
@@ -593,8 +614,8 @@ impl LibraryView {
             crate::toast::push_global(
                 cx,
                 crate::toast::ToastKind::Error,
-                "Could not start Deezer Flow",
-                Some("The Deezer library client is unavailable.".into()),
+                crate::i18n::text("Could not start Deezer Flow"),
+                Some(crate::i18n::text("The Deezer library client is unavailable.").into()),
             );
             return;
         };
@@ -650,8 +671,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Error,
-                        "Could not start Deezer Flow",
-                        Some("Deezer did not return a playable mix.".into()),
+                        crate::i18n::text("Could not start Deezer Flow"),
+                        Some(crate::i18n::text("Deezer did not return a playable mix.").into()),
                     );
                     return;
                 };
@@ -662,8 +683,8 @@ impl LibraryView {
                     crate::toast::push_global(
                         cx,
                         crate::toast::ToastKind::Info,
-                        "Deezer mix is empty",
-                        Some("No playable tracks were returned.".into()),
+                        crate::i18n::text("Deezer mix is empty"),
+                        Some(crate::i18n::text("No playable tracks were returned.").into()),
                     );
                     return;
                 }

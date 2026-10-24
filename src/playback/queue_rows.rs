@@ -60,7 +60,10 @@ pub(super) fn row(
                 .hover(|style| style.bg(rgba(0xffffff0b)).border_color(rgb(BORDER)))
         })
         .aria_label(if blocked {
-            format!("{title} (playback disabled, blocked content)")
+            format!(
+                "{title} ({})",
+                crate::i18n::text("playback disabled, blocked content")
+            )
         } else {
             title.clone()
         })
@@ -255,7 +258,7 @@ fn row_meta(
         )
         .child(danger_remove_button(
             format!("queue-remove-{index}").into(),
-            "Remove from queue",
+            crate::i18n::text("Remove from queue"),
             Some(format!("queue-row-{index}").into()),
             move |_, _, cx| {
                 cx.stop_propagation();

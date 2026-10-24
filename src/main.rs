@@ -5,6 +5,7 @@ mod cache;
 mod context_menu;
 mod domain;
 mod downloads;
+mod i18n;
 mod integrations;
 mod library;
 mod lyrics;
@@ -206,6 +207,11 @@ fn main() {
             let device_identity = murglar_backend::load_current_user();
             let account_session = account_session::SessionStore::load_current_user();
             let app_settings = navigation_state::SettingsStore::load_current_user();
+            let language = app_settings
+                .as_ref()
+                .map(|store| store.settings().language)
+                .unwrap_or_default();
+            i18n::set_language(language);
             let mut plugin_startup_errors = Vec::new();
             let plugin_settings = plugins::PluginStore::load_current_user().map(|store| {
                 let (store, errors) = plugins::prepare_startup(store);

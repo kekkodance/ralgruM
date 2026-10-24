@@ -663,7 +663,7 @@ fn remove_button(
             "library-track-remove-{row_identity}-{index}-{track_id}"
         )),
         LocalIcon::X,
-        "Remove from playlist",
+        crate::i18n::text("Remove from playlist"),
         pending,
         move |_, _, cx| {
             cx.stop_propagation();

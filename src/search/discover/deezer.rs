@@ -3,6 +3,7 @@ use reqwest::{Url, header};
 use serde_json::{Value, json};
 
 use super::model::{DiscoverAction, DiscoverItem, DiscoverSection};
+use crate::navigation_state::Language;
 use crate::search::client::DeezerSession;
 use crate::search::credential::DeezerArl;
 use crate::search::models::{Card, Provider, ResultType};
@@ -11,7 +12,6 @@ use crate::smart_mix_title::{generated_smart_mix_title, specific_smart_mix_title
 
 const GATEWAY: &str = "https://www.deezer.com/ajax/gw-light.php";
 const APP_VERSION: &str = "2.5";
-const DISCOVER_LANGUAGE: &str = "en";
 pub(crate) const MAX_SMART_MIX_ENRICHMENT_IDS: usize = 8;
 const SMART_MIX_ENRICHMENT_CONCURRENCY: usize = 2;
 const MAX_SMART_MIX_ID_CHARS: usize = 128;
@@ -19,8 +19,9 @@ const MAX_SMART_MIX_ID_CHARS: usize = 128;
 pub(crate) async fn load(
     client: &SearchClient,
     arl: DeezerArl,
+    language: Language,
 ) -> Result<Vec<DiscoverSection>, String> {
-    let value = load_page(client, arl, "home").await?;
+    let value = load_page(client, arl, "home", language).await?;
     parse_home(&value)
 }
 
@@ -30,17 +31,22 @@ pub(crate) async fn load_channel(
     slug: &str,
 ) -> Result<(String, Vec<DiscoverSection>), String> {
     let slug = valid_channel_slug(slug).ok_or_else(|| "Invalid Deezer channel".to_owned())?;
-    let value = load_page(client, arl, &format!("channels/{slug}")).await?;
+    let value = load_page(client, arl, &format!("channels/{slug}"), Language::English).await?;
     parse_channel(&value, &slug)
 }
 
-async fn load_page(client: &SearchClient, arl: DeezerArl, page: &str) -> Result<Value, String> {
+async fn load_page(
+    client: &SearchClient,
+    arl: DeezerArl,
+    page: &str,
+    language: Language,
+) -> Result<Value, String> {
     let session = client
         .deezer_session(Some(arl))
         .await
         .map_err(|error| error.message)?;
     let cookie = session_cookie_header(&session)?;
-    let url = page_request_url(&session.check_form, page).map_err(str::to_owned)?;
+    let url = page_request_url(&session.check_form, page, language).map_err(str::to_owned)?;
     let response = client
         .http()
         .get(url)
@@ -57,6 +63,7 @@ pub(crate) async fn enrich_smart_mix_titles(
     client: &SearchClient,
     arl: DeezerArl,
     ids: Vec<String>,
+    language: Language,
 ) -> Vec<(String, String)> {
     let ids = ids
         .into_iter()
@@ -72,7 +79,7 @@ pub(crate) async fn enrich_smart_mix_titles(
     futures::stream::iter(ids.into_iter().map(|id| {
         let client = client.clone();
         let session = session.clone();
-        async move { fetch_smart_mix_title(&client, &session, &id).await }
+        async move { fetch_smart_mix_title(&client, &session, &id, language).await }
     }))
     .buffer_unordered(SMART_MIX_ENRICHMENT_CONCURRENCY)
     .filter_map(|result| async move { result })
@@ -84,6 +91,7 @@ async fn fetch_smart_mix_title(
     client: &SearchClient,
     session: &DeezerSession,
     requested_id: &str,
+    language: Language,
 ) -> Option<(String, String)> {
     let requested_id = valid_smart_mix_id(requested_id)?;
     let cookie = session_cookie_header(session).ok()?;
@@ -93,7 +101,7 @@ async fn fetch_smart_mix_title(
         .post(url)
         .header(header::COOKIE, cookie)
         .header(header::CONTENT_TYPE, "application/json; charset=UTF-8")
-        .json(&smart_tracklist_request(&requested_id))
+        .json(&smart_tracklist_request(&requested_id, language))
         .send()
         .await
         .ok()?;
@@ -127,18 +135,18 @@ fn session_cookie_header(session: &DeezerSession) -> Result<header::HeaderValue,
 
 #[cfg(test)]
 pub(crate) fn home_request_url(check_form: &str) -> Result<Url, &'static str> {
-    page_request_url(check_form, "home")
+    page_request_url(check_form, "home", Language::English)
 }
 
 #[cfg(test)]
 pub(crate) fn channel_request_url(check_form: &str, slug: &str) -> Result<Url, &'static str> {
     let slug = valid_channel_slug(slug).ok_or("Invalid Deezer channel slug")?;
-    page_request_url(check_form, &format!("channels/{slug}"))
+    page_request_url(check_form, &format!("channels/{slug}"), Language::English)
 }
 
-fn page_request_url(check_form: &str, page: &str) -> Result<Url, &'static str> {
+fn page_request_url(check_form: &str, page: &str, language: Language) -> Result<Url, &'static str> {
     let mut url = Url::parse(GATEWAY).map_err(|_| "Invalid Deezer Discover endpoint")?;
-    let gateway_input = serde_json::to_string(&gateway_input_for_page(page))
+    let gateway_input = serde_json::to_string(&gateway_input_for_page(page, language))
         .map_err(|_| "Invalid Discover request")?;
     url.query_pairs_mut()
         .append_pair("method", "page.get")
@@ -159,11 +167,15 @@ fn smart_tracklist_request_url(check_form: &str) -> Result<Url, &'static str> {
     Ok(url)
 }
 
-fn smart_tracklist_request(smarttracklist_id: &str) -> Value {
-    json!({ "smarttracklist_id": smarttracklist_id, "lang": "us" })
+fn smart_tracklist_request(smarttracklist_id: &str, language: Language) -> Value {
+    let lang = match language {
+        Language::English => "us",
+        Language::Italian => "it",
+    };
+    json!({ "smarttracklist_id": smarttracklist_id, "lang": lang })
 }
 
-fn gateway_input_for_page(page: &str) -> Value {
+fn gateway_input_for_page(page: &str, language: Language) -> Value {
     json!({
         "PAGE": page,
         "VERSION": APP_VERSION,
@@ -183,7 +195,7 @@ fn gateway_input_for_page(page: &str) -> Value {
             "long-card-horizontal-grid": ["album", "artist", "artistLineUp", "channel", "livestream", "flow", "playlist", "radio", "show", "smarttracklist", "track", "user", "video-link", "external-link"],
             "filterable-grid": ["flow"]
         },
-        "LANG": DISCOVER_LANGUAGE,
+        "LANG": language.locale_code(),
         "OPTIONS": ["deeplink_newsandentertainment", "deeplink_subscribeoffer"]
     })
 }
@@ -672,8 +684,7 @@ mod tests {
             .unwrap();
         assert_eq!(gateway["PAGE"], "home");
         assert_eq!(gateway["VERSION"], APP_VERSION);
-        assert_eq!(gateway["LANG"], DISCOVER_LANGUAGE);
-        assert_eq!(DISCOVER_LANGUAGE, "en");
+        assert_eq!(gateway["LANG"], "en");
         assert_eq!(gateway["OPTIONS"][0], "deeplink_newsandentertainment");
         assert_eq!(gateway["OPTIONS"][1], "deeplink_subscribeoffer");
         assert!(
@@ -873,7 +884,7 @@ mod tests {
         let query = url.query_pairs().collect::<Vec<_>>();
         assert!(query.contains(&("method".into(), "deezer.pageSmartTracklist".into())));
         assert_eq!(
-            smart_tracklist_request("inspired-by-3"),
+            smart_tracklist_request("inspired-by-3", Language::English),
             json!({ "smarttracklist_id": "inspired-by-3", "lang": "us" })
         );
         let data = json!({

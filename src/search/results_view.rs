@@ -69,17 +69,24 @@ fn should_show_result_count(result_type: ResultType, show_search_result_count: b
 
 pub(super) fn search_category_geometry(icon_only: bool) -> Vec<SearchCategoryGeometry> {
     let mut left = 0.;
-    SEARCH_CATEGORY_LABELS
-        .into_iter()
-        .map(|label| {
-            let geometry = SearchCategoryGeometry {
-                left,
-                width: search_category_item_width(label, icon_only),
-            };
-            left += geometry.width + SEARCH_CATEGORY_GAP;
-            geometry
-        })
-        .collect()
+    [
+        ResultType::All,
+        ResultType::Tracks,
+        ResultType::Albums,
+        ResultType::Artists,
+        ResultType::Playlists,
+    ]
+    .into_iter()
+    .map(|result_type| {
+        let label = crate::i18n::text(result_type.label());
+        let geometry = SearchCategoryGeometry {
+            left,
+            width: search_category_item_width(label, icon_only),
+        };
+        left += geometry.width + SEARCH_CATEGORY_GAP;
+        geometry
+    })
+    .collect()
 }
 
 fn search_category_geometry_at_position(
@@ -206,7 +213,10 @@ fn section_count_element(count: usize) -> impl IntoElement {
         .text_size(px(11.))
         .text_color(rgb(MUTED))
         .whitespace_nowrap()
-        .child(format!("{count} found"))
+        .child(crate::i18n::shared_text(format!(
+            "{count} {}",
+            crate::i18n::text("found")
+        )))
 }
 
 // Static toggle button. View all in the All preview navigates to the
@@ -214,16 +224,16 @@ fn section_count_element(count: usize) -> impl IntoElement {
 // All. The button uses natural width so it hugs its label. No animation runs here.
 fn view_toggle_button(
     section: ResultType,
-    label: &str,
+    label: &'static str,
     dedicated_return: bool,
     cx: &mut Context<SearchView>,
 ) -> AnyElement {
-    let label_owned = label.to_owned();
-    let aria_label = format!(
+    let label_owned = crate::i18n::text(label).to_owned();
+    let aria_label = crate::i18n::shared_text(format!(
         "{} {}",
         label_owned.to_ascii_lowercase(),
-        section.label().to_ascii_lowercase()
-    );
+        crate::i18n::text(section.label()).to_ascii_lowercase()
+    ));
     let base = div()
         .id(format!(
             "view-toggle-{}",
@@ -378,6 +388,7 @@ impl SearchView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let selected = self.state.result_type == result_type;
+        let label = crate::i18n::text(result_type.label());
         let focus = self.type_tab_focus[index].clone();
         let tab_focus = self.type_tab_focus.clone();
         let icon = match result_type {
@@ -393,7 +404,7 @@ impl SearchView {
             .tab_stop(selected)
             .role(gpui::Role::Tab)
             .aria_selected(selected)
-            .aria_label(result_type.label())
+            .aria_label(label)
             .h(px(30.))
             .flex()
             .flex_none()
@@ -405,7 +416,7 @@ impl SearchView {
                     .gap(px(0.))
             })
             .when(!icon_only, |this| {
-                this.w(px(search_category_item_width(result_type.label(), false)))
+                this.w(px(search_category_item_width(label, false)))
                     .flex_none()
                     .px(px(8.))
                     .gap(px(7.))
@@ -420,7 +431,7 @@ impl SearchView {
             .cursor_pointer()
             .focus_visible(|style| style.border_1().border_color(rgb(crate::theme::PRIMARY)))
             .when_some(
-                crate::music_ui::category_tab_tooltip(icon_only, result_type.label()),
+                crate::music_ui::category_tab_tooltip(icon_only, label),
                 |this, tooltip| this.app_tooltip(tooltip),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.select_type(result_type, cx)))
@@ -453,7 +464,7 @@ impl SearchView {
                 if selected { FOREGROUND } else { MUTED },
                 12.,
             ))
-            .when(!icon_only, |this| this.child(result_type.label()))
+            .when(!icon_only, |this| this.child(label))
             .into_any_element()
     }
 
@@ -546,7 +557,7 @@ impl SearchView {
                     .border_color(rgb(0x664619))
                     .text_size(px(12.))
                     .text_color(rgb(0xd4d4d8))
-                    .child(warning.clone()),
+                    .child(crate::i18n::shared_text(warning.as_str())),
             );
         }
         for (section_index, result_type) in self.state.result_type.categories().iter().enumerate() {
@@ -664,7 +675,7 @@ impl SearchView {
                                     .text_size(px(15.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .truncate()
-                                    .child(result_type.label()),
+                                    .child(crate::i18n::text(result_type.label())),
                             )
                             .child(
                                 div()
@@ -739,24 +750,29 @@ impl Render for SearchView {
         let virtualized_scroll = self.uses_virtualized_scroll(cx);
         let count = self.state.groups.count(self.state.result_type);
         let count_label = if self.state.result_type == ResultType::All {
-            "results"
+            crate::i18n::text("results")
         } else {
-            self.state.result_type.label()
+            crate::i18n::text(self.state.result_type.label())
         };
         let count_is_visible =
             should_show_result_count(self.state.result_type, show_search_result_count);
         let loading = matches!(self.state.state, ResultState::Loading);
-        let current_count_label = format!("{count} {} found", count_label.to_ascii_lowercase());
+        let current_count_label = crate::i18n::shared_text(format!(
+            "{count} {} {}",
+            count_label.to_ascii_lowercase(),
+            crate::i18n::text("found")
+        ))
+        .to_string();
         if count_is_visible && !loading {
             self.last_result_count_label = current_count_label;
         }
         let retained_count_label = if self.last_result_count_label.is_empty() {
-            "Loading…"
+            crate::i18n::text("Loading…")
         } else {
             self.last_result_count_label.as_str()
         };
         let displayed_count_label = if loading {
-            "Loading…"
+            crate::i18n::text("Loading…")
         } else {
             retained_count_label
         };
@@ -789,7 +805,7 @@ impl Render for SearchView {
                                 div()
                                     .id("search-result-type-tabs")
                                     .role(gpui::Role::TabList)
-                                    .aria_label("Search result type")
+                                    .aria_label(crate::i18n::text("Search result type"))
                                     .flex()
                                     .flex_1()
                                     .min_w_0()
@@ -957,10 +973,14 @@ fn message(icon: LocalIcon, title: &str, description: &str) -> AnyElement {
                 .text_size(px(16.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(FOREGROUND))
-                .child(title.to_owned()),
+                .child(crate::i18n::shared_text(title)),
         )
         .when(!description.is_empty(), |this| {
-            this.child(div().text_size(px(13.)).child(description.to_owned()))
+            this.child(
+                div()
+                    .text_size(px(13.))
+                    .child(crate::i18n::shared_text(description)),
+            )
         })
         .into_any_element()
 }

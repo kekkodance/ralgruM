@@ -212,7 +212,12 @@ impl SearchView {
         cx: &mut gpui::Context<Self>,
     ) {
         let Ok(client) = self.client.clone() else {
-            push_global(cx, ToastKind::Error, "Could not open browser link", None);
+            push_global(
+                cx,
+                ToastKind::Error,
+                crate::i18n::text("Could not open browser link"),
+                None,
+            );
             return;
         };
         let (deezer_arl, soundcloud_token) = {
@@ -232,15 +237,20 @@ impl SearchView {
                         push_global(
                             cx,
                             ToastKind::Error,
-                            "Could not open browser link",
-                            Some(error.message.into()),
+                            crate::i18n::text("Could not open browser link"),
+                            Some(crate::i18n::shared_text(error.message)),
                         )
                     });
                     return;
                 }
                 Err(_) => {
                     cx.update(|cx| {
-                        push_global(cx, ToastKind::Error, "Could not open browser link", None)
+                        push_global(
+                            cx,
+                            ToastKind::Error,
+                            crate::i18n::text("Could not open browser link"),
+                            None,
+                        )
                     });
                     return;
                 }

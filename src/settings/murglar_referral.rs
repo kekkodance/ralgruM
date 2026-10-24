@@ -32,7 +32,7 @@ pub(super) fn card(
                         .gap(px(8.))
                         .font_weight(FontWeight::MEDIUM)
                         .child(local_icon(LocalIcon::ShareNodes, FOREGROUND).size(px(13.)))
-                        .child("Referral rewards"),
+                        .child(crate::i18n::text("Referral rewards")),
                 )
                 .child(reload_button(reloading, reload_action)),
         )
@@ -41,7 +41,9 @@ pub(super) fn card(
                 .text_size(px(11.5))
                 .line_height(px(17.25))
                 .text_color(rgb(MUTED))
-                .child("Share your referral code and track the reward days credited by Murglar."),
+                .child(crate::i18n::text(
+                    "Share your referral code and track the reward days credited by Murglar.",
+                )),
         )
         .child(referral_code_row(code, copy_action))
         .child(referral_stat_grid(stats))
@@ -56,7 +58,7 @@ fn reload_button(
         .focusable()
         .tab_stop(!reloading)
         .role(Role::Button)
-        .aria_label("Reload referral rewards")
+        .aria_label(crate::i18n::text("Reload referral rewards"))
         .size(px(28.))
         .flex_none()
         .flex()
@@ -128,7 +130,7 @@ fn copy_button(
         .focusable()
         .tab_stop(true)
         .role(Role::Button)
-        .aria_label("Copy referral code")
+        .aria_label(crate::i18n::text("Copy referral code"))
         .size(px(38.))
         .flex_none()
         .flex()
@@ -182,7 +184,7 @@ fn stat_cell(label: &'static str, value: String) -> Div {
                 .text_size(px(10.5))
                 .text_color(rgb(MUTED))
                 .truncate()
-                .child(label),
+                .child(crate::i18n::text(label)),
         )
 }
 
@@ -192,7 +194,7 @@ fn has_code(code: &str) -> bool {
 
 fn display_code(value: &str) -> String {
     if value.trim().is_empty() {
-        "N/A".to_owned()
+        crate::i18n::text("N/A").to_owned()
     } else {
         value.to_owned()
     }

@@ -111,7 +111,7 @@ impl RenderOnce for SearchableListItemElement {
             .list_size(self.size)
             .refine_style(&self.style)
             .when(!self.disabled, |this| {
-                this.when(!self.selected, |this| {
+                this.cursor_pointer().when(!self.selected, |this| {
                     this.hover(|this| this.bg(cx.theme().tokens.accent))
                 })
             })
@@ -126,7 +126,13 @@ impl RenderOnce for SearchableListItemElement {
                     .items_center()
                     .justify_between()
                     .gap_x_1()
-                    .child(h_flex().flex_1().min_w_0().items_center().children(self.children))
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .children(self.children),
+                    )
                     .when_some(self.check_icon, |this, icon| {
                         this.child(
                             icon.xsmall()

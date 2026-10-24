@@ -431,6 +431,7 @@ pub(crate) trait AppTooltipExt:
         trigger_gap: Pixels,
         bubble_horizontal_pin: BubbleHorizontalPin,
     ) -> Self {
+        let text = crate::i18n::shared_text(text.as_ref());
         let trigger_bounds: Rc<Cell<Bounds<gpui::Pixels>>> = Rc::new(Cell::new(Bounds::default()));
         let bounds_writer = trigger_bounds.clone();
 

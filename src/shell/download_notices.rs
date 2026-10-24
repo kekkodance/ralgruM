@@ -32,28 +32,32 @@ fn handle_download_notice(
             let id = *id;
             let ignore_host = download_host.clone();
             let overwrite_host = download_host;
-            let description: SharedString = conflict_description(title, quality).into();
+            let description: SharedString =
+                crate::i18n::shared_text(conflict_description(title, quality));
             app.toasts.update(cx, |toasts, cx| {
                 toasts.push_actionable_keyed(
                     format!("download-conflict-{id}"),
                     ToastKind::Warning,
-                    "File already exists",
+                    crate::i18n::text("File already exists"),
                     Some(description),
                     [
-                        ToastAction::secondary("Ignore", move |_, _, cx| {
+                        ToastAction::secondary(crate::i18n::text("Ignore"), move |_, _, cx| {
                             if let Some(downloads) = ignore_host.upgrade() {
                                 downloads.update(cx, |downloads, cx| {
                                     downloads.ignore_conflict(id, cx);
                                 });
                             }
                         }),
-                        ToastAction::danger_secondary("Overwrite", move |_, _, cx| {
-                            if let Some(downloads) = overwrite_host.upgrade() {
-                                downloads.update(cx, |downloads, cx| {
-                                    downloads.overwrite_conflict(id, cx);
-                                });
-                            }
-                        }),
+                        ToastAction::danger_secondary(
+                            crate::i18n::text("Overwrite"),
+                            move |_, _, cx| {
+                                if let Some(downloads) = overwrite_host.upgrade() {
+                                    downloads.update(cx, |downloads, cx| {
+                                        downloads.overwrite_conflict(id, cx);
+                                    });
+                                }
+                            },
+                        ),
                     ],
                     cx,
                 );
@@ -72,23 +76,28 @@ fn handle_download_notice(
                 toasts.push_actionable_keyed(
                     batch_conflict_toast_key(key),
                     ToastKind::Warning,
-                    "Download destinations conflict",
-                    Some(batch_conflict_description(*existing).into()),
+                    crate::i18n::text("Download destinations conflict"),
+                    Some(crate::i18n::shared_text(batch_conflict_description(
+                        *existing,
+                    ))),
                     [
-                        ToastAction::secondary("Ignore", move |_, _, cx| {
+                        ToastAction::secondary(crate::i18n::text("Ignore"), move |_, _, cx| {
                             if let Some(downloads) = ignore_host.upgrade() {
                                 downloads.update(cx, |downloads, cx| {
                                     downloads.ignore_batch_conflict(key, cx);
                                 });
                             }
                         }),
-                        ToastAction::danger_secondary("Overwrite", move |_, _, cx| {
-                            if let Some(downloads) = overwrite_host.upgrade() {
-                                downloads.update(cx, |downloads, cx| {
-                                    downloads.overwrite_batch_conflict(key, cx);
-                                });
-                            }
-                        }),
+                        ToastAction::danger_secondary(
+                            crate::i18n::text("Overwrite"),
+                            move |_, _, cx| {
+                                if let Some(downloads) = overwrite_host.upgrade() {
+                                    downloads.update(cx, |downloads, cx| {
+                                        downloads.overwrite_batch_conflict(key, cx);
+                                    });
+                                }
+                            },
+                        ),
                     ],
                     cx,
                 );
@@ -104,8 +113,10 @@ fn handle_download_notice(
                 app.toasts.update(cx, |toasts, cx| {
                     toasts.push(
                         ToastKind::Success,
-                        "Track downloaded",
-                        Some(completed_description(title, quality).into()),
+                        crate::i18n::text("Track downloaded"),
+                        Some(crate::i18n::shared_text(completed_description(
+                            title, quality,
+                        ))),
                         cx,
                     );
                 });
@@ -115,14 +126,14 @@ fn handle_download_notice(
             if completion_toast_visible(app.nav, app.settings_mode) {
                 app.toasts.update(cx, |toasts, cx| {
                     let description = if *saved == 1 {
-                        "1 track downloaded.".to_owned()
+                        crate::i18n::text("1 track downloaded.").to_owned()
                     } else {
-                        format!("{saved} tracks downloaded.")
+                        format!("{saved} {}", crate::i18n::text("tracks downloaded."))
                     };
                     toasts.push(
                         ToastKind::Success,
-                        "Downloads finished",
-                        Some(description.into()),
+                        crate::i18n::text("Downloads finished"),
+                        Some(crate::i18n::shared_text(description)),
                         cx,
                     );
                 });
@@ -137,11 +148,16 @@ fn batch_conflict_toast_key(key: u64) -> String {
 
 fn batch_conflict_description(existing: usize) -> String {
     if existing == 1 {
-        "1 track conflicts with a file or another batch item. Ignore or overwrite the conflict."
-            .to_owned()
+        crate::i18n::text(
+            "1 track conflicts with a file or another batch item. Ignore or overwrite the conflict.",
+        )
+        .to_owned()
     } else {
         format!(
-            "{existing} tracks conflict with files or other batch items. Ignore or overwrite the conflicts."
+            "{existing} {}",
+            crate::i18n::text(
+                "tracks conflict with files or other batch items. Ignore or overwrite the conflicts."
+            )
         )
     }
 }
@@ -175,8 +191,13 @@ fn conflict_description(title: &str, quality: &str) -> String {
 
 fn completed_description(title: &str, quality: &str) -> String {
     match notice_quality_label(quality) {
-        Some(quality) => format!("{title} downloaded at {quality}."),
-        None => format!("{title} downloaded."),
+        Some(quality) => crate::i18n::shared_text(format!(
+            "{title} {} {quality}.",
+            crate::i18n::text("downloaded at")
+        ))
+        .to_string(),
+        None => crate::i18n::shared_text(format!("{title} {}.", crate::i18n::text("downloaded")))
+            .to_string(),
     }
 }
 
