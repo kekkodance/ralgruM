@@ -88,8 +88,8 @@ raw-window-handle = { version = "0.6" }
 regex = { version = "1.5", default-features = true, features = ["std", "perf"] }
 refineable = { git = "https://github.com/zed-industries/zed" }
 scheduler = { git = "https://github.com/zed-industries/zed" }
-resvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
-usvg = { version = "0.46.0", default-features = false }
+resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
+usvg = { version = "0.48.1", default-features = false }
 ttf-parser = "0.25"
 schemars = { version = "1.0", default-features = false, features = ["std", "indexmap2", "derive"] }
 seahash = "4.1"
