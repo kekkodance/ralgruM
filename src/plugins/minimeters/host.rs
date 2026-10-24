@@ -141,7 +141,7 @@ pub(super) fn run(
             |_, _| (),
             PluginAudioConfiguration {
                 sample_rate: sample_rate as f64,
-                min_frames_count: BLOCK as u32,
+                min_frames_count: 1,
                 max_frames_count: BLOCK as u32,
             },
         ) {
@@ -212,6 +212,16 @@ fn process_audio(
     Option<String>,
 ) {
     let mut stopped = processor;
+    let mut processor = match stopped.start_processing() {
+        Ok(processor) => processor,
+        Err(error) => {
+            return (
+                error.into_stopped_processor(),
+                None,
+                Some("MiniMeters could not start processing audio".into()),
+            );
+        }
+    };
     let mut input = [[0.0f32; BLOCK]; 2];
     let mut output = [[0.0f32; BLOCK]; 2];
     let mut input_ports = AudioPorts::with_capacity(2, 1);
@@ -250,133 +260,87 @@ fn process_audio(
             next_rate = Some(first.sample_rate);
             break;
         }
-        let mut processor = match stopped.start_processing() {
-            Ok(processor) => processor,
-            Err(error) => {
-                return (
-                    error.into_stopped_processor(),
-                    None,
-                    Some("MiniMeters could not start processing audio".into()),
-                );
-            }
-        };
-        let mut first = Some(first);
-        loop {
-            let frame = first
-                .take()
-                .expect("audio burst always starts with a frame");
-            let mut filled = if silence { BLOCK } else { 1 };
-            if silence {
-                input[0].fill(0.0);
-                input[1].fill(0.0);
-            } else {
-                input[0][0] = frame.left;
-                input[1][0] = frame.right;
-            }
-            let deadline = Instant::now() + block_duration;
-            while !silence && filled < BLOCK {
-                let Some(frame) = tap.frames.pop() else {
-                    if Instant::now() >= deadline
-                        || stop.load(Ordering::Acquire)
-                        || restart.load(Ordering::Acquire)
-                    {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(1));
-                    continue;
-                };
-                if frame.sample_rate != sample_rate {
-                    next_rate = Some(frame.sample_rate);
+        let mut filled = if silence { BLOCK } else { 1 };
+        if silence {
+            input[0].fill(0.0);
+            input[1].fill(0.0);
+        } else {
+            input[0][0] = first.left;
+            input[1][0] = first.right;
+        }
+
+        let deadline = Instant::now() + block_duration;
+        while !silence
+            && filled < BLOCK
+            && !stop.load(Ordering::Acquire)
+            && !restart.load(Ordering::Acquire)
+            && !tap.paused.load(Ordering::Acquire)
+        {
+            let Some(frame) = tap.frames.pop() else {
+                if Instant::now() >= deadline {
                     break;
                 }
-                input[0][filled] = frame.left;
-                input[1][filled] = frame.right;
-                filled += 1;
-            }
-            if next_rate.is_some() {
+                thread::sleep(Duration::from_millis(1));
+                continue;
+            };
+            if frame.sample_rate != sample_rate {
+                next_rate = Some(frame.sample_rate);
                 break;
             }
-            input[0][filled..].fill(0.0);
-            input[1][filled..].fill(0.0);
-            let audio_input = input_ports.with_input_buffers([AudioPortBuffer {
+            input[0][filled] = frame.left;
+            input[1][filled] = frame.right;
+            filled += 1;
+        }
+
+        let audio_input = input_ports.with_input_buffers([AudioPortBuffer {
+            latency: 0,
+            channels: AudioPortBufferType::f32_input_only(
+                input
+                    .iter_mut()
+                    .map(|channel| InputChannel::variable(&mut channel[..filled])),
+            ),
+        }]);
+        let input_events = InputEvents::empty();
+        events.clear();
+        let mut output_events = OutputEvents::from_buffer(&mut events);
+        let result = if output_channels == 0 {
+            let mut audio_output = OutputAudioBuffers::empty();
+            processor.process(
+                &audio_input,
+                &mut audio_output,
+                &input_events,
+                &mut output_events,
+                None,
+                None,
+            )
+        } else {
+            let mut audio_output = output_ports.with_output_buffers([AudioPortBuffer {
                 latency: 0,
-                channels: AudioPortBufferType::f32_input_only(
-                    input.iter_mut().map(InputChannel::constant),
+                channels: AudioPortBufferType::f32_output_only(
+                    output.iter_mut().map(|channel| &mut channel[..filled]),
                 ),
             }]);
-            let input_events = InputEvents::empty();
-            events.clear();
-            let mut output_events = OutputEvents::from_buffer(&mut events);
-            let result = if output_channels == 0 {
-                let mut audio_output = OutputAudioBuffers::empty();
-                processor.process(
-                    &audio_input,
-                    &mut audio_output,
-                    &input_events,
-                    &mut output_events,
-                    None,
-                    None,
-                )
-            } else {
-                let mut audio_output = output_ports.with_output_buffers([AudioPortBuffer {
-                    latency: 0,
-                    channels: AudioPortBufferType::f32_output_only(
-                        output.iter_mut().map(|channel| channel.as_mut_slice()),
-                    ),
-                }]);
-                processor.process(
-                    &audio_input,
-                    &mut audio_output,
-                    &input_events,
-                    &mut output_events,
-                    None,
-                    None,
-                )
-            };
-            if let Err(error) = result {
-                process_error = Some(error.to_string());
-                break;
-            }
-            if silence {
-                thread::sleep(deadline.saturating_duration_since(Instant::now()));
-                if tap.paused.load(Ordering::Acquire)
-                    && !stop.load(Ordering::Acquire)
-                    && !restart.load(Ordering::Acquire)
-                {
-                    first = Some(frame);
-                    continue;
-                }
-                break;
-            }
-            if filled < BLOCK {
-                break;
-            }
-            first = loop {
-                if let Some(frame) = tap.frames.pop() {
-                    break Some(frame);
-                }
-                if Instant::now() >= deadline
-                    || stop.load(Ordering::Acquire)
-                    || restart.load(Ordering::Acquire)
-                {
-                    break None;
-                }
-                thread::sleep(Duration::from_millis(1));
-            };
-            let Some(next) = first else {
-                break;
-            };
-            if next.sample_rate != sample_rate {
-                next_rate = Some(next.sample_rate);
-                break;
-            }
-            first = Some(next);
+            processor.process(
+                &audio_input,
+                &mut audio_output,
+                &input_events,
+                &mut output_events,
+                None,
+                None,
+            )
+        };
+        if let Err(error) = result {
+            process_error = Some(error.to_string());
+            break 'processing;
         }
-        stopped = processor.stop_processing();
-        if process_error.is_some() || next_rate.is_some() {
+        if silence {
+            thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        }
+        if next_rate.is_some() {
             break 'processing;
         }
     }
+    stopped = processor.stop_processing();
     (stopped, next_rate, process_error)
 }
 
