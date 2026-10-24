@@ -1,6 +1,8 @@
 use super::engine::AudioOutputTarget;
-use super::output_devices::{device_output_name, sorted_deduped};
+use super::output_devices::sorted_deduped;
 
+#[cfg(windows)]
+use super::output_devices::device_output_name;
 #[cfg(windows)]
 use rodio::cpal::traits::HostTrait;
 
