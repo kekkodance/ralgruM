@@ -16,7 +16,8 @@ const DISCORD_RETRY_BACKOFF: [Duration; 5] = [
     Duration::from_secs(2),
     Duration::from_secs(5),
 ];
-const DISCORD_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const DISCORD_MIN_SEND_INTERVAL: Duration = Duration::from_secs(16);
+const DISCORD_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PresenceTrack {
@@ -54,6 +55,18 @@ impl WorkerCommand {
 #[derive(Debug)]
 enum WorkerEvent {
     Acknowledged(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandOutcome {
+    Sent,
+    Skipped,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WaitOutcome {
+    Ready,
+    Disconnected,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -280,6 +293,7 @@ fn run_worker(receiver: Receiver<WorkerCommand>, events: Sender<WorkerEvent>) {
     };
     let mut retries = 0;
     let mut acknowledged_sequence = None;
+    let mut last_sent_at = None;
     'worker: loop {
         // Drain commands that arrived while the previous request was in
         // flight. Only the newest desired state needs to reach Discord.
@@ -288,8 +302,27 @@ fn run_worker(receiver: Receiver<WorkerCommand>, events: Sender<WorkerEvent>) {
             retries = 0;
         }
 
+        // Discord accepts roughly one Rich Presence update every 15 seconds.
+        // Hold the newest command until the window opens so a burst of
+        // playback transitions cannot turn into a burst of writes.
+        if let Some(sent_at) = last_sent_at {
+            let held_sequence = command.sequence();
+            let deadline = sent_at + DISCORD_MIN_SEND_INTERVAL;
+            match wait_for_send_slot(&receiver, &mut command, deadline) {
+                WaitOutcome::Ready => {
+                    if command.sequence() != held_sequence {
+                        retries = 0;
+                    }
+                }
+                WaitOutcome::Disconnected => break 'worker,
+            }
+        }
+
         match handle_command(&mut client, &command) {
-            Ok(()) => {
+            Ok(outcome) => {
+                if outcome == CommandOutcome::Sent {
+                    last_sent_at = Some(Instant::now());
+                }
                 if acknowledged_sequence != Some(command.sequence()) {
                     if events
                         .send(WorkerEvent::Acknowledged(command.sequence()))
@@ -335,17 +368,42 @@ fn run_worker(receiver: Receiver<WorkerCommand>, events: Sender<WorkerEvent>) {
     }
 }
 
+fn wait_for_send_slot(
+    receiver: &Receiver<WorkerCommand>,
+    command: &mut WorkerCommand,
+    deadline: Instant,
+) -> WaitOutcome {
+    loop {
+        // A burst can queue several transitions while the gate is closed.
+        // Only the newest state is worth publishing.
+        while let Ok(next) = receiver.try_recv() {
+            *command = next;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return WaitOutcome::Ready;
+        }
+        match receiver.recv_timeout(remaining) {
+            Ok(next) => *command = next,
+            Err(mpsc::RecvTimeoutError::Timeout) => return WaitOutcome::Ready,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return WaitOutcome::Disconnected,
+        }
+    }
+}
+
 fn handle_command(
     client: &mut Option<DiscordIpcClient>,
     command: &WorkerCommand,
-) -> Result<(), String> {
+) -> Result<CommandOutcome, String> {
     match command {
         WorkerCommand::Clear { .. } => {
-            if let Some(client) = client.as_mut() {
-                client
-                    .clear_activity()
-                    .map_err(|error| format!("clear failed: {error}"))?;
-            }
+            let Some(client) = client.as_mut() else {
+                return Ok(CommandOutcome::Skipped);
+            };
+            client
+                .clear_activity()
+                .map_err(|error| format!("clear failed: {error}"))?;
+            Ok(CommandOutcome::Sent)
         }
         WorkerCommand::Update {
             track, queued_at, ..
@@ -368,9 +426,9 @@ fn handle_command(
                 .expect("Discord client was connected")
                 .set_activity(activity_for(&track, &state))
                 .map_err(|error| format!("update failed: {error}"))?;
+            Ok(CommandOutcome::Sent)
         }
     }
-    Ok(())
 }
 
 fn track_for_publish(track: &PresenceTrack, queued_at: Instant) -> PresenceTrack {
@@ -673,6 +731,54 @@ mod tests {
         assert_ne!(
             protocol.transition(true, Some(&next)),
             ProtocolAction::Clear
+        );
+    }
+
+    #[test]
+    fn heartbeat_interval_outlasts_the_send_gate() {
+        assert!(DISCORD_HEARTBEAT_INTERVAL > DISCORD_MIN_SEND_INTERVAL);
+    }
+
+    #[test]
+    fn send_gate_keeps_only_the_newest_queued_command() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(WorkerCommand::Update {
+                sequence: 1,
+                track: test_track("1", 0),
+                queued_at: Instant::now(),
+            })
+            .unwrap();
+        sender.send(WorkerCommand::Clear { sequence: 2 }).unwrap();
+        let mut command = WorkerCommand::Clear { sequence: 0 };
+        let deadline = Instant::now() - Duration::from_secs(1);
+        assert_eq!(
+            wait_for_send_slot(&receiver, &mut command, deadline),
+            WaitOutcome::Ready
+        );
+        assert_eq!(command.sequence(), 2);
+        assert!(matches!(command, WorkerCommand::Clear { .. }));
+    }
+
+    #[test]
+    fn send_gate_reports_a_disconnected_channel() {
+        let (sender, receiver) = mpsc::channel();
+        drop(sender);
+        let mut command = WorkerCommand::Clear { sequence: 1 };
+        let deadline = Instant::now() + DISCORD_MIN_SEND_INTERVAL;
+        assert_eq!(
+            wait_for_send_slot(&receiver, &mut command, deadline),
+            WaitOutcome::Disconnected
+        );
+        assert_eq!(command.sequence(), 1);
+    }
+
+    #[test]
+    fn clear_without_a_connected_client_skips_the_write() {
+        let mut client = None;
+        assert_eq!(
+            handle_command(&mut client, &WorkerCommand::Clear { sequence: 1 }),
+            Ok(CommandOutcome::Skipped)
         );
     }
 }
