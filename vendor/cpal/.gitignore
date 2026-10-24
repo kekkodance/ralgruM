@@ -4,3 +4,6 @@
 .DS_Store
 recorded.wav
 rls*.log
+/.direnv
+!/examples/audioworklet-beep/.cargo/
+

@@ -8,7 +8,7 @@ extern crate cpal;
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    SizedSample, I24,
+    SizedSample, I24, U24,
 };
 use cpal::{FromSample, Sample};
 
@@ -103,6 +103,7 @@ where
         cpal::SampleFormat::I64 => make_stream::<i64>(&device, &config.into()),
         cpal::SampleFormat::U8 => make_stream::<u8>(&device, &config.into()),
         cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into()),
+        cpal::SampleFormat::U24 => make_stream::<U24>(&device, &config.into()),
         cpal::SampleFormat::U32 => make_stream::<u32>(&device, &config.into()),
         cpal::SampleFormat::U64 => make_stream::<u64>(&device, &config.into()),
         cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into()),
@@ -120,10 +121,10 @@ pub fn host_device_setup(
     let device = host
         .default_output_device()
         .ok_or_else(|| anyhow::Error::msg("Default output device is not available"))?;
-    println!("Output device : {}", device.name()?);
+    println!("Output device: {}", device.id()?);
 
     let config = device.default_output_config()?;
-    println!("Default output config : {:?}", config);
+    println!("Default output config: {config:?}");
 
     Ok((host, device, config))
 }
@@ -138,14 +139,14 @@ where
     let num_channels = config.channels as usize;
     let mut oscillator = Oscillator {
         waveform: Waveform::Sine,
-        sample_rate: config.sample_rate.0 as f32,
+        sample_rate: config.sample_rate as f32,
         current_sample_index: 0.0,
         frequency_hz: 440.0,
     };
-    let err_fn = |err| eprintln!("Error building output sound stream: {}", err);
+    let err_fn = |err| eprintln!("Error building output sound stream: {err}");
 
     let time_at_start = std::time::Instant::now();
-    println!("Time at start: {:?}", time_at_start);
+    println!("Time at start: {time_at_start:?}");
 
     let stream = device.build_output_stream(
         config,

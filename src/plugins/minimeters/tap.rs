@@ -53,8 +53,8 @@ pub(crate) fn clear() {
 }
 
 pub(crate) fn wrap<S: Source<Item = f32>>(source: S) -> TapSource<S> {
-    let channels = source.channels().max(1) as usize;
-    let sample_rate = source.sample_rate();
+    let channels = source.channels().get() as usize;
+    let sample_rate = source.sample_rate().get();
     TapSource {
         source,
         tap: shared(),
@@ -135,7 +135,11 @@ mod tests {
         while tap.frames.pop().is_some() {}
         set_volume(0.5);
         tap.enabled.store(true, Ordering::Release);
-        let input = SamplesBuffer::new(2, 48_000, vec![0.4, -0.6]);
+        let input = SamplesBuffer::new(
+            rodio::ChannelCount::new(2).unwrap(),
+            rodio::SampleRate::new(48_000).unwrap(),
+            vec![0.4, -0.6],
+        );
         let output: Vec<_> = wrap(input).collect();
         tap.enabled.store(false, Ordering::Release);
         assert_eq!(output, vec![0.4, -0.6]);

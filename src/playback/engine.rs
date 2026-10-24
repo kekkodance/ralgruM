@@ -14,18 +14,18 @@ use std::{
 use futures::channel::oneshot;
 use ogg::reading::PacketReader;
 use opus_decoder::OpusDecoder;
-use rodio::cpal::traits::{DeviceTrait, HostTrait};
+use rodio::cpal::traits::HostTrait;
 use rodio::{
-    Decoder, OutputStream, OutputStreamBuilder, Sink, Source, buffer::SamplesBuffer,
+    Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesBuffer,
     source::SeekError,
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics;
 
-use super::output_devices::find_output_device;
 #[cfg(target_os = "linux")]
 use super::output_devices::{PULSE_BRIDGE_PCM, move_own_streams_to_sink, sink_for_label};
+use super::output_devices::{device_output_name, find_output_device};
 use super::progressive::{
     LandedSuffixSource, ProgressiveCompletion, ProgressiveReader, TimelineSeekSession,
     TimelineSuffixState,
@@ -35,6 +35,14 @@ use super::resolver::{AudioFormat, ResolvedAudio, ResolvedProgressiveAudio};
 use super::standby::{PreparedSource, ProgressiveSeek, SinkProbe};
 
 pub(crate) type DecodedSource = Box<dyn Source + Send>;
+
+fn channel_count(channels: u16) -> rodio::ChannelCount {
+    rodio::ChannelCount::new(channels).expect("decoded audio always has at least one channel")
+}
+
+fn sample_rate(sample_rate: u32) -> rodio::SampleRate {
+    rodio::SampleRate::new(sample_rate).expect("decoded audio always has a non-zero sample rate")
+}
 
 struct PendingProgressiveReload {
     position: Duration,
@@ -150,21 +158,21 @@ pub(crate) struct OutputReloadSpec {
 }
 
 pub(crate) struct PreparedOutputSwitch {
-    stream: OutputStream,
+    stream: MixerDeviceSink,
     source: Option<DecodedSource>,
     position: Duration,
     target: AudioOutputTarget,
 }
 
 pub(crate) struct OpenOutputSwitch {
-    stream: OutputStream,
+    stream: MixerDeviceSink,
     position: Duration,
     target: AudioOutputTarget,
 }
 
 impl OpenOutputSwitch {
     pub(crate) fn new_reused(
-        stream: OutputStream,
+        stream: MixerDeviceSink,
         position: Duration,
         target: AudioOutputTarget,
     ) -> Self {
@@ -198,20 +206,20 @@ impl PreparedOutputSwitch {
 }
 
 pub(crate) struct RodioEngine {
-    stream: Option<OutputStream>,
+    stream: Option<MixerDeviceSink>,
     /// Streams replaced after a system wake. A slept-through ASIO session
     /// can crash inside its own teardown when the driver is wedged, so the
     /// wake path parks the old stream here instead of dropping it.
-    retired_streams: Vec<OutputStream>,
+    retired_streams: Vec<MixerDeviceSink>,
     /// Sinks that fed a parked, slept-through stream. Dropping a sink
     /// signals its mixer to finish, and that final drain runs on the wedged
     /// driver's callback thread, which can crash the process.
-    retired_sinks: Vec<Arc<Sink>>,
+    retired_sinks: Vec<Arc<Player>>,
     /// True while the current stream has survived a system sleep. Any
     /// replacement then parks it instead of dropping it, wake-driven or
     /// not, because its teardown can crash inside the wedged driver.
     stream_slept_through: bool,
-    sink: Arc<Sink>,
+    sink: Arc<Player>,
     retained_files: Vec<tempfile::NamedTempFile>,
     progressive_seek: Option<ProgressiveSeek>,
     standby_progressive_seek: Option<ProgressiveSeek>,
@@ -266,7 +274,7 @@ impl RodioEngine {
         let stream = Self::open_output_stream(&output_target)?;
         #[cfg(windows)]
         Self::register_driver_reset_listener();
-        let sink = Arc::new(Sink::connect_new(stream.mixer()));
+        let sink = Arc::new(Player::connect_new(stream.mixer()));
         Ok(Self {
             stream: Some(stream),
             retired_streams: Vec::new(),
@@ -308,9 +316,9 @@ impl RodioEngine {
         });
     }
 
-    fn open_output_stream(target: &AudioOutputTarget) -> Result<OutputStream, String> {
+    fn open_output_stream(target: &AudioOutputTarget) -> Result<MixerDeviceSink, String> {
         match target {
-            AudioOutputTarget::SystemDefault => OutputStreamBuilder::open_default_stream()
+            AudioOutputTarget::SystemDefault => DeviceSinkBuilder::open_default_sink()
                 .map_err(|_| "No usable audio output device was found".to_string()),
             AudioOutputTarget::Device(name) => Self::open_device_output_stream(name),
             AudioOutputTarget::AsioDriver(name) => Self::open_asio_output_stream(name),
@@ -320,7 +328,7 @@ impl RodioEngine {
     /// Opens the picker's device entry. Other platforms enumerate CPAL
     /// endpoints; Linux routes through the sound server, since its ALSA card
     /// PCMs are owned by PipeWire and cannot be opened directly.
-    fn open_device_output_stream(name: &str) -> Result<OutputStream, String> {
+    fn open_device_output_stream(name: &str) -> Result<MixerDeviceSink, String> {
         #[cfg(target_os = "linux")]
         {
             Self::open_linux_sink_stream(name)
@@ -329,11 +337,11 @@ impl RodioEngine {
         {
             let device = find_output_device(name)
                 .ok_or_else(|| format!("The audio output device \"{name}\" is not available"))?;
-            OutputStreamBuilder::from_device(device)
+            DeviceSinkBuilder::from_device(device)
                 .and_then(|builder| {
                     builder
                         .with_error_callback(log_output_stream_error)
-                        .open_stream_or_fallback()
+                        .open_sink_or_fallback()
                 })
                 .map_err(|_| format!("The audio output device \"{name}\" could not be opened"))
         }
@@ -345,17 +353,17 @@ impl RodioEngine {
     /// session manager owns the hardware PCMs; a direct card open would
     /// either fail or bypass the sink selection.
     #[cfg(target_os = "linux")]
-    fn open_linux_sink_stream(name: &str) -> Result<OutputStream, String> {
+    fn open_linux_sink_stream(name: &str) -> Result<MixerDeviceSink, String> {
         let sink = sink_for_label(name)
             .ok_or_else(|| format!("The audio output device \"{name}\" is not available"))?;
         let bridge = find_output_device(PULSE_BRIDGE_PCM).ok_or_else(|| {
             "The PulseAudio ALSA bridge is not available for the selected output".to_owned()
         })?;
-        let stream = OutputStreamBuilder::from_device(bridge)
+        let stream = DeviceSinkBuilder::from_device(bridge)
             .and_then(|builder| {
                 builder
                     .with_error_callback(log_output_stream_error)
-                    .open_stream_or_fallback()
+                    .open_sink_or_fallback()
             })
             .map_err(|_| format!("The audio output device \"{name}\" could not be opened"))?;
         if let Err(error) = move_own_streams_to_sink(&sink.name) {
@@ -381,7 +389,7 @@ impl RodioEngine {
     /// initializes drivers, and ASIO keeps a single driver loaded per
     /// process, so a different live ASIO stream makes the lookup fail; the
     /// caller then keeps the previous stream.
-    fn open_asio_output_stream(name: &str) -> Result<OutputStream, String> {
+    fn open_asio_output_stream(name: &str) -> Result<MixerDeviceSink, String> {
         // The open runs on the dedicated ASIO owner thread: the MiniFuse
         // driver is an Apartment-threaded COM server that only loads from a
         // COM-initialized thread and only releases cleanly on the thread
@@ -446,7 +454,7 @@ impl RodioEngine {
     /// same process-global driver shares its buffers and races the parked
     /// first session's callbacks, leaving both dead at 0:00. Reusing the
     /// live stream keeps exactly one session per driver.
-    pub(crate) fn take_stream_for_switch(&mut self) -> Option<OutputStream> {
+    pub(crate) fn take_stream_for_switch(&mut self) -> Option<MixerDeviceSink> {
         self.stream.take()
     }
 
@@ -470,7 +478,7 @@ impl RodioEngine {
     /// Removes every stream from the engine for the system-suspend teardown,
     /// so their COM release can run on the ASIO owner thread before the OS
     /// freezes all threads. The engine stays usable as a paused shell.
-    pub(crate) fn take_asio_streams_for_suspend(&mut self) -> Vec<OutputStream> {
+    pub(crate) fn take_asio_streams_for_suspend(&mut self) -> Vec<MixerDeviceSink> {
         let mut streams = std::mem::take(&mut self.retired_streams);
         if let Some(stream) = self.stream.take() {
             streams.push(stream);
@@ -523,7 +531,7 @@ impl RodioEngine {
             .output_devices()
             .map_err(|error| format!("An ASIO bridge output could not be listed: {error}"))?;
         for device in devices {
-            let Ok(name) = device.name() else {
+            let Some(name) = device_output_name(&device) else {
                 continue;
             };
             if current_device == Some(name.as_str())
@@ -531,10 +539,10 @@ impl RodioEngine {
             {
                 continue;
             }
-            let stream = OutputStreamBuilder::from_device(device).and_then(|builder| {
+            let stream = DeviceSinkBuilder::from_device(device).and_then(|builder| {
                 builder
                     .with_error_callback(log_output_stream_error)
-                    .open_stream_or_fallback()
+                    .open_sink_or_fallback()
             });
             if let Ok(stream) = stream {
                 let position = reload.as_ref().map_or(Duration::ZERO, |spec| spec.position);
@@ -685,7 +693,11 @@ impl RodioEngine {
             decoded_frames += frames;
             samples.extend_from_slice(&decoded[start_frames * channels..frames * channels]);
         }
-        Ok(SamplesBuffer::new(channels as u16, 48_000, samples))
+        Ok(SamplesBuffer::new(
+            channel_count(channels as u16),
+            sample_rate(48_000),
+            samples,
+        ))
     }
 
     /// Decodes fully resolved audio into a source that can be appended to a
@@ -793,7 +805,7 @@ impl RodioEngine {
         if self.stream_slept_through {
             self.retired_sinks.push(self.sink.clone());
         }
-        let sink = Arc::new(Sink::connect_new(
+        let sink = Arc::new(Player::connect_new(
             self.stream.as_ref().expect("stream present").mixer(),
         ));
         sink.set_volume(volume);
@@ -1202,8 +1214,8 @@ where
 {
     let target_samples = position
         .as_nanos()
-        .saturating_mul(u128::from(decoder.sample_rate()))
-        .saturating_mul(u128::from(decoder.channels()))
+        .saturating_mul(u128::from(decoder.sample_rate().get()))
+        .saturating_mul(u128::from(decoder.channels().get()))
         / 1_000_000_000;
     let target_samples = u64::try_from(target_samples).unwrap_or(u64::MAX);
     for index in 0..target_samples {
@@ -1226,7 +1238,7 @@ fn discard_progressive_seek(progressive_seek: &mut Option<ProgressiveSeek>) {
 struct ProgressiveOpus {
     packets: Option<PacketReader<ProgressiveReader>>,
     decoder: OpusDecoder,
-    channels: u16,
+    channels: rodio::ChannelCount,
     pre_skip: usize,
     decoded_frames: usize,
     samples: Vec<f32>,
@@ -1237,7 +1249,8 @@ struct ProgressiveOpus {
 impl ProgressiveOpus {
     fn new(reader: ProgressiveReader, duration: Option<Duration>) -> Result<Self, String> {
         let (packets, channels, pre_skip) = Self::packet_reader(reader)?;
-        let decoder = OpusDecoder::new(48_000, usize::from(channels))
+        let channels = channel_count(channels);
+        let decoder = OpusDecoder::new(48_000, usize::from(channels.get()))
             .map_err(|error| format!("Could not decode Ogg Opus audio: {error}"))?;
         Ok(Self {
             packets: Some(packets),
@@ -1291,7 +1304,7 @@ impl Iterator for ProgressiveOpus {
             self.cursor = 0;
             let packet = self.packets.as_mut()?.read_packet().ok()??;
             let mut decoded =
-                vec![0.0; OpusDecoder::MAX_FRAME_SIZE_48K * usize::from(self.channels)];
+                vec![0.0; OpusDecoder::MAX_FRAME_SIZE_48K * usize::from(self.channels.get())];
             let frames = self
                 .decoder
                 .decode_float(&packet.data, &mut decoded, false)
@@ -1302,8 +1315,8 @@ impl Iterator for ProgressiveOpus {
                 .min(frames);
             self.decoded_frames += frames;
             self.samples.extend_from_slice(
-                &decoded[start_frames * usize::from(self.channels)
-                    ..frames * usize::from(self.channels)],
+                &decoded[start_frames * usize::from(self.channels.get())
+                    ..frames * usize::from(self.channels.get())],
             );
         }
     }
@@ -1320,7 +1333,7 @@ impl Source for ProgressiveOpus {
     }
 
     fn sample_rate(&self) -> rodio::SampleRate {
-        48_000
+        sample_rate(48_000)
     }
 
     fn total_duration(&self) -> Option<Duration> {
@@ -1332,26 +1345,27 @@ impl Source for ProgressiveOpus {
             .duration
             .map_or(position, |duration| position.min(duration));
         let packets = self.packets.take().ok_or_else(|| {
-            SeekError::Other(Box::new(std::io::Error::other(
+            SeekError::Other(Arc::new(std::io::Error::other(
                 "The Ogg Opus stream is unavailable",
             )))
         })?;
         let mut reader = packets.into_inner();
         reader
             .seek(SeekFrom::Start(0))
-            .map_err(|error| SeekError::Other(Box::new(error)))?;
+            .map_err(|error| SeekError::Other(Arc::new(error)))?;
         let (packets, channels, pre_skip) = Self::packet_reader(reader)
-            .map_err(|error| SeekError::Other(Box::new(std::io::Error::other(error))))?;
+            .map_err(|error| SeekError::Other(Arc::new(std::io::Error::other(error))))?;
+        let channels = channel_count(channels);
         self.packets = Some(packets);
         self.channels = channels;
         self.pre_skip = pre_skip;
         self.decoded_frames = 0;
         self.samples.clear();
         self.cursor = 0;
-        self.decoder = OpusDecoder::new(48_000, usize::from(channels)).map_err(|error| {
-            SeekError::Other(Box::new(std::io::Error::other(error.to_string())))
+        self.decoder = OpusDecoder::new(48_000, usize::from(channels.get())).map_err(|error| {
+            SeekError::Other(Arc::new(std::io::Error::other(error.to_string())))
         })?;
-        let samples = (target.as_secs_f64() * 48_000.0).floor() as u64 * u64::from(channels);
+        let samples = (target.as_secs_f64() * 48_000.0).floor() as u64 * u64::from(channels.get());
         for _ in 0..samples {
             if self.next().is_none() {
                 break;
@@ -1377,7 +1391,7 @@ impl AudioEngine for RodioEngine {
             // drains it on the slept-through driver's callback thread.
             self.retired_sinks.push(self.sink.clone());
         }
-        self.sink = Arc::new(Sink::connect_new(
+        self.sink = Arc::new(Player::connect_new(
             self.stream.as_ref().expect("stream present").mixer(),
         ));
         self.sink.set_volume(volume);
@@ -1624,7 +1638,7 @@ impl AudioEngine for RodioEngine {
             // the position probe onto the reloaded source.
             self.install_progressive_source(source, position, None, Some(false), None);
         } else {
-            let sink = Arc::new(Sink::connect_new(
+            let sink = Arc::new(Player::connect_new(
                 self.stream.as_ref().expect("stream present").mixer(),
             ));
             sink.set_volume(self.sink.volume());

@@ -1,17 +1,21 @@
+//! Null backend implementation.
+//!
+//! Fallback no-op backend for unsupported platforms.
+
 use std::time::Duration;
 
 use crate::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::{
-    BuildStreamError, Data, DefaultStreamConfigError, DeviceNameError, DevicesError,
-    InputCallbackInfo, OutputCallbackInfo, PauseStreamError, PlayStreamError, SampleFormat,
-    StreamConfig, StreamError, SupportedStreamConfig, SupportedStreamConfigRange,
-    SupportedStreamConfigsError,
+    BuildStreamError, Data, DefaultStreamConfigError, DeviceDescription, DeviceDescriptionBuilder,
+    DeviceId, DeviceIdError, DeviceNameError, DevicesError, InputCallbackInfo, OutputCallbackInfo,
+    PauseStreamError, PlayStreamError, SampleFormat, StreamConfig, StreamError,
+    SupportedStreamConfig, SupportedStreamConfigRange, SupportedStreamConfigsError,
 };
 
 #[derive(Default)]
 pub struct Devices;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Device;
 
 pub struct Host;
@@ -19,7 +23,13 @@ pub struct Host;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Stream;
 
+// Compile-time assertion that Stream is Send and Sync
+crate::assert_stream_send!(Stream);
+crate::assert_stream_sync!(Stream);
+
+#[derive(Clone)]
 pub struct SupportedInputConfigs;
+#[derive(Clone)]
 pub struct SupportedOutputConfigs;
 
 impl Host {
@@ -40,31 +50,34 @@ impl DeviceTrait for Device {
     type SupportedOutputConfigs = SupportedOutputConfigs;
     type Stream = Stream;
 
-    #[inline]
     fn name(&self) -> Result<String, DeviceNameError> {
-        Ok("null".to_owned())
+        Ok("null".to_string())
     }
 
-    #[inline]
+    fn description(&self) -> Result<DeviceDescription, DeviceNameError> {
+        Ok(DeviceDescriptionBuilder::new("Null Device".to_string()).build())
+    }
+
+    fn id(&self) -> Result<DeviceId, DeviceIdError> {
+        Ok(DeviceId(crate::platform::HostId::Null, String::new()))
+    }
+
     fn supported_input_configs(
         &self,
     ) -> Result<SupportedInputConfigs, SupportedStreamConfigsError> {
         unimplemented!()
     }
 
-    #[inline]
     fn supported_output_configs(
         &self,
     ) -> Result<SupportedOutputConfigs, SupportedStreamConfigsError> {
         unimplemented!()
     }
 
-    #[inline]
     fn default_input_config(&self) -> Result<SupportedStreamConfig, DefaultStreamConfigError> {
         unimplemented!()
     }
 
-    #[inline]
     fn default_output_config(&self) -> Result<SupportedStreamConfig, DefaultStreamConfigError> {
         unimplemented!()
     }
@@ -135,7 +148,6 @@ impl StreamTrait for Stream {
 impl Iterator for Devices {
     type Item = Device;
 
-    #[inline]
     fn next(&mut self) -> Option<Device> {
         None
     }
@@ -144,7 +156,6 @@ impl Iterator for Devices {
 impl Iterator for SupportedInputConfigs {
     type Item = SupportedStreamConfigRange;
 
-    #[inline]
     fn next(&mut self) -> Option<SupportedStreamConfigRange> {
         None
     }
@@ -153,7 +164,6 @@ impl Iterator for SupportedInputConfigs {
 impl Iterator for SupportedOutputConfigs {
     type Item = SupportedStreamConfigRange;
 
-    #[inline]
     fn next(&mut self) -> Option<SupportedStreamConfigRange> {
         None
     }

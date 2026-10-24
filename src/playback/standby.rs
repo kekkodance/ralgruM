@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use rodio::{Sink, Source};
+use rodio::{Player, Source};
 
 use super::{PlaybackStatus, PlaybackTrack, ResolvedTrackInfo};
 use super::{
@@ -88,11 +88,11 @@ impl PreparedSource {
 /// against the engine's current sink.
 #[derive(Clone)]
 pub(crate) struct SinkProbe {
-    sink: Arc<Sink>,
+    sink: Arc<Player>,
 }
 
 impl SinkProbe {
-    pub(crate) fn new(sink: Arc<Sink>) -> Self {
+    pub(crate) fn new(sink: Arc<Player>) -> Self {
         Self { sink }
     }
     pub(crate) fn queued(&self) -> usize {
@@ -104,7 +104,7 @@ impl SinkProbe {
     pub(crate) fn position(&self) -> Duration {
         self.sink.get_pos()
     }
-    pub(crate) fn is_sink(&self, sink: &Arc<Sink>) -> bool {
+    pub(crate) fn is_sink(&self, sink: &Arc<Player>) -> bool {
         Arc::ptr_eq(&self.sink, sink)
     }
 }
@@ -233,6 +233,14 @@ mod tests {
     use super::*;
     use crate::playback::{PlaybackProvider, PlaybackStatus};
     use rodio::buffer::SamplesBuffer;
+
+    fn samples_buffer(channels: u16, sample_rate: u32, samples: Vec<f32>) -> SamplesBuffer {
+        SamplesBuffer::new(
+            rodio::ChannelCount::new(channels).unwrap(),
+            rodio::SampleRate::new(sample_rate).unwrap(),
+            samples,
+        )
+    }
 
     #[test]
     fn preparation_requires_playing_near_the_end_with_a_known_duration() {
@@ -386,10 +394,10 @@ mod tests {
         // rodio keeps the same sink unbroken across queued sources, the source
         // count marks the boundary, and the position clock restarts with the
         // standby source. Those three properties are what the handoff relies on.
-        let (sink, mut queue) = Sink::new();
+        let (sink, mut queue) = Player::new();
         let sink = Arc::new(sink);
-        sink.append(SamplesBuffer::new(1, 48_000, vec![0.5; 480]));
-        sink.append(SamplesBuffer::new(1, 48_000, vec![-0.5; 480]));
+        sink.append(samples_buffer(1, 48_000, vec![0.5; 480]));
+        sink.append(samples_buffer(1, 48_000, vec![-0.5; 480]));
         let probe = SinkProbe::new(sink);
         assert_eq!(probe.queued(), 2);
 
@@ -426,7 +434,7 @@ mod tests {
         let path = buffer.path().to_owned();
         let file = buffer.into_file();
         let prepared = PreparedSource::new(
-            SamplesBuffer::new(1, 48_000, vec![0.0; 48]),
+            samples_buffer(1, 48_000, vec![0.0; 48]),
             Some(Duration::from_millis(1)),
             file,
         )

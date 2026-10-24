@@ -89,7 +89,8 @@ impl RampedGain {
         S: Source<Item = f32>,
     {
         RampedSource {
-            samples_per_second: f64::from(source.sample_rate()) * f64::from(source.channels()),
+            samples_per_second: f64::from(source.sample_rate().get())
+                * f64::from(source.channels().get()),
             inner: source,
             gain: Arc::clone(self),
             duration_micros: u64::MAX,
@@ -221,9 +222,17 @@ mod tests {
 
     use super::*;
 
+    fn samples_buffer(channels: u16, sample_rate: u32, data: Vec<f32>) -> SamplesBuffer {
+        SamplesBuffer::new(
+            rodio::ChannelCount::new(channels).unwrap(),
+            rodio::SampleRate::new(sample_rate).unwrap(),
+            data,
+        )
+    }
+
     fn samples(gain: &Arc<RampedGain>, target: f32, count: usize, channels: u16) -> Vec<f32> {
         gain.set_target(target);
-        RampedGain::wrap(gain, SamplesBuffer::new(channels, 1_000, vec![1.0; count])).collect()
+        RampedGain::wrap(gain, samples_buffer(channels, 1_000, vec![1.0; count])).collect()
     }
 
     fn samples_with_duration(
@@ -233,7 +242,7 @@ mod tests {
         count: usize,
     ) -> Vec<f32> {
         gain.set_target_with_duration(target, duration);
-        RampedGain::wrap(gain, SamplesBuffer::new(1, 1_000, vec![1.0; count])).collect()
+        RampedGain::wrap(gain, samples_buffer(1, 1_000, vec![1.0; count])).collect()
     }
 
     #[test]
@@ -279,7 +288,7 @@ mod tests {
     #[test]
     fn an_existing_source_observes_a_new_duration() {
         let gain = Arc::new(RampedGain::new(1.0));
-        let mut source = RampedGain::wrap(&gain, SamplesBuffer::new(1, 1_000, vec![1.0; 400]));
+        let mut source = RampedGain::wrap(&gain, samples_buffer(1, 1_000, vec![1.0; 400]));
 
         gain.set_target_with_duration(0.0, Duration::from_millis(300));
         let first = source.next().unwrap();
@@ -341,7 +350,7 @@ mod tests {
     #[test]
     fn changing_target_makes_the_next_sample_follow_the_latest_target() {
         let gain = Arc::new(RampedGain::new(1.0));
-        let mut source = RampedGain::wrap(&gain, SamplesBuffer::new(1, 1_000, vec![1.0; 300]));
+        let mut source = RampedGain::wrap(&gain, samples_buffer(1, 1_000, vec![1.0; 300]));
         gain.set_target(0.0);
         source.next();
         let before_change = gain.current();
@@ -356,7 +365,7 @@ mod tests {
     #[test]
     fn reset_sets_both_halves_and_holds_until_a_new_command() {
         let gain = Arc::new(RampedGain::new(1.0));
-        let mut source = RampedGain::wrap(&gain, SamplesBuffer::new(1, 1_000, vec![1.0; 300]));
+        let mut source = RampedGain::wrap(&gain, samples_buffer(1, 1_000, vec![1.0; 300]));
         gain.set_target(0.0);
         source.next();
 
@@ -373,11 +382,11 @@ mod tests {
     fn a_replacement_wrapper_continues_the_shared_ramp() {
         let gain = Arc::new(RampedGain::new(1.0));
         gain.set_target(0.0);
-        let first = RampedGain::wrap(&gain, SamplesBuffer::new(1, 1_000, vec![1.0; 30]))
-            .collect::<Vec<_>>();
+        let first =
+            RampedGain::wrap(&gain, samples_buffer(1, 1_000, vec![1.0; 30])).collect::<Vec<_>>();
         let current = gain.current();
         let replacement =
-            RampedGain::wrap(&gain, SamplesBuffer::new(1, 1_000, vec![1.0; 2])).collect::<Vec<_>>();
+            RampedGain::wrap(&gain, samples_buffer(1, 1_000, vec![1.0; 2])).collect::<Vec<_>>();
 
         assert_eq!(first.last().copied(), Some(current));
         assert!(replacement[0] < current);

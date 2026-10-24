@@ -1,5 +1,5 @@
 use super::{Device, OSStatus};
-use crate::{BackendSpecificError, DevicesError, SupportedStreamConfigRange};
+use crate::{BackendSpecificError, DevicesError};
 use objc2_core_audio::{
     kAudioHardwareNoError, kAudioHardwarePropertyDefaultInputDevice,
     kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
@@ -26,13 +26,13 @@ unsafe fn audio_devices() -> Result<Vec<AudioDeviceID>, OSStatus> {
         };
     }
 
-    let data_size = 0u32;
+    let mut data_size = 0u32;
     let status = AudioObjectGetPropertyDataSize(
         kAudioObjectSystemObject as AudioObjectID,
         NonNull::from(&property_address),
         0,
         null(),
-        NonNull::from(&data_size),
+        NonNull::from(&mut data_size),
     );
     try_status_or_return!(status);
 
@@ -45,7 +45,7 @@ unsafe fn audio_devices() -> Result<Vec<AudioDeviceID>, OSStatus> {
         NonNull::from(&property_address),
         0,
         null(),
-        NonNull::from(&data_size),
+        NonNull::from(&mut data_size),
         NonNull::new(audio_devices.as_mut_ptr()).unwrap().cast(),
     );
     try_status_or_return!(status);
@@ -63,7 +63,7 @@ impl Devices {
             match audio_devices() {
                 Ok(devices) => devices,
                 Err(os_status) => {
-                    let description = format!("{}", os_status);
+                    let description = format!("{os_status}");
                     let err = BackendSpecificError { description };
                     return Err(err.into());
                 }
@@ -73,15 +73,12 @@ impl Devices {
     }
 }
 
-unsafe impl Send for Devices {}
-unsafe impl Sync for Devices {}
-
 impl Iterator for Devices {
     type Item = Device;
+
     fn next(&mut self) -> Option<Device> {
         self.0.next().map(|id| Device {
             audio_device_id: id,
-            is_default: false,
         })
     }
 }
@@ -105,14 +102,11 @@ pub fn default_input_device() -> Option<Device> {
             NonNull::from(&mut audio_device_id).cast(),
         )
     };
-    if status != kAudioHardwareNoError as i32 {
+    if status != kAudioHardwareNoError {
         return None;
     }
 
-    let device = Device {
-        audio_device_id,
-        is_default: true,
-    };
+    let device = Device { audio_device_id };
     Some(device)
 }
 
@@ -135,16 +129,12 @@ pub fn default_output_device() -> Option<Device> {
             NonNull::from(&mut audio_device_id).cast(),
         )
     };
-    if status != kAudioHardwareNoError as i32 {
+    if status != kAudioHardwareNoError {
         return None;
     }
 
-    let device = Device {
-        audio_device_id,
-        is_default: true,
-    };
+    let device = Device { audio_device_id };
     Some(device)
 }
 
-pub type SupportedInputConfigs = VecIntoIter<SupportedStreamConfigRange>;
-pub type SupportedOutputConfigs = VecIntoIter<SupportedStreamConfigRange>;
+pub use crate::iter::{SupportedInputConfigs, SupportedOutputConfigs};

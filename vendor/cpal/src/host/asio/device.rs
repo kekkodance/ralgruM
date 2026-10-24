@@ -1,19 +1,23 @@
-pub type SupportedInputConfigs = std::vec::IntoIter<SupportedStreamConfigRange>;
-pub type SupportedOutputConfigs = std::vec::IntoIter<SupportedStreamConfigRange>;
+pub use crate::iter::{SupportedInputConfigs, SupportedOutputConfigs};
 
 use super::sys;
 use crate::BackendSpecificError;
+use crate::ChannelCount;
 use crate::DefaultStreamConfigError;
+use crate::DeviceDescription;
+use crate::DeviceDescriptionBuilder;
+use crate::DeviceId;
+use crate::DeviceIdError;
 use crate::DeviceNameError;
 use crate::DevicesError;
 use crate::SampleFormat;
-use crate::SampleRate;
 use crate::SupportedBufferSize;
 use crate::SupportedStreamConfig;
 use crate::SupportedStreamConfigRange;
 use crate::SupportedStreamConfigsError;
+
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 /// A ASIO Device
@@ -26,7 +30,7 @@ pub struct Device {
     // A driver can only have one of each.
     // They need to be created at the same time.
     pub asio_streams: Arc<Mutex<sys::AsioStreams>>,
-    pub current_buffer_index: Arc<AtomicI32>,
+    pub current_callback_flag: Arc<AtomicU32>,
 }
 
 use std::collections::HashMap;
@@ -49,7 +53,7 @@ struct SharedDriverState {
     /// ASIOCreateBuffers and start the fresh driver against freed memory.
     driver_instance: DriverInstanceId,
     asio_streams: Arc<Mutex<sys::AsioStreams>>,
-    current_buffer_index: Arc<AtomicI32>,
+    current_callback_flag: Arc<AtomicU32>,
 }
 
 fn driver_key(driver: &Arc<sys::Driver>) -> String {
@@ -63,7 +67,8 @@ fn fresh_shared_driver_state(driver: &Arc<sys::Driver>) -> SharedDriverState {
             input: None,
             output: None,
         })),
-        current_buffer_index: Arc::new(AtomicI32::new(-1)),
+        // Initialize with sentinel value so it never matches global flag state (0 or 1).
+        current_callback_flag: Arc::new(AtomicU32::new(u32::MAX)),
     }
 }
 
@@ -103,9 +108,9 @@ pub fn clear_shared_asio_streams(driver_name: &str) {
     }
 }
 
-/// Returns the shared silence-tracking buffer index for the driver,
+/// Returns the shared silence-tracking callback flag for the driver,
 /// discarding state left over from a previous load of the driver.
-fn shared_current_buffer_index(driver: &Arc<sys::Driver>) -> Arc<AtomicI32> {
+fn shared_current_callback_flag(driver: &Arc<sys::Driver>) -> Arc<AtomicU32> {
     let mut state = shared_driver_state().lock().unwrap();
     let entry = state
         .entry(driver_key(driver))
@@ -115,7 +120,7 @@ fn shared_current_buffer_index(driver: &Arc<sys::Driver>) -> Arc<AtomicI32> {
             }
         })
         .or_insert_with(|| fresh_shared_driver_state(driver));
-    entry.current_buffer_index.clone()
+    entry.current_callback_flag.clone()
 }
 
 /// All available devices.
@@ -139,8 +144,25 @@ impl Hash for Device {
 }
 
 impl Device {
-    pub fn name(&self) -> Result<String, DeviceNameError> {
-        Ok(self.driver.name().to_string())
+    pub fn description(&self) -> Result<DeviceDescription, DeviceNameError> {
+        let driver_name = self.driver.name().to_string();
+
+        let direction = crate::device_description::direction_from_counts(
+            self.driver.channels().ok().map(|c| c.ins as ChannelCount),
+            self.driver.channels().ok().map(|c| c.outs as ChannelCount),
+        );
+
+        Ok(DeviceDescriptionBuilder::new(driver_name.clone())
+            .driver(driver_name)
+            .direction(direction)
+            .build())
+    }
+
+    pub fn id(&self) -> Result<DeviceId, DeviceIdError> {
+        Ok(DeviceId(
+            crate::platform::HostId::Asio,
+            self.driver.name().to_string(),
+        ))
     }
 
     /// Gets the supported input configs.
@@ -161,7 +183,7 @@ impl Device {
         for &rate in crate::COMMON_SAMPLE_RATES {
             if !self
                 .driver
-                .can_sample_rate(rate.0.into())
+                .can_sample_rate(rate.into())
                 .ok()
                 .unwrap_or(false)
             {
@@ -198,7 +220,7 @@ impl Device {
         for &rate in crate::COMMON_SAMPLE_RATES {
             if !self
                 .driver
-                .can_sample_rate(rate.0.into())
+                .can_sample_rate(rate.into())
                 .ok()
                 .unwrap_or(false)
             {
@@ -220,7 +242,7 @@ impl Device {
     /// Returns the default input config
     pub fn default_input_config(&self) -> Result<SupportedStreamConfig, DefaultStreamConfigError> {
         let channels = self.driver.channels().map_err(default_config_err)?.ins as u16;
-        let sample_rate = SampleRate(self.driver.sample_rate().map_err(default_config_err)? as _);
+        let sample_rate = self.driver.sample_rate().map_err(default_config_err)? as u32;
         let (min, max) = self.driver.buffersize_range().map_err(default_config_err)?;
         let buffer_size = SupportedBufferSize::Range {
             min: min as u32,
@@ -241,7 +263,7 @@ impl Device {
     /// Returns the default output config
     pub fn default_output_config(&self) -> Result<SupportedStreamConfig, DefaultStreamConfigError> {
         let channels = self.driver.channels().map_err(default_config_err)?.outs as u16;
-        let sample_rate = SampleRate(self.driver.sample_rate().map_err(default_config_err)? as _);
+        let sample_rate = self.driver.sample_rate().map_err(default_config_err)? as u32;
         let (min, max) = self.driver.buffersize_range().map_err(default_config_err)?;
         let buffer_size = SupportedBufferSize::Range {
             min: min as u32,
@@ -332,11 +354,11 @@ impl Iterator for Devices {
                         // Device still read them, crashing the process
                         // with a use-after-free on the audio thread.
                         let asio_streams = shared_asio_streams(&driver);
-                        let current_buffer_index = shared_current_buffer_index(&driver);
+                        let current_callback_flag = shared_current_callback_flag(&driver);
                         return Some(Device {
                             driver,
                             asio_streams,
-                            current_buffer_index,
+                            current_callback_flag,
                         });
                     }
                     Err(_) => continue,
