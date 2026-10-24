@@ -777,7 +777,7 @@ impl PlaybackModel {
             Some(
                 crate::i18n::format_template(
                     "Could not play \"{}\": {}",
-                    &[track.title.as_str(), &error],
+                    &[track.title.as_str(), error],
                 )
                 .into(),
             ),
