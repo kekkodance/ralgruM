@@ -400,15 +400,13 @@ pub(crate) fn local_icon(icon: LocalIcon, color: u32) -> gpui::Svg {
 }
 
 pub(crate) fn app_mark() -> gpui::Svg {
-    svg()
-        .path("ralgrum/ralgruM_noBackground.svg")
-        .text_color(rgb(crate::theme::PRIMARY))
+    app_mark_with_color(crate::theme::PRIMARY)
 }
 
-pub(crate) fn app_logo() -> gpui::Svg {
+pub(crate) fn app_mark_with_color(color: u32) -> gpui::Svg {
     svg()
-        .path("ralgrum/ralgruM.svg")
-        .text_color(rgb(crate::theme::PRIMARY))
+        .path("ralgrum/ralgruM_noBackground.svg")
+        .text_color(rgb(color))
 }
 
 pub(crate) fn widget_icon(icon: LocalIcon) -> gpui_component::Icon {
@@ -463,7 +461,6 @@ fn font_awesome_file_for_widget_icon(path: &str) -> Option<&'static str> {
 #[folder = "assets"]
 #[include = "icons/fontawesome-free-7.3.1/**/*.svg"]
 #[include = "app-icon.png"]
-#[include = "ralgruM.svg"]
 #[include = "ralgruM_noBackground.svg"]
 struct LocalAssets;
 
