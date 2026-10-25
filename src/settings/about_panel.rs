@@ -1,5 +1,5 @@
 use crate::{
-    assets::{LocalIcon, local_icon},
+    assets::{LocalIcon, app_mark, local_icon},
     theme::{FOREGROUND, MUTED, PRIMARY},
 };
 use gpui::{
@@ -24,11 +24,7 @@ impl SettingsView {
             .flex_col()
             .items_center()
             .gap(px(10.))
-            .child(
-                local_icon(LocalIcon::Music, PRIMARY)
-                    .size(px(APP_MARK_PX))
-                    .flex_none(),
-            )
+            .child(app_mark().size(px(APP_MARK_PX)).flex_none())
             .child(
                 div()
                     .text_size(px(21.))

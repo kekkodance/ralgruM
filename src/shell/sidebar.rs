@@ -1,7 +1,7 @@
 use crate::{
     app_button::SETTINGS_SECONDARY_SMALL_ICON_SIZE,
     app_tooltip::AppTooltipExt,
-    assets::{LocalIcon, local_icon},
+    assets::{LocalIcon, app_logo, local_icon},
     cache::CACHE_ICON,
     settings::{
         Category as SettingsCategory, DangerSecondaryButtonOptions, SidebarPass,
@@ -852,21 +852,7 @@ pub(super) fn render_sidebar(
                         .flex()
                         .items_center()
                         .gap(px(10.))
-                        .child(
-                            div()
-                                .w(px(34.))
-                                .h(px(34.))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(6.))
-                                .bg(rgb(PRIMARY))
-                                .child(
-                                    local_icon(LocalIcon::Music, FOREGROUND)
-                                        .size(px(SIDEBAR_ICON_GLYPH_SIZE)),
-                                ),
-                        )
+                        .child(app_logo().size(px(34.)).flex_none())
                         .when(!metrics.compact_desktop, |this| {
                             this.child(
                                 div()

@@ -1,7 +1,7 @@
 use crate::{
     app_tooltip::AppTooltipExt,
-    assets::{LocalIcon, local_icon},
-    theme::{BORDER, CHROME, FOREGROUND, MUTED, PRIMARY, SURFACE_RAISED},
+    assets::{LocalIcon, app_mark, local_icon},
+    theme::{BORDER, CHROME, FOREGROUND, MUTED, SURFACE_RAISED},
 };
 use gpui::{
     ClickEvent, Context, IntoElement, MouseButton, Role, Window, WindowControlArea, div,
@@ -109,7 +109,7 @@ pub(super) fn render_titlebar(
                         )
                     },
                 )
-                .child(local_icon(LocalIcon::Music, PRIMARY).size(px(10.)))
+                .child(app_mark().size(px(10.)))
                 .child("ralgruM"),
         )
         .child(
