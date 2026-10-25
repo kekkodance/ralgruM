@@ -1,6 +1,6 @@
 <div align="center">
   <h1>
-    <img src="assets/ralgruM.svg" width="48" height="48" valign="middle" alt="ralgruM logo" />
+    <img src="assets/ralgruM_noBackground.svg" width="48" height="48" valign="middle" alt="ralgruM logo" />
     ralgruM Desktop
   </h1>
   <p>A desktop music player for the <a href="https://murglar.app">Murglar</a> music service.</p>
