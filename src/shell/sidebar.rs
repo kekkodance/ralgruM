@@ -1,7 +1,7 @@
 use crate::{
     app_button::SETTINGS_SECONDARY_SMALL_ICON_SIZE,
     app_tooltip::AppTooltipExt,
-    assets::{LocalIcon, local_icon},
+    assets::{LocalIcon, app_mark_with_color, local_icon},
     cache::CACHE_ICON,
     settings::{
         Category as SettingsCategory, DangerSecondaryButtonOptions, SidebarPass,
@@ -44,6 +44,7 @@ const COMPACT_SETTINGS_BUTTON_SIZE: f32 = SIDEBAR_COMPACT_CONTENT_WIDTH_PX;
 const COMPACT_SETTINGS_BUTTON_RADIUS_PX: f32 = 6.;
 const COMPACT_SETTINGS_ICON_SIZE: f32 = 16.;
 pub(super) const SIDEBAR_ICON_GLYPH_SIZE: f32 = crate::music_ui::NAVIGATION_ICON_GLYPH_SIZE;
+const SIDEBAR_BRAND_MARK_SIZE_PX: f32 = 20.;
 pub(super) const SIDEBAR_ICON_SLOT_SIZE_PX: f32 = 18.;
 const SIDEBAR_NAV_HORIZONTAL_PADDING_PX: f32 = 9.;
 const SETTINGS_ICON_SIZE: f32 = 14.;
@@ -852,7 +853,21 @@ pub(super) fn render_sidebar(
                         .flex()
                         .items_center()
                         .gap(px(10.))
-                        .child(gpui::img("ralgrum/ralgruM.svg").size(px(34.)).flex_none())
+                        .child(
+                            div()
+                                .w(px(34.))
+                                .h(px(34.))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.))
+                                .bg(rgb(PRIMARY))
+                                .child(
+                                    app_mark_with_color(FOREGROUND)
+                                        .size(px(SIDEBAR_BRAND_MARK_SIZE_PX)),
+                                ),
+                        )
                         .when(!metrics.compact_desktop, |this| {
                             this.child(
                                 div()
