@@ -109,8 +109,14 @@ pub(super) fn render_titlebar(
                         )
                     },
                 )
-                .child(app_mark().size(px(13.)).relative().top(px(1.)))
-                .child("ralgruM"),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.))
+                        .child(app_mark().size(px(13.)))
+                        .child("ralgruM"),
+                ),
         )
         .child(
             div()
