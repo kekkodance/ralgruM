@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::BTreeSet};
 
-use gpui::{AssetSource, SharedString, Styled, img, rgb, svg};
+use gpui::{AssetSource, SharedString, Styled, rgb, svg};
 use rust_embed::RustEmbed;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -399,12 +399,16 @@ pub(crate) fn local_icon(icon: LocalIcon, color: u32) -> gpui::Svg {
     svg().path(icon.path()).text_color(rgb(color))
 }
 
-pub(crate) fn app_mark() -> gpui::Img {
-    img("ralgrum/app-icon.png")
+pub(crate) fn app_mark() -> gpui::Svg {
+    svg()
+        .path("ralgrum/ralgruM_noBackground.svg")
+        .text_color(rgb(crate::theme::PRIMARY))
 }
 
-pub(crate) fn app_logo() -> gpui::Img {
-    img("ralgrum/app-logo.png")
+pub(crate) fn app_logo() -> gpui::Svg {
+    svg()
+        .path("ralgrum/ralgruM.svg")
+        .text_color(rgb(crate::theme::PRIMARY))
 }
 
 pub(crate) fn widget_icon(icon: LocalIcon) -> gpui_component::Icon {
@@ -459,7 +463,8 @@ fn font_awesome_file_for_widget_icon(path: &str) -> Option<&'static str> {
 #[folder = "assets"]
 #[include = "icons/fontawesome-free-7.3.1/**/*.svg"]
 #[include = "app-icon.png"]
-#[include = "app-logo.png"]
+#[include = "ralgruM.svg"]
+#[include = "ralgruM_noBackground.svg"]
 struct LocalAssets;
 
 pub(crate) struct AppAssets;
