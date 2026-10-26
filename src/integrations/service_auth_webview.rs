@@ -21,10 +21,11 @@ pub(crate) struct MobileAuthorization {
 /// call into this module for everything else so both backends stay in
 /// behavioral lockstep.
 mod shared {
+    use std::{collections::HashMap, time::Duration};
+    #[cfg(any(windows, test))]
     use std::{
-        collections::HashMap,
         path::{Path, PathBuf},
-        time::{Duration, SystemTime},
+        time::SystemTime,
     };
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -126,16 +127,22 @@ mod shared {
         }
     }
 
+    #[cfg(windows)]
     const PROFILE_CLEANUP_RETRIES: usize = 60;
+    #[cfg(windows)]
     const PROFILE_CLEANUP_DELAY: Duration = Duration::from_millis(100);
+    #[cfg(any(windows, test))]
     pub(super) const AUTH_PROFILE_PREFIX: &str = "ralgrum-auth-";
+    #[cfg(windows)]
     const AUTH_PROFILE_ROOT_DIR_NAME: &str = "auth-profiles";
     // A crashed sign-in cannot run its scheduled cleanup, so the sweep on the
     // next sign-in removes the abandoned profiles instead. The threshold
     // dwarfs the sign-in timeout and cleanup retries, which keeps a live
     // sign-in in another process out of the sweep's reach.
+    #[cfg(any(windows, test))]
     pub(super) const AUTH_PROFILE_SWEEP_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
+    #[cfg(windows)]
     pub(super) fn schedule_profile_cleanup(profile_path: PathBuf) {
         let fallback_path = profile_path.clone();
         let worker = std::thread::Builder::new()
@@ -148,6 +155,7 @@ mod shared {
         }
     }
 
+    #[cfg(windows)]
     fn cleanup_profile(profile_path: PathBuf) {
         std::thread::sleep(PROFILE_CLEANUP_DELAY);
         for attempt in 0..PROFILE_CLEANUP_RETRIES {
@@ -164,6 +172,7 @@ mod shared {
     }
 
     /// Creates the sign-in browser profile under the app-owned cache root.
+    #[cfg(windows)]
     pub(super) fn open_auth_profile() -> Result<tempfile::TempDir, std::io::Error> {
         open_auth_profile_in(
             &auth_profile_root(),
@@ -172,6 +181,7 @@ mod shared {
         )
     }
 
+    #[cfg(windows)]
     fn auth_profile_root() -> PathBuf {
         crate::paths::cache_dir().join(AUTH_PROFILE_ROOT_DIR_NAME)
     }
@@ -179,6 +189,7 @@ mod shared {
     /// Creates a uniquely named profile directory under `root`, sweeping
     /// `root` and `legacy_root` first so profiles abandoned by crashed
     /// sign-ins do not outlive the next sign-in attempt.
+    #[cfg(any(windows, test))]
     pub(super) fn open_auth_profile_in(
         root: &Path,
         legacy_root: &Path,
@@ -196,6 +207,7 @@ mod shared {
     /// untouched for AUTH_PROFILE_SWEEP_AGE as of `now`. Only directories
     /// carrying the profile prefix are removed, so unrelated entries and live
     /// sign-ins in other processes always survive.
+    #[cfg(any(windows, test))]
     fn sweep_stale_auth_profiles(root: &Path, now: SystemTime) {
         // The sweep is a crash backstop, so an unreadable or missing root
         // simply ends it without failing the sign-in.
@@ -639,7 +651,7 @@ mod platform {
     use gtk::glib::{self, ControlFlow, Propagation, SourceId};
     use gtk::prelude::*;
     use gtk::{Window as GtkWindow, WindowPosition, WindowType};
-    use wry::{WebContext, WebView, WebViewBuilder, WebViewBuilderExtUnix};
+    use wry::{WebView, WebViewBuilder, WebViewBuilderExtUnix};
 
     use crate::platform::gtk_host;
     use crate::search::DEEZER_USER_AGENT;
@@ -647,22 +659,19 @@ mod platform {
     use super::shared::{
         COOKIE_CONSENT_REJECTION_SCRIPT, DEEZER_COOKIE_URL, LOGIN_TIMEOUT, POLL_INTERVAL,
         SOUNDCLOUD_MOBILE_COOKIE_URL, cookie_name, cookie_url, is_soundcloud_redirect, login_url,
-        navigation_allowed, open_auth_profile, pkce_pair, schedule_profile_cleanup,
-        soundcloud_authorization_code, soundcloud_authorize_url,
+        navigation_allowed, pkce_pair, soundcloud_authorization_code, soundcloud_authorize_url,
     };
     use super::{BrowserCredentials, MobileAuthorization, Service};
 
     /// The login state machine for one sign-in window, owned by the shared
-    /// GTK thread. The `wry::WebView`, the `WebContext`, and the GTK window
-    /// are all `!Send`, so they live in a thread-local cell instead of the
-    /// async future's stack, and only the thread that created them touches
+    /// GTK thread. The `wry::WebView` and GTK window are `!Send`, so they live
+    /// in a thread-local cell and only the thread that created them touches
     /// them.
     struct LoginSession {
         service: Service,
         started: Instant,
         next_poll: Instant,
         webview: WebView,
-        context: WebContext,
         window: GtkWindow,
         /// Set when the user closes the GTK window, mirroring the Windows
         /// backend's `IsWindow` check. The delete handler keeps the closure
@@ -676,7 +685,6 @@ mod platform {
         mobile_authorization: Option<MobileAuthorization>,
         redirect_receiver: mpsc::Receiver<String>,
         desktop_cookie: Option<String>,
-        data_dir: tempfile::TempDir,
         result: Option<Result<BrowserCredentials, String>>,
     }
 
@@ -965,15 +973,10 @@ mod platform {
         RESULT.with(|result| {
             *result.borrow_mut() = session.result.take();
         });
-        // Stage the profile path before dropping the data directory guard,
-        // then tear the browser objects down in the same order as the
-        // Windows backend: webview, context, window, profile cleanup.
-        let profile_path = session.data_dir.keep();
+        // Tear down the view before its native parent window.
         drop(session.webview);
-        drop(session.context);
         session.window.close();
         drop(session.window);
-        schedule_profile_cleanup(profile_path);
     }
 
     /// Builds the window, webview, and timer on the GTK thread. Every step
@@ -993,24 +996,10 @@ mod platform {
                         .unwrap_or_else(|_| "unset".into()),
                 ),
             );
-            crate::diagnostics::event("INFO", "sign-in webview creating private profile");
-            // The profile sweep inside `open_auth_profile` is file I/O that
-            // would stall the shared tray pump, but it is bounded and rare
-            // (once per sign-in), so it runs inline on the GTK thread.
-            let data_dir = match open_auth_profile() {
-                Ok(data_dir) => data_dir,
-                Err(error) => {
-                    let _ = ready_sender.send(Err(format!(
-                        "Could not create the private browser profile: {error}"
-                    )));
-                    return;
-                }
-            };
-            crate::diagnostics::event("INFO", "sign-in webview private profile ready");
-            let profile_path = data_dir.path().to_owned();
-            crate::diagnostics::event("INFO", "sign-in webview creating WebKit context");
-            let mut context = WebContext::new(Some(profile_path.clone()));
-            crate::diagnostics::event("INFO", "sign-in webview WebKit context ready");
+            crate::diagnostics::event(
+                "INFO",
+                "sign-in webview will use an ephemeral WebKit context",
+            );
             let (redirect_sender, redirect_receiver) = mpsc::channel();
             let (width, height, title) = match service {
                 Service::Deezer => (560, 720, "Sign in to Deezer"),
@@ -1035,7 +1024,8 @@ mod platform {
                 });
                 Propagation::Proceed
             });
-            let builder = WebViewBuilder::new_with_web_context(&mut context)
+            let builder = WebViewBuilder::new()
+                .with_incognito(true)
                 .with_url(login_url(service))
                 .with_user_agent(DEEZER_USER_AGENT)
                 .with_focused(true)
@@ -1085,7 +1075,6 @@ mod platform {
                 started: Instant::now(),
                 next_poll: Instant::now(),
                 webview,
-                context,
                 window,
                 closed: false,
                 finished: false,
@@ -1097,7 +1086,6 @@ mod platform {
                 mobile_authorization: None,
                 redirect_receiver,
                 desktop_cookie: None,
-                data_dir,
                 result: None,
             };
             SESSION.with(|cell| {
