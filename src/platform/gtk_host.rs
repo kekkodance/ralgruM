@@ -132,7 +132,12 @@ fn run(receiver: mpsc::Receiver<Job>) {
         // for the next cycle.
         while let Ok(job) = receiver.try_recv() {
             worked = true;
-            job();
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
+                crate::diagnostics::event(
+                    "ERROR",
+                    "GTK host job panicked; keeping the GTK host available",
+                );
+            }
         }
 
         // One non-blocking iteration dispatches whatever GTK queued on the

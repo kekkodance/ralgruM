@@ -993,6 +993,7 @@ mod platform {
                         .unwrap_or_else(|_| "unset".into()),
                 ),
             );
+            crate::diagnostics::event("INFO", "sign-in webview creating private profile");
             // The profile sweep inside `open_auth_profile` is file I/O that
             // would stall the shared tray pump, but it is bounded and rare
             // (once per sign-in), so it runs inline on the GTK thread.
@@ -1005,13 +1006,17 @@ mod platform {
                     return;
                 }
             };
+            crate::diagnostics::event("INFO", "sign-in webview private profile ready");
             let profile_path = data_dir.path().to_owned();
+            crate::diagnostics::event("INFO", "sign-in webview creating WebKit context");
             let mut context = WebContext::new(Some(profile_path.clone()));
+            crate::diagnostics::event("INFO", "sign-in webview WebKit context ready");
             let (redirect_sender, redirect_receiver) = mpsc::channel();
             let (width, height, title) = match service {
                 Service::Deezer => (560, 720, "Sign in to Deezer"),
                 Service::SoundCloud => (1040, 760, "Sign in to SoundCloud"),
             };
+            crate::diagnostics::event("INFO", "sign-in webview creating GTK window");
             let window = GtkWindow::new(WindowType::Toplevel);
             window.set_title(title);
             window.set_default_size(width, height);
@@ -1019,6 +1024,7 @@ mod platform {
             window.set_resizable(true);
             let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
             window.add(&container);
+            crate::diagnostics::event("INFO", "sign-in webview GTK window ready");
             window.connect_delete_event(|_, _| {
                 // Record the cancellation without borrowing the session; the
                 // tick reads the flag on its next poll.
@@ -1041,6 +1047,7 @@ mod platform {
                     }
                     navigation_allowed(&raw_url)
                 });
+            crate::diagnostics::event("INFO", "sign-in webview builder ready");
             crate::diagnostics::event(
                 "INFO",
                 format!(
