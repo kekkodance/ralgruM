@@ -21,12 +21,11 @@ pub(crate) struct MobileAuthorization {
 /// call into this module for everything else so both backends stay in
 /// behavioral lockstep.
 mod shared {
+    #[cfg(windows)]
+    use std::path::PathBuf;
     use std::{collections::HashMap, time::Duration};
     #[cfg(any(windows, test))]
-    use std::{
-        path::{Path, PathBuf},
-        time::SystemTime,
-    };
+    use std::{path::Path, time::SystemTime};
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use sha2::{Digest, Sha256};
