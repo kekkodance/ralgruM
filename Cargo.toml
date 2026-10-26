@@ -84,6 +84,7 @@ wry = { version = "0.55.1", default-features = false, features = ["os-webview", 
 x11rb = "0.14"
 zbus = "5"
 keyring = { version = "3", features = ["sync-secret-service"] }
+libloading = "0.8"
 gtk = "0.18"
 
 # Media keys use souvlaki on every desktop OS: SMTC on Windows, MPRIS over

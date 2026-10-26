@@ -12,8 +12,8 @@ use std::{
 };
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Div, ElementId, div, ease_in_out, prelude::*,
-    px, rgb,
+    Animation, AnimationExt as _, AnyElement, App, Bounds, ElementId, canvas, div, ease_in_out,
+    fill, point, prelude::*, px, rgb, size,
 };
 
 use crate::{
@@ -129,6 +129,7 @@ const INDEX_TEXT_SIZE: f32 = 12.5;
 const BAR_WIDTH: f32 = 3.;
 const BAR_GAP: f32 = 2.;
 const BARS_HEIGHT: f32 = 14.;
+const BARS_WIDTH: f32 = BAR_WIDTH * 3. + BAR_GAP * 2. + 1.;
 const BAR_BASE_HEIGHT: f32 = 4.;
 const BOUNCE_PERIOD_MS: f32 = 1500.;
 const MIX_VISIBLE: f32 = 0.001;
@@ -336,45 +337,51 @@ pub(crate) fn playing_bars(
 ) -> AnyElement {
     let target_amp = if animating { 1. } else { 0. };
     let (amp, color, _, in_progress) = sync_blend(key, target_amp, color, reduce_motion);
-    let group = div()
-        .h(px(BARS_HEIGHT))
-        .flex_none()
-        .flex()
-        .items_end()
-        .justify_center()
-        .gap(px(BAR_GAP))
-        // The three bars and two gaps total an odd number of pixels; the
-        // original trims one off the box so the group starts on a whole
-        // pixel and all bars land on one.
-        .pr(px(1.));
+    let group = div().w(px(BARS_WIDTH)).h(px(BARS_HEIGHT)).flex_none();
     if amp <= MIX_VISIBLE && !in_progress {
-        return group
-            .children(BAR_DELAYS_MS.map(|_| bar(BAR_BASE_HEIGHT, color)))
-            .into_any_element();
+        return painted_bars([BAR_BASE_HEIGHT; 3], color);
     }
     group
         .with_animation(
             key,
-            Animation::new(Duration::from_millis(BOUNCE_PERIOD_MS as u64)).repeat_synced(),
+            Animation::new(Duration::from_millis(BOUNCE_PERIOD_MS as u64))
+                .repeat_synced()
+                .with_max_fps(60.),
             move |group, delta| {
-                group.children(BAR_DELAYS_MS.map(|delay| {
+                let heights = BAR_DELAYS_MS.map(|delay| {
                     let bounce = delayed_height(delta, delay / BOUNCE_PERIOD_MS);
-                    bar(lerp(BAR_BASE_HEIGHT, bounce, amp), color)
-                }))
+                    lerp(BAR_BASE_HEIGHT, bounce, amp)
+                });
+                group.child(painted_bars(heights, color))
             },
         )
         .into_any_element()
 }
 
-/// A bar is drawn at its animated height rather than a vertical scale, so the
-/// pill cap keeps its roundness at every height, like the original.
-fn bar(height: f32, color: u32) -> Div {
-    div()
-        .w(px(BAR_WIDTH))
-        .h(px(height))
-        .flex_none()
-        .rounded(px(2.))
-        .bg(rgb(color))
+/// Paint all bars as one element so each animation frame only updates one
+/// compact paint node instead of rebuilding a flex container and three divs.
+/// Drawing each rounded rectangle at its current height preserves the pill
+/// caps and the original per-frame animation curve.
+fn painted_bars(heights: [f32; 3], color: u32) -> AnyElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            for (index, height) in heights.into_iter().enumerate() {
+                let bar_bounds = Bounds::new(
+                    point(
+                        bounds.left() + px(index as f32 * (BAR_WIDTH + BAR_GAP)),
+                        bounds.bottom() - px(height),
+                    ),
+                    size(px(BAR_WIDTH), px(height)),
+                );
+                window.paint_quad(fill(bar_bounds, rgb(color)).corner_radii(px(2.)));
+            }
+        },
+    )
+    .w(px(BARS_WIDTH))
+    .h(px(BARS_HEIGHT))
+    .flex_none()
+    .into_any_element()
 }
 
 /// Height of one bar at animation progress `delta` (0..1) given its phase

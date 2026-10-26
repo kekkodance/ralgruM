@@ -1566,6 +1566,11 @@ mod linux_impl {
         window: &Window,
         shell: gpui::WeakEntity<RalgrumApp>,
     ) -> bool {
+        if let Err(error) = check_appindicator_library() {
+            crate::diagnostics::event("WARN", format!("system tray unavailable: {error}"));
+            return false;
+        }
+
         let host = match crate::platform::gtk_host::spawn() {
             Ok(host) => host,
             Err(error) => {
@@ -1592,9 +1597,12 @@ mod linux_impl {
             // for the process lifetime by leaking it; a tray icon should
             // never disappear while the app runs, and dropping GTK
             // objects from the wrong thread later would be worse.
-            let result = build_tray().map(|tray| {
-                std::mem::forget(tray);
-            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                build_tray().map(|tray| {
+                    std::mem::forget(tray);
+                })
+            }))
+            .unwrap_or_else(|_| Err("tray backend panicked during initialization".into()));
             let _ = created_sender.send(result);
         });
         let created = created_receiver
@@ -1613,6 +1621,36 @@ mod linux_impl {
         start_menu_pump(cx, event_receiver);
         crate::diagnostics::event("INFO", "system tray ready");
         true
+    }
+
+    /// Checks this optional Linux desktop dependency before tray-icon loads
+    /// it. libappindicator-sys panics when neither supported library exists,
+    /// which would otherwise terminate the shared GTK thread used by sign-in.
+    fn check_appindicator_library() -> Result<(), String> {
+        const LIBRARIES: [&str; 4] = [
+            "libayatana-appindicator3.so.1",
+            "libappindicator3.so.1",
+            "libayatana-appindicator3.so",
+            "libappindicator3.so",
+        ];
+
+        let mut errors = Vec::with_capacity(LIBRARIES.len());
+        for name in LIBRARIES {
+            // libappindicator-sys performs the same dynamic load internally.
+            // Probe it first so absence degrades the tray, not GTK sign-in.
+            match unsafe { libloading::Library::new(name) } {
+                Ok(library) => {
+                    drop(library);
+                    return Ok(());
+                }
+                Err(error) => errors.push(format!("{name}: {error}")),
+            }
+        }
+
+        Err(format!(
+            "libappindicator is missing ({}); the tray icon requires libayatana-appindicator3 or libappindicator3",
+            errors.join("; ")
+        ))
     }
 
     /// Builds the icon and its native menu on the GTK thread.

@@ -24,6 +24,11 @@ declare -A LINUXDEPLOY_SHA256=(
 
 binary="$root/target/release/ralgruM"
 [ -x "$binary" ] || { echo "Missing release binary at $binary" >&2; exit 1; }
+appindicator_library="$(ldconfig -p | awk '$1 ~ /^lib(ayatana-)?appindicator3\.so\.1$/ { print $NF; exit }')"
+[ -n "$appindicator_library" ] || {
+  echo "Missing libayatana-appindicator3.so.1; install libayatana-appindicator3-1 before packaging" >&2
+  exit 1
+}
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
@@ -61,6 +66,7 @@ DEPLOY_GTK_VERSION=3 NO_STRIP=true "$linuxdeploy" \
   --appdir "$appdir" \
   --desktop-file "$appdir/usr/share/applications/ralgruM.desktop" \
   --icon-file "$appdir/usr/share/icons/hicolor/512x512/apps/ralgruM.png" \
+  --library "$appindicator_library" \
   --output appimage
 
 produced=(./*.AppImage)

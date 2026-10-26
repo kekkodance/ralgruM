@@ -6772,6 +6772,7 @@ dependencies = [
  "gtk",
  "image",
  "keyring",
+ "libloading 0.8.9",
  "md-5",
  "ogg",
  "opus-decoder",
