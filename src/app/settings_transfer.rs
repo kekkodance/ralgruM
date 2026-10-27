@@ -458,10 +458,24 @@ fn absolute_location(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_owned()
     } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
+        original_working_directory().join(path)
     }
+}
+
+// The AppImage launcher changes into the AppDir so WebKitGTK can resolve its
+// helper processes from a relative path. Relative settings paths still belong
+// to the directory the user launched the AppImage from.
+fn original_working_directory() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(path) = std::env::var_os("RALGRUM_ORIGINAL_CWD")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        return path;
+    }
+    std::env::current_dir()
+        .ok()
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn lexical_normalize(path: &Path) -> PathBuf {

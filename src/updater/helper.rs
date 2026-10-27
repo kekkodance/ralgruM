@@ -56,6 +56,24 @@ fn restart_command(target: &Path) -> Command {
     command.env_remove("RALGRUM_UPDATE_TEST_ASSET");
     command.env_remove("RALGRUM_UPDATE_TEST_CURRENT_VERSION");
     command.env_remove("APPIMAGE");
+    // An AppImage's AppRun changes into its read-only mount, so inheriting
+    // that working directory would launch the next AppImage from a directory
+    // that disappears with the old mount. Start from the installation
+    // directory instead; the new AppRun reports it as the original working
+    // directory for relative paths.
+    #[cfg(target_os = "linux")]
+    {
+        command.env_remove("RALGRUM_ORIGINAL_CWD");
+        // The runtime sets OWD again for a normal launch. Remove the inherited
+        // value so an extract-and-run relaunch cannot report the old directory.
+        command.env_remove("OWD");
+        if let Some(parent) = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            command.current_dir(parent);
+        }
+    }
     command
 }
 
@@ -482,6 +500,24 @@ mod tests {
         assert!(!staged.exists());
         replace_file(&target, &backup, None).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"previous");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn restart_command_starts_in_the_install_directory() {
+        let target = Path::new("/opt/ralgruM/ralgruM.AppImage");
+        let command = restart_command(target);
+        assert_eq!(command.get_current_dir(), Some(Path::new("/opt/ralgruM")));
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "RALGRUM_ORIGINAL_CWD" && value.is_none())
+        );
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "OWD" && value.is_none())
+        );
     }
 
     #[cfg(target_os = "linux")]
