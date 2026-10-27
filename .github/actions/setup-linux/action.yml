@@ -45,6 +45,8 @@ runs:
           sudo cp -n "$APT_ARCHIVES"/*.deb /var/cache/apt/archives/
         fi
         sudo apt-get update
+        # glib-networking provides the GIO GnuTLS module that the AppImage
+        # bundles for WebKit sign-in.
         sudo apt-get install -y --no-install-recommends \
           -o APT::Keep-Downloaded-Packages=true \
           libasound2-dev \
@@ -52,6 +54,7 @@ runs:
           libgtk-3-dev \
           libayatana-appindicator3-1 \
           libwebkit2gtk-4.1-dev \
+          glib-networking \
           libxkbcommon-dev \
           libxkbcommon-x11-dev \
           libwayland-dev \

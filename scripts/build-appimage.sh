@@ -44,6 +44,41 @@ appindicator_library="$(ldconfig -p | awk '$1 ~ /^lib(ayatana-)?appindicator3\.s
   exit 1
 }
 
+# WebKit's network process uses libsoup, which delegates TLS to GIO. GIO
+# loads its TLS backend from a module directory compiled into libgio. That
+# path is distribution-specific and does not exist on SteamOS, so the GnuTLS
+# module is bundled and AppRun points GIO at the bundled directory. The
+# module is not a linked dependency of libgio, so linuxdeploy does not see it
+# and it has to be copied explicitly. The module links against libgnutls,
+# which is passed to linuxdeploy as an additional library.
+gio_module_dir=""
+if command -v pkg-config >/dev/null 2>&1; then
+  gio_module_dir="$(pkg-config --variable=giomoduledir gio-2.0 2>/dev/null || true)"
+fi
+if [ -z "$gio_module_dir" ] || [ ! -f "$gio_module_dir/libgiognutls.so" ]; then
+  if command -v dpkg >/dev/null 2>&1; then
+    gio_module_dir="$(dpkg -L glib-networking 2>/dev/null | sed -n 's|/libgiognutls\.so$||p' | head -n1 || true)"
+  fi
+fi
+if [ -z "$gio_module_dir" ] || [ ! -f "$gio_module_dir/libgiognutls.so" ]; then
+  for candidate in /usr/lib/*/gio/modules /usr/lib/gio/modules /usr/lib64/gio/modules; do
+    if [ -f "$candidate/libgiognutls.so" ]; then
+      gio_module_dir="$candidate"
+      break
+    fi
+  done
+fi
+[ -n "$gio_module_dir" ] && [ -f "$gio_module_dir/libgiognutls.so" ] || {
+  echo "Missing libgiognutls.so; install glib-networking before packaging" >&2
+  exit 1
+}
+
+gnutls_library="$(ldd "$gio_module_dir/libgiognutls.so" 2>/dev/null | awk '$1 == "libgnutls.so.30" { print $3; exit }' || true)"
+[ -n "$gnutls_library" ] && [ -f "$gnutls_library" ] || {
+  echo "Missing libgnutls.so.30; install glib-networking before packaging" >&2
+  exit 1
+}
+
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 appdir="$workdir/AppDir"
@@ -92,6 +127,11 @@ export RALGRUM_ORIGINAL_CWD="$original_cwd"
 # load the bundled libraries, not whatever the host distribution provides.
 export LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# libgio looks for its TLS backend in a module directory compiled into the
+# library. Point it at the bundled GnuTLS module instead of the build host's
+# distribution-specific path, which does not exist on every target system.
+export GIO_MODULE_DIR="$appdir/usr/lib/gio/modules"
+
 # WebKit's bubblewrap sandbox mounts the host system directories and cannot
 # see the AppImage mount where the bundled helpers and libraries live. The
 # helpers still run as separate processes, but without the OS-level sandbox.
@@ -115,6 +155,7 @@ DEPLOY_GTK_VERSION=3 NO_STRIP=true "$linuxdeploy" \
   --desktop-file "$appdir/usr/share/applications/ralgruM.desktop" \
   --icon-file "$appdir/usr/share/icons/hicolor/512x512/apps/ralgruM.png" \
   --library "$appindicator_library" \
+  --library "$gnutls_library" \
   --custom-apprun "$workdir/AppRun"
 
 webkit_lib="$(find "$appdir/usr/lib" -maxdepth 2 -name 'libwebkit2gtk-4.1.so.0' -print -quit)"
@@ -166,6 +207,55 @@ for helper in WebKitWebProcess WebKitNetworkProcess WebKitGPUProcess; do
 done
 [ -d "$helper_target/injected-bundle" ] || {
   echo "Failed to deploy the WebKit injected bundle from $webkit_helper_dir" >&2
+  exit 1
+}
+
+# GIO only loads modules from GIO_MODULE_DIR, which AppRun points at this
+# directory. libgmp.so.10 stays host-provided because linuxdeploy excludes it
+# and SteamOS ships it with the system GnuTLS stack.
+gio_module_target="$appdir/usr/lib/gio/modules"
+mkdir -p "$gio_module_target"
+install -m 0644 "$gio_module_dir/libgiognutls.so" "$gio_module_target/libgiognutls.so"
+
+# linuxdeploy copies copyright files for the libraries it deploys. The GIO
+# module is copied manually, so include its copyright file explicitly.
+if [ -f /usr/share/doc/glib-networking/copyright ]; then
+  mkdir -p "$appdir/usr/share/doc/glib-networking"
+  install -m 0644 /usr/share/doc/glib-networking/copyright "$appdir/usr/share/doc/glib-networking/copyright"
+fi
+
+for library in \
+  libgnutls.so.30 \
+  libp11-kit.so.0 \
+  libffi.so.8 \
+  libnettle.so.8 \
+  libhogweed.so.6 \
+  libidn2.so.0 \
+  libtasn1.so.6 \
+  libunistring.so.5; do
+  [ -f "$appdir/usr/lib/$library" ] || {
+    echo "linuxdeploy did not bundle $library" >&2
+    exit 1
+  }
+done
+
+for library in "$gio_module_target/libgiognutls.so" "$appdir/usr/lib/libgnutls.so.30"; do
+  if ! ldd_output="$(LD_LIBRARY_PATH="$appdir/usr/lib" ldd "$library" 2>&1)"; then
+    echo "ldd failed for $library:" >&2
+    printf '%s\n' "$ldd_output" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$ldd_output" | grep -q 'not found'; then
+    echo "Unresolved dependencies for $library:" >&2
+    printf '%s\n' "$ldd_output" | grep 'not found' >&2
+    exit 1
+  fi
+done
+
+ldd_output="$(LD_LIBRARY_PATH="$appdir/usr/lib" ldd "$gio_module_target/libgiognutls.so" 2>&1)"
+printf '%s\n' "$ldd_output" | grep -F "libgnutls.so.30 => $appdir/usr/lib/libgnutls.so.30" >/dev/null || {
+  echo "libgiognutls.so does not load the bundled libgnutls.so.30:" >&2
+  printf '%s\n' "$ldd_output" >&2
   exit 1
 }
 
