@@ -653,7 +653,6 @@ mod platform {
     use wry::{WebView, WebViewBuilder, WebViewBuilderExtUnix};
 
     use crate::platform::gtk_host;
-    use crate::search::DEEZER_USER_AGENT;
 
     use super::shared::{
         COOKIE_CONSENT_REJECTION_SCRIPT, DEEZER_COOKIE_URL, LOGIN_TIMEOUT, POLL_INTERVAL,
@@ -1023,10 +1022,20 @@ mod platform {
                 });
                 Propagation::Proceed
             });
+            // WebKitGTK's native user agent is Safari-like and matches the
+            // engine. Deezer's edge bot challenge checks that the UA agrees
+            // with navigator.vendor, navigator.platform, and the JavaScript
+            // APIs the engine actually exposes. Forcing a Chrome UA here
+            // produced a fingerprint no real Chrome has, so the challenge
+            // never completed. Windows keeps the Chrome UA because WebView2
+            // really is Chromium.
+            crate::diagnostics::event(
+                "INFO",
+                "sign-in webview using the WebKitGTK native user agent",
+            );
             let builder = WebViewBuilder::new()
                 .with_incognito(true)
                 .with_url(login_url(service))
-                .with_user_agent(DEEZER_USER_AGENT)
                 .with_focused(true)
                 .with_initialization_script_for_main_only(COOKIE_CONSENT_REJECTION_SCRIPT, false)
                 .with_navigation_handler(move |raw_url| {
