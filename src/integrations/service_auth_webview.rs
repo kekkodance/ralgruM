@@ -650,7 +650,7 @@ mod platform {
     use gtk::glib::{self, ControlFlow, Propagation, SourceId};
     use gtk::prelude::*;
     use gtk::{Window as GtkWindow, WindowPosition, WindowType};
-    use wry::{WebView, WebViewBuilder, WebViewBuilderExtUnix};
+    use wry::{PageLoadEvent, WebView, WebViewBuilder, WebViewBuilderExtUnix};
 
     use crate::platform::gtk_host;
 
@@ -1037,6 +1037,16 @@ mod platform {
                 .with_incognito(true)
                 .with_url(login_url(service))
                 .with_focused(true)
+                .with_on_page_load_handler(|event, url| {
+                    let event = match event {
+                        PageLoadEvent::Started => "started",
+                        PageLoadEvent::Finished => "finished",
+                    };
+                    crate::diagnostics::event(
+                        "INFO",
+                        format!("sign-in webview page event={event} url={url}"),
+                    );
+                })
                 .with_initialization_script_for_main_only(COOKIE_CONSENT_REJECTION_SCRIPT, false)
                 .with_navigation_handler(move |raw_url| {
                     if is_soundcloud_redirect(&raw_url) {
@@ -1069,6 +1079,12 @@ mod platform {
                 }
             };
             let _ = webview.focus();
+            let _ = webview.evaluate_script_with_callback("navigator.userAgent", |user_agent| {
+                crate::diagnostics::event(
+                    "INFO",
+                    format!("sign-in webview user agent={user_agent}"),
+                );
+            });
             window.show_all();
             window.present();
             crate::diagnostics::event(
