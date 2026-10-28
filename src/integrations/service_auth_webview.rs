@@ -650,7 +650,7 @@ mod platform {
     use gtk::glib::{self, ControlFlow, Propagation, SourceId};
     use gtk::prelude::*;
     use gtk::{Window as GtkWindow, WindowPosition, WindowType};
-    use wry::{PageLoadEvent, WebView, WebViewBuilder, WebViewBuilderExtUnix};
+    use wry::{PageLoadEvent, WebView, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
     use crate::platform::gtk_host;
 
@@ -708,6 +708,41 @@ mod platform {
         NotStarted,
         Navigating { verifier: String, state: String },
         Done,
+    }
+
+    /// Lets the cross-origin reCAPTCHA frame keep its cookies.
+    ///
+    /// WebKitGTK defaults to `NoThirdParty`, so cookies set by the
+    /// `google.com` reCAPTCHA frame are dropped. Deezer gates its login
+    /// handshake behind that challenge, and without the frame's cookies the
+    /// challenge can restart or stall. ITP is already off by default on
+    /// WebKitGTK, but disable it explicitly so a future default cannot
+    /// override the policy.
+    fn allow_login_challenge_cookies(webview: &WebView) {
+        use webkit2gtk::{
+            CookieAcceptPolicy, CookieManagerExt as _, WebViewExt as _, WebsiteDataManagerExt as _,
+        };
+
+        let Some(data_manager) = webview.webview().website_data_manager() else {
+            crate::diagnostics::event(
+                "WARN",
+                "sign-in webview has no WebKit data manager; cookie policy unchanged",
+            );
+            return;
+        };
+        data_manager.set_itp_enabled(false);
+        let Some(cookie_manager) = data_manager.cookie_manager() else {
+            crate::diagnostics::event(
+                "WARN",
+                "sign-in webview has no WebKit cookie manager; cookie policy unchanged",
+            );
+            return;
+        };
+        cookie_manager.set_accept_policy(CookieAcceptPolicy::Always);
+        crate::diagnostics::event(
+            "INFO",
+            "sign-in webview allows third-party cookies for the login challenge",
+        );
     }
 
     /// Runs one step of the login state machine on the GTK thread. Called by
@@ -1035,7 +1070,6 @@ mod platform {
             );
             let builder = WebViewBuilder::new()
                 .with_incognito(true)
-                .with_url(login_url(service))
                 .with_focused(true)
                 .with_on_page_load_handler(|event, url| {
                     let event = match event {
@@ -1079,6 +1113,19 @@ mod platform {
                 }
             };
             let _ = webview.focus();
+            allow_login_challenge_cookies(&webview);
+            if let Err(error) = webview.load_url(login_url(service)) {
+                crate::diagnostics::event(
+                    "ERROR",
+                    format!(
+                        "sign-in webview initial navigation failed service={}: {error}",
+                        service.display_name()
+                    ),
+                );
+                let _ =
+                    ready_sender.send(Err(format!("Could not open the sign-in page: {error}")));
+                return;
+            }
             let _ = webview.evaluate_script_with_callback("navigator.userAgent", |user_agent| {
                 crate::diagnostics::event(
                     "INFO",

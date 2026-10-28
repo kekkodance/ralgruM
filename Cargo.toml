@@ -81,6 +81,9 @@ wmi = { version = "0.18.4", default-features = false }
 souvlaki = "0.8.3"
 tray-icon = { version = "=0.24.1", default-features = false, features = ["gtk"] }
 wry = { version = "0.55.1", default-features = false, features = ["os-webview", "x11"] }
+# The sign-in webview configures the WebKit cookie policy directly. Keep this
+# pinned to the version wry links so the handle types agree.
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 x11rb = "0.14"
 zbus = "5"
 keyring = { version = "3", features = ["sync-secret-service"] }

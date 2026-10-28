@@ -6795,6 +6795,7 @@ dependencies = [
  "tray-icon",
  "url",
  "uuid 1.24.1",
+ "webkit2gtk",
  "windows 0.61.3",
  "windows-registry 0.6.1",
  "windows-sys 0.61.2",
