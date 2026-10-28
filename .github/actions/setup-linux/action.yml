@@ -55,6 +55,8 @@ runs:
           libayatana-appindicator3-1 \
           libwebkit2gtk-4.1-dev \
           glib-networking \
+          gstreamer1.0-plugins-base \
+          gstreamer1.0-plugins-good \
           libxkbcommon-dev \
           libxkbcommon-x11-dev \
           libwayland-dev \

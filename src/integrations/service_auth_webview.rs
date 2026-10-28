@@ -645,7 +645,7 @@ pub(crate) async fn login(_service: Service) -> Result<BrowserCredentials, Strin
 mod platform {
     use std::cell::RefCell;
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use gtk::glib::{self, ControlFlow, Propagation, SourceId};
     use gtk::prelude::*;
@@ -660,6 +660,45 @@ mod platform {
         navigation_allowed, pkce_pair, soundcloud_authorization_code, soundcloud_authorize_url,
     };
     use super::{BrowserCredentials, MobileAuthorization, Service};
+
+    /// SoundCloud's DataDome challenge rejects WebKitGTK's native user agent
+    /// and the hard-coded `Chrome/300.0.0.0` quirk WebKit applies to
+    /// `soundcloud.com`. The AppImage build removes that quirk from the
+    /// bundled WebKit, so this Safari user agent reaches both the HTTP
+    /// requests and `navigator.userAgent`. Keep it in sync with the platform
+    /// reported by `SOUNDCLOUD_SAFARI_SPOOF_SCRIPT`.
+    const SOUNDCLOUD_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15";
+
+    /// WebKitGTK reports `Linux x86_64` even when the user agent says
+    /// macOS. DataDome compares the two, so make the JavaScript platform
+    /// match the user agent before any page script runs. The vendor and
+    /// touch-point values are already what Safari reports, but setting them
+    /// explicitly keeps the fingerprint coherent if WebKit changes.
+    const SOUNDCLOUD_SAFARI_SPOOF_SCRIPT: &str = r#"
+(() => {
+  try {
+    Object.defineProperty(Navigator.prototype, 'platform', {
+      get: () => 'MacIntel',
+      configurable: true
+    });
+  } catch (_) {}
+  try {
+    Object.defineProperty(Navigator.prototype, 'vendor', {
+      get: () => 'Apple Computer, Inc.',
+      configurable: true
+    });
+  } catch (_) {}
+  try {
+    Object.defineProperty(Navigator.prototype, 'maxTouchPoints', {
+      get: () => 0,
+      configurable: true
+    });
+  } catch (_) {}
+  try {
+    delete Navigator.prototype.oscpu;
+  } catch (_) {}
+})();
+"#;
 
     /// The login state machine for one sign-in window, owned by the shared
     /// GTK thread. The `wry::WebView` and GTK window are `!Send`, so they live
@@ -689,12 +728,16 @@ mod platform {
     thread_local! {
         /// The active session on the GTK thread. There is at most one live
         /// sign-in per process because `login` is serialized by a mutex, and
-        /// `RESULT` (below) hands the value out before the session is
+        /// the outcome travels over `RESULT_SENDER` before the session is
         /// dropped, so `Take` never finds an occupied slot mid-flight.
         static SESSION: RefCell<Option<LoginSession>> = const { RefCell::new(None) };
-        /// The completed credentials of the last session, staged for pickup
-        /// by the awaiting thread before teardown is scheduled.
-        static RESULT: RefCell<Option<Result<BrowserCredentials, String>>> =
+        /// Delivers the completed credentials of the active session to the
+        /// awaiting login task. Created by `login` before the window is built
+        /// and consumed exactly once by `finish_session`. Keeping the sender
+        /// here instead of polling a staged value means a busy GTK thread
+        /// cannot be mistaken for a stopped one, and an outcome cannot be
+        /// dropped between a poll and the next one.
+        static RESULT_SENDER: RefCell<Option<mpsc::Sender<Result<BrowserCredentials, String>>>> =
             const { RefCell::new(None) };
         /// The timer source of the active session, so the teardown closure
         /// can detach it from the main loop. Only read while the session is
@@ -1003,8 +1046,17 @@ mod platform {
                 format!("sign-in webview finished without a result service={service}"),
             ),
         }
-        RESULT.with(|result| {
-            *result.borrow_mut() = session.result.take();
+        RESULT_SENDER.with(|sender| {
+            let sender = sender.borrow_mut().take();
+            if let Some(sender) = sender {
+                let outcome = session.result.take().unwrap_or_else(|| {
+                    Err(format!(
+                        "{} sign-in finished without a result.",
+                        session.service.display_name()
+                    ))
+                });
+                let _ = sender.send(outcome);
+            }
         });
         // Tear down the view before its native parent window.
         drop(session.webview);
@@ -1014,8 +1066,14 @@ mod platform {
 
     /// Builds the window, webview, and timer on the GTK thread. Every step
     /// after the host starts runs there, keeping all GTK and WebKitGTK
-    /// objects on the thread that owns the default main context.
-    fn run_login(handle: gtk_host::GtkHostHandle, service: Service) -> Result<(), String> {
+    /// objects on the thread that owns the default main context. The
+    /// `result_sender` is parked in `RESULT_SENDER` once the session is live;
+    /// `finish_session` uses it to deliver the single outcome.
+    fn run_login(
+        handle: gtk_host::GtkHostHandle,
+        service: Service,
+        result_sender: mpsc::Sender<Result<BrowserCredentials, String>>,
+    ) -> Result<(), String> {
         let (ready_sender, ready_receiver) = mpsc::channel::<Result<(), String>>();
         handle.submit(move || {
             crate::diagnostics::event(
@@ -1064,10 +1122,12 @@ mod platform {
             // produced a fingerprint no real Chrome has, so the challenge
             // never completed. Windows keeps the Chrome UA because WebView2
             // really is Chromium.
-            crate::diagnostics::event(
-                "INFO",
-                "sign-in webview using the WebKitGTK native user agent",
-            );
+            //
+            // SoundCloud is the exception: DataDome's slider rejects the
+            // native WebKitGTK UA. The AppImage neutralizes WebKit's
+            // soundcloud.com Chrome/300 quirk so this real Safari UA is used
+            // over HTTP and in JavaScript, and the script below makes the
+            // platform match it.
             let builder = WebViewBuilder::new()
                 .with_incognito(true)
                 .with_focused(true)
@@ -1089,6 +1149,24 @@ mod platform {
                     }
                     navigation_allowed(&raw_url)
                 });
+            let builder = if matches!(service, Service::SoundCloud) {
+                crate::diagnostics::event(
+                    "INFO",
+                    "sign-in webview using the macOS Safari user agent for SoundCloud",
+                );
+                builder
+                    .with_user_agent(SOUNDCLOUD_USER_AGENT)
+                    .with_initialization_script_for_main_only(
+                        SOUNDCLOUD_SAFARI_SPOOF_SCRIPT,
+                        true,
+                    )
+            } else {
+                crate::diagnostics::event(
+                    "INFO",
+                    "sign-in webview using the WebKitGTK native user agent",
+                );
+                builder
+            };
             crate::diagnostics::event("INFO", "sign-in webview builder ready");
             crate::diagnostics::event(
                 "INFO",
@@ -1169,6 +1247,9 @@ mod platform {
             TIMER.with(|cell| {
                 *cell.borrow_mut() = Some(timer);
             });
+            RESULT_SENDER.with(|cell| {
+                *cell.borrow_mut() = Some(result_sender);
+            });
             let _ = ready_sender.send(Ok(()));
         });
         ready_receiver
@@ -1187,33 +1268,16 @@ mod platform {
             ),
         );
         let host = gtk_host::spawn()?;
-        run_login(host.clone(), service)?;
-        // Wait for the state machine to finish on the GTK thread. The host
-        // thread outlives every login, so the channel close is the only exit.
-        std::thread::Builder::new()
-            .name("ralgrum-auth-webview".to_owned())
-            .spawn(move || {
-                loop {
-                    let (sender, receiver) = mpsc::channel::<Result<BrowserCredentials, String>>();
-                    host.submit(move || {
-                        let outcome = RESULT.with(|result| result.borrow_mut().take());
-                        if let Some(outcome) = outcome {
-                            let _ = sender.send(outcome);
-                        }
-                    });
-                    match receiver.recv_timeout(Duration::from_millis(200)) {
-                        Ok(outcome) => return outcome,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            return Err("The GTK host thread stopped unexpectedly.".to_string());
-                        }
-                        // Nothing staged yet: keep waiting for the user.
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                    }
-                }
-            })
-            .map_err(|error| format!("Could not start the sign-in waiter thread: {error}"))?
-            .join()
-            .map_err(|_| "The sign-in window thread stopped unexpectedly.".to_string())?
+        let (result_sender, result_receiver) = mpsc::channel();
+        run_login(host, service, result_sender)?;
+        // Wait off the async runtime for the GTK thread to send the single
+        // outcome. A closed channel means the host died before the state
+        // machine produced a result; timeouts are impossible here because the
+        // user may take the full login window to finish.
+        tokio::task::spawn_blocking(move || result_receiver.recv())
+            .await
+            .map_err(|error| format!("The sign-in window thread stopped unexpectedly: {error}"))?
+            .map_err(|_| "The GTK host thread stopped unexpectedly.".to_string())?
     }
 }
 

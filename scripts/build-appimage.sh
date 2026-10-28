@@ -73,6 +73,42 @@ fi
   exit 1
 }
 
+# GStreamer loads these plugins at runtime, so linuxdeploy's ldd scan does not
+# find them. They cover the audio stack DataDome probes during the SoundCloud
+# challenge (appsink, autoaudiosink, decodebin, giostreamsrc) plus common
+# audio codecs WebKit may advertise through canPlayType.
+gst_plugin_dir=""
+if command -v pkg-config >/dev/null 2>&1; then
+  gst_plugin_dir="$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null || true)"
+fi
+if [ -z "$gst_plugin_dir" ] || [ ! -d "$gst_plugin_dir" ]; then
+  for candidate in /usr/lib/*/gstreamer-1.0 /usr/lib64/gstreamer-1.0 /usr/lib/gstreamer-1.0; do
+    if [ -d "$candidate" ] && [ -f "$candidate/libgstapp.so" ]; then
+      gst_plugin_dir="$candidate"
+      break
+    fi
+  done
+fi
+[ -n "$gst_plugin_dir" ] && [ -d "$gst_plugin_dir" ] || {
+  echo "Missing GStreamer plugins; install gstreamer1.0-plugins-base and gstreamer1.0-plugins-good before packaging" >&2
+  exit 1
+}
+
+gst_scanner=""
+for candidate in \
+  /usr/libexec/gstreamer-1.0/gst-plugin-scanner \
+  /usr/lib/*/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner \
+  /usr/lib/*/gstreamer-1.0/gst-plugin-scanner; do
+  if [ -x "$candidate" ]; then
+    gst_scanner="$candidate"
+    break
+  fi
+done
+[ -n "$gst_scanner" ] || {
+  echo "Missing gst-plugin-scanner; install gstreamer1.0-plugins-base before packaging" >&2
+  exit 1
+}
+
 gnutls_library="$(ldd "$gio_module_dir/libgiognutls.so" 2>/dev/null | awk '$1 == "libgnutls.so.30" { print $3; exit }' || true)"
 [ -n "$gnutls_library" ] && [ -f "$gnutls_library" ] || {
   echo "Missing libgnutls.so.30; install glib-networking before packaging" >&2
@@ -132,6 +168,17 @@ export LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # distribution-specific path, which does not exist on every target system.
 export GIO_MODULE_DIR="$appdir/usr/lib/gio/modules"
 
+# WebKit's media stack loads GStreamer elements dynamically. linuxdeploy
+# bundles the linked GStreamer libraries but not the plugins, and a missing
+# appsink/autoaudiosink makes WebKit abort its web process while DataDome
+# fingerprints the audio stack. Keep GStreamer on the bundled 1.24 plugin set
+# and give it a version-specific registry so a host 1.26 cache is not reused.
+export GST_PLUGIN_SYSTEM_PATH="$appdir/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_SYSTEM_PATH_1_0="$GST_PLUGIN_SYSTEM_PATH"
+export GST_PLUGIN_SCANNER="$appdir/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+export GST_REGISTRY="${XDG_CACHE_HOME:-$HOME/.cache}/ralgruM/gstreamer-1.24-registry.bin"
+mkdir -p "${GST_REGISTRY%/*}"
+
 # WebKit's bubblewrap sandbox mounts the host system directories and cannot
 # see the AppImage mount where the bundled helpers and libraries live. The
 # helpers still run as separate processes, but without the OS-level sandbox.
@@ -157,6 +204,77 @@ DEPLOY_GTK_VERSION=3 NO_STRIP=true "$linuxdeploy" \
   --library "$appindicator_library" \
   --library "$gnutls_library" \
   --custom-apprun "$workdir/AppRun"
+
+# Bundle the GStreamer plugin set and the matching core libraries. Copying all
+# libgst* libraries also brings the RTP/riff helpers used by the MP4 plugin,
+# which linuxdeploy does not see because they are only linked by plugins.
+gst_plugin_target="$appdir/usr/lib/gstreamer-1.0"
+mkdir -p "$gst_plugin_target" "$appdir/usr/libexec/gstreamer-1.0"
+gst_plugins=(
+  libgstapp.so
+  libgstapetag.so
+  libgstaudioconvert.so
+  libgstaudioparsers.so
+  libgstaudioresample.so
+  libgstaudiotestsrc.so
+  libgstautodetect.so
+  libgstcoreelements.so
+  libgstflac.so
+  libgstgio.so
+  libgsticydemux.so
+  libgstid3demux.so
+  libgstisomp4.so
+  libgstmpg123.so
+  libgstogg.so
+  libgstopus.so
+  libgstplayback.so
+  libgstpulseaudio.so
+  libgsttypefindfunctions.so
+  libgstvolume.so
+  libgstvorbis.so
+  libgstwavparse.so
+)
+for plugin in "${gst_plugins[@]}"; do
+  [ -f "$gst_plugin_dir/$plugin" ] || {
+    echo "Missing GStreamer plugin $plugin in $gst_plugin_dir" >&2
+    exit 1
+  }
+  install -m 0644 "$gst_plugin_dir/$plugin" "$gst_plugin_target/$plugin"
+done
+install -m 0755 "$gst_scanner" "$appdir/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+
+gst_lib_dir="$(dirname "$gst_plugin_dir")"
+for library in "$gst_lib_dir"/libgst*.so.*; do
+  [ -f "$library" ] || continue
+  install -m 0644 "$(readlink -f "$library")" "$appdir/usr/lib/$(basename "$library")"
+done
+
+# Plugin-only dependencies that are not linked by WebKit itself. They are
+# standard desktop audio/codec libraries; copy them when the build host has
+# them so the AppImage does not depend on the target distribution's versions.
+for library in \
+  libFLAC.so.12 \
+  libmpg123.so.0 \
+  libogg.so.0 \
+  libopus.so.0 \
+  libvorbis.so.0 \
+  libvorbisenc.so.2 \
+  libpulse.so.0 \
+  libpulsecommon-16.1.so \
+  libsndfile.so.1 \
+  libasyncns.so.0 \
+  libapparmor.so.1; do
+  source_library="$(find /usr/lib /usr/lib64 \( -type f -o -type l \) -name "$library" -print -quit 2>/dev/null || true)"
+  [ -n "$source_library" ] || {
+    echo "Missing $library; install the matching GStreamer audio plugins before packaging" >&2
+    exit 1
+  }
+  # The build host usually provides the versioned soname as a symlink to the
+  # real library; install the target so the AppImage does not carry a dangling
+  # link.
+  source_library="$(readlink -f "$source_library")"
+  install -m 0644 "$source_library" "$appdir/usr/lib/$library"
+done
 
 webkit_lib="$(find "$appdir/usr/lib" -maxdepth 2 -name 'libwebkit2gtk-4.1.so.0' -print -quit)"
 [ -n "$webkit_lib" ] || { echo "linuxdeploy did not bundle libwebkit2gtk-4.1.so.0" >&2; exit 1; }
@@ -273,6 +391,27 @@ grep -a -F -q "$relative_webkit_path" "$webkit_lib" || {
   echo "WebKit helper path patch failed: $relative_webkit_path is missing" >&2
   exit 1
 }
+
+# WebKitGTK 2.52 hard-codes a soundcloud.com User-Agent quirk that replaces the
+# application's UA with Chrome/300.0.0.0. DataDome rejects that impossible
+# browser and never completes the slider. The WebsitePolicies custom-user-agent
+# API that supersedes the quirk only exists in 2.54, while the AppImage ships
+# Ubuntu 24.04's 2.52. Neutralize the domain match in the bundled copy instead;
+# the replacement has the same length and does not touch the page URL.
+if grep -a -F -q 'soundcloud.com' "$webkit_lib"; then
+  perl -0777 -pi -e 's/\Qsoundcloud.com\E/soundclouX.com/g' "$webkit_lib"
+  if grep -a -F -q 'soundcloud.com' "$webkit_lib"; then
+    echo "SoundCloud user-agent quirk patch failed: soundcloud.com is still present" >&2
+    exit 1
+  fi
+  grep -a -F -q 'soundclouX.com' "$webkit_lib" || {
+    echo "SoundCloud user-agent quirk patch failed: replacement is missing" >&2
+    exit 1
+  }
+  echo "Neutralized the WebKitGTK SoundCloud user-agent quirk"
+else
+  echo "WebKitGTK does not contain the SoundCloud user-agent quirk"
+fi
 
 # appimagetool requires the desktop file and icon at the AppDir root. linuxdeploy
 # normally creates them, but keep the fallback explicit so packaging fails for
