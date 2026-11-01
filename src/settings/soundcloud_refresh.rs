@@ -13,7 +13,9 @@ const REFRESH_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 impl super::SettingsView {
     /// Runs for the lifetime of the settings view, which is the lifetime of
     /// the app. A round refreshes only the tokens that entered their expiry
-    /// margin, so an idle account performs no network work.
+    /// margin, so an idle account performs no network work. A mobile token
+    /// without a refresh token is converted on the first round instead of
+    /// waiting for its margin, because the conversion needs a valid token.
     pub(crate) fn start_soundcloud_refresh(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(INITIAL_REFRESH_DELAY).await;

@@ -9,8 +9,8 @@ use crate::account_session::ServiceIdentity;
 use crate::search::{DEEZER_USER_AGENT, DeezerArl, SoundCloudToken};
 use crate::soundcloud_oauth::{
     DESKTOP_CLIENT_ID as SOUNDCLOUD_DESKTOP_CLIENT_ID,
-    MOBILE_CLIENT_ID as SOUNDCLOUD_MOBILE_CLIENT_ID, TOKEN_ENDPOINTS, token_expires_at,
-    token_expiry,
+    MOBILE_CLIENT_ID as SOUNDCLOUD_MOBILE_CLIENT_ID, TOKEN_ENDPOINTS, remint_mobile_token,
+    token_expires_at, token_expiry,
 };
 const DEEZER_USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
 const DEEZER_PROFILE_IMAGE_ORIGIN: &str = "https://cdn-images.dzcdn.net";
@@ -86,12 +86,27 @@ pub(crate) async fn web_login(
                 &authorization.verifier,
             )
             .await?;
-            if mobile.refresh_token.is_none() {
-                crate::diagnostics::event(
-                    "WARN",
-                    "SoundCloud mobile token exchange did not return a refresh token",
-                );
-            }
+            // The login exchange does not always issue a mobile refresh token.
+            // Convert that session immediately so it never depends on the
+            // short-lived access token it was just given.
+            let mobile = if mobile.refresh_token.is_none() {
+                match remint_mobile_token(&mobile.access_token, Utc::now().timestamp()).await {
+                    Ok(token) => ExchangedMobileToken {
+                        access_token: token.access_token,
+                        refresh_token: token.refresh_token,
+                        expires_at: token.expires_at.unwrap_or(mobile.expires_at),
+                    },
+                    Err(error) => {
+                        crate::diagnostics::event(
+                            "WARN",
+                            format!("SoundCloud mobile re-authorization failed: {error}"),
+                        );
+                        mobile
+                    }
+                }
+            } else {
+                mobile
+            };
             let mobile_token = SoundCloudToken::from_saved(&mobile.access_token)
                 .ok_or_else(|| "SoundCloud returned an invalid mobile OAuth token.".to_string())?;
             let mobile_user =

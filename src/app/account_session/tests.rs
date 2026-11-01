@@ -257,12 +257,12 @@ fn refresh_rotates_tokens_and_updates_the_mobile_cookie_jar() {
     store.stage_soundcloud_tokens(
         Some(crate::soundcloud_oauth::RefreshedToken {
             access_token: "new-desktop".into(),
-            refresh_token: "new-desktop-refresh".into(),
+            refresh_token: Some("new-desktop-refresh".into()),
             expires_at: Some(1_700_010_000),
         }),
         Some(crate::soundcloud_oauth::RefreshedToken {
             access_token: "new-mobile".into(),
-            refresh_token: "new-mobile-refresh".into(),
+            refresh_token: Some("new-mobile-refresh".into()),
             expires_at: Some(1_700_013_600),
         }),
     );

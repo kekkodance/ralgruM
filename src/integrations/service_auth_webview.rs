@@ -112,6 +112,7 @@ mod shared {
             .append_pair("code_challenge", challenge)
             .append_pair("code_challenge_method", "S256")
             .append_pair("state", state)
+            .append_pair("scope", "non-expiring")
             .append_pair("display", "popup");
         Ok(url.into())
     }

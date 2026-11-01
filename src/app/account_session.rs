@@ -426,7 +426,7 @@ impl SessionStore {
     ) -> SessionWrite {
         if let Some(token) = desktop {
             self.session.soundcloud = token.access_token;
-            self.session.soundcloud_refresh = token.refresh_token;
+            self.session.soundcloud_refresh = token.refresh_token.unwrap_or_default();
             self.session.soundcloud_expires_at = token.expires_at;
         }
         if let Some(token) = mobile {
@@ -437,7 +437,7 @@ impl SessionStore {
                 );
             }
             self.session.soundcloud_mobile = token.access_token;
-            self.session.soundcloud_mobile_refresh = token.refresh_token;
+            self.session.soundcloud_mobile_refresh = token.refresh_token.unwrap_or_default();
             self.session.soundcloud_mobile_expires_at = token.expires_at;
         }
         self.prepare_write()

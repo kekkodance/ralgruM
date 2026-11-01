@@ -13,8 +13,9 @@ use crate::{
     },
     search::{DeezerArl, DeezerCookieJar, SoundCloudToken},
     soundcloud_oauth::{
-        DESKTOP_CLIENT_ID, MOBILE_CLIENT_ID, RefreshTokenRequest, SoundCloudRefreshCompletion,
-        SoundCloudRefreshRequest, refresh_due, token_client_id,
+        DESKTOP_CLIENT_ID, MOBILE_CLIENT_ID, MobileTokenRefresh, NON_EXPIRING_EXPIRY,
+        RefreshTokenRequest, SoundCloudRefreshCompletion, SoundCloudRefreshRequest, refresh_due,
+        token_client_id,
     },
 };
 
@@ -55,6 +56,10 @@ pub(crate) struct AccountState {
     /// user-initiated sign-in that is still running.
     soundcloud_refresh_loading: bool,
     soundcloud_refresh_generation: u64,
+    /// The mobile access token that already received a re-mint attempt this
+    /// run. It bounds silent re-authorization to one try per token so a
+    /// rejected token cannot cause a request on every refresh check.
+    soundcloud_mobile_remint_attempted: Option<String>,
     /// Generation for the currently running Murglar login exchange. It is
     /// independent from the settings view generation so a login may finish
     /// and persist after the settings view closes.
@@ -315,6 +320,40 @@ fn refresh_request(
     })
 }
 
+/// A mobile token issued with the `non-expiring` scope has no refresh token
+/// and never expires, so it needs no maintenance. Any other mobile token
+/// without a refresh token is converted once per run through a silent
+/// re-authorization, which is the only way to keep it alive past its lifetime.
+fn mobile_token_request(
+    access_token: &str,
+    refresh_token: &str,
+    expires_at: Option<i64>,
+    now: i64,
+    attempted: &mut Option<String>,
+) -> Option<MobileTokenRefresh> {
+    let access_token = access_token.trim();
+    if access_token.is_empty() || expires_at == Some(NON_EXPIRING_EXPIRY) {
+        return None;
+    }
+    let refresh_token = refresh_token.trim();
+    if !refresh_token.is_empty() {
+        return refresh_due(expires_at, now).then(|| {
+            MobileTokenRefresh::RefreshToken(RefreshTokenRequest {
+                refresh_token: refresh_token.to_owned(),
+                client_id: token_client_id(access_token)
+                    .unwrap_or_else(|| MOBILE_CLIENT_ID.to_owned()),
+            })
+        });
+    }
+    if attempted.as_deref() == Some(access_token) {
+        return None;
+    }
+    *attempted = Some(access_token.to_owned());
+    Some(MobileTokenRefresh::Remint {
+        access_token: access_token.to_owned(),
+    })
+}
+
 impl AccountState {
     pub(crate) fn new(
         identity: DeviceIdentityStatus,
@@ -384,6 +423,7 @@ impl AccountState {
             service_identity_generation: 0,
             soundcloud_refresh_loading: false,
             soundcloud_refresh_generation: 0,
+            soundcloud_mobile_remint_attempted: None,
             murglar_login_epoch: 0,
             active_murglar_login_epoch: None,
             murglar_summary_trusted,
@@ -985,7 +1025,9 @@ impl AccountState {
     }
 
     /// Starts one background refresh round when a saved SoundCloud token is
-    /// inside the expiry margin. Both tokens are captured together so a
+    /// inside the expiry margin. A mobile token without a refresh token is
+    /// converted immediately instead, because silent re-authorization needs
+    /// the token to still be valid. Both tokens are captured together so a
     /// completion can never mix a new desktop token with an old mobile one.
     pub(super) fn begin_soundcloud_refresh(&mut self) -> Option<(u64, SoundCloudRefreshRequest)> {
         if self.soundcloud_refresh_loading {
@@ -1003,12 +1045,12 @@ impl AccountState {
             DESKTOP_CLIENT_ID,
             now,
         );
-        let mobile = refresh_request(
+        let mobile = mobile_token_request(
             session.soundcloud_mobile(),
             session.soundcloud_mobile_refresh(),
             session.soundcloud_mobile_expires_at(),
-            MOBILE_CLIENT_ID,
             now,
+            &mut self.soundcloud_mobile_remint_attempted,
         );
         if desktop.is_none() && mobile.is_none() {
             return None;
