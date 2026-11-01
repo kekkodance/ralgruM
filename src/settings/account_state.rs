@@ -12,6 +12,10 @@ use crate::{
         DeviceIdentityStatus, MediaCredentials, PaymentPlans, ReferralStats, media_credentials,
     },
     search::{DeezerArl, DeezerCookieJar, SoundCloudToken},
+    soundcloud_oauth::{
+        DESKTOP_CLIENT_ID, MOBILE_CLIENT_ID, RefreshTokenRequest, SoundCloudRefreshCompletion,
+        SoundCloudRefreshRequest, refresh_due, token_client_id,
+    },
 };
 
 pub(crate) struct AccountState {
@@ -46,6 +50,11 @@ pub(crate) struct AccountState {
     pub(super) soundcloud_identity_loading: bool,
     soundcloud_identity_attempted: bool,
     service_identity_generation: u64,
+    /// Guards the background SoundCloud token refresh loop. It is separate
+    /// from the service-auth generation so a token rotation cannot discard a
+    /// user-initiated sign-in that is still running.
+    soundcloud_refresh_loading: bool,
+    soundcloud_refresh_generation: u64,
     /// Generation for the currently running Murglar login exchange. It is
     /// independent from the settings view generation so a login may finish
     /// and persist after the settings view closes.
@@ -207,6 +216,8 @@ pub(super) enum SessionWriteKind {
     ServiceProfile {
         service: Service,
     },
+    /// Rotated SoundCloud access and refresh tokens.
+    SoundCloudRefresh,
     /// Best-effort re-write of the durable content after a failed write.
     Repair,
 }
@@ -286,6 +297,24 @@ impl SessionPersistence for Context<'_, AccountState> {
     }
 }
 
+fn refresh_request(
+    access_token: &str,
+    refresh_token: &str,
+    expires_at: Option<i64>,
+    fallback_client_id: &str,
+    now: i64,
+) -> Option<RefreshTokenRequest> {
+    let access_token = access_token.trim();
+    let refresh_token = refresh_token.trim();
+    if access_token.is_empty() || refresh_token.is_empty() || !refresh_due(expires_at, now) {
+        return None;
+    }
+    Some(RefreshTokenRequest {
+        refresh_token: refresh_token.to_owned(),
+        client_id: token_client_id(access_token).unwrap_or_else(|| fallback_client_id.to_owned()),
+    })
+}
+
 impl AccountState {
     pub(crate) fn new(
         identity: DeviceIdentityStatus,
@@ -353,6 +382,8 @@ impl AccountState {
             soundcloud_identity_loading: false,
             soundcloud_identity_attempted: false,
             service_identity_generation: 0,
+            soundcloud_refresh_loading: false,
+            soundcloud_refresh_generation: 0,
             murglar_login_epoch: 0,
             active_murglar_login_epoch: None,
             murglar_summary_trusted,
@@ -940,12 +971,94 @@ impl AccountState {
         }
     }
 
+    fn invalidate_soundcloud_refresh(&mut self) {
+        self.soundcloud_refresh_generation = self.soundcloud_refresh_generation.wrapping_add(1);
+        self.soundcloud_refresh_loading = false;
+    }
+
     fn set_service_status(&mut self, service: Service, message: impl Into<SharedString>) {
         self.service_status = Some(ServiceStatus::for_service(service, message));
     }
 
     fn set_all_service_status(&mut self, message: impl Into<SharedString>) {
         self.service_status = Some(ServiceStatus::all(message));
+    }
+
+    /// Starts one background refresh round when a saved SoundCloud token is
+    /// inside the expiry margin. Both tokens are captured together so a
+    /// completion can never mix a new desktop token with an old mobile one.
+    pub(super) fn begin_soundcloud_refresh(&mut self) -> Option<(u64, SoundCloudRefreshRequest)> {
+        if self.soundcloud_refresh_loading {
+            return None;
+        }
+        if self.service_loading {
+            return None;
+        }
+        let now = Utc::now().timestamp();
+        let session = self.session_store.as_ref()?.session();
+        let desktop = refresh_request(
+            session.soundcloud(),
+            session.soundcloud_refresh(),
+            session.soundcloud_expires_at(),
+            DESKTOP_CLIENT_ID,
+            now,
+        );
+        let mobile = refresh_request(
+            session.soundcloud_mobile(),
+            session.soundcloud_mobile_refresh(),
+            session.soundcloud_mobile_expires_at(),
+            MOBILE_CLIENT_ID,
+            now,
+        );
+        if desktop.is_none() && mobile.is_none() {
+            return None;
+        }
+        self.soundcloud_refresh_generation = self.soundcloud_refresh_generation.wrapping_add(1);
+        self.soundcloud_refresh_loading = true;
+        Some((
+            self.soundcloud_refresh_generation,
+            SoundCloudRefreshRequest { desktop, mobile },
+        ))
+    }
+
+    pub(super) fn complete_soundcloud_refresh(
+        &mut self,
+        generation: u64,
+        completion: SoundCloudRefreshCompletion,
+        persistence: &mut impl SessionPersistence,
+    ) {
+        if generation != self.soundcloud_refresh_generation {
+            return;
+        }
+        self.soundcloud_refresh_loading = false;
+        self.soundcloud_refresh_generation = self.soundcloud_refresh_generation.wrapping_add(1);
+        let desktop_refreshed = completion.desktop.is_some();
+        let mobile_refreshed = completion.mobile.is_some();
+        if (desktop_refreshed || mobile_refreshed)
+            && let Some(store) = self.session_store.as_mut()
+        {
+            let write = store.stage_soundcloud_tokens(completion.desktop, completion.mobile);
+            if self
+                .drive_session_write(
+                    persistence,
+                    SessionWriteKind::SoundCloudRefresh,
+                    self.revert_state(),
+                    write,
+                )
+                .failed
+            {
+                return;
+            }
+            crate::diagnostics::event(
+                "INFO",
+                format!(
+                    "SoundCloud token refresh completed desktop={desktop_refreshed} mobile={mobile_refreshed}"
+                ),
+            );
+        }
+        for error in completion.errors {
+            crate::diagnostics::event("WARN", format!("SoundCloud token refresh failed: {error}"));
+        }
     }
 
     pub(super) fn begin_service_auth(&mut self, service: Service) -> Option<u64> {
@@ -960,6 +1073,9 @@ impl AccountState {
             self.session_error = Some(SessionError::Filesystem);
             self.service_session_error = Some((service, SessionError::Filesystem));
             return None;
+        }
+        if service == Service::SoundCloud {
+            self.invalidate_soundcloud_refresh();
         }
         self.service_generation = self.service_generation.wrapping_add(1);
         self.invalidate_service_identity_requests();
@@ -1008,6 +1124,10 @@ impl AccountState {
                     credentials.desktop,
                     credentials.mobile,
                     credentials.soundcloud_cookies,
+                    credentials.soundcloud_refresh,
+                    credentials.soundcloud_mobile_refresh,
+                    credentials.soundcloud_expires_at,
+                    credentials.soundcloud_mobile_expires_at,
                     deezer_cookies,
                     credentials.deezer_user_id,
                     profile.clone(),
@@ -1070,6 +1190,9 @@ impl AccountState {
         service: Service,
         persistence: &mut impl SessionPersistence,
     ) {
+        if service == Service::SoundCloud {
+            self.invalidate_soundcloud_refresh();
+        }
         self.service_generation = self.service_generation.wrapping_add(1);
         self.invalidate_service_identity_requests();
         self.service_loading = false;
@@ -1117,6 +1240,7 @@ impl AccountState {
         self.generation = self.generation.wrapping_add(1);
         self.murglar_summary_trusted = false;
         self.service_generation = self.service_generation.wrapping_add(1);
+        self.invalidate_soundcloud_refresh();
         self.invalidate_service_identity_requests();
         self.loading = false;
         self.service_loading = false;
@@ -1545,6 +1669,12 @@ impl AccountState {
             SessionWriteKind::ServiceProfile { service } => {
                 self.restore_service_mirrors(&revert);
                 self.service_session_error = Some((service, error));
+            }
+            SessionWriteKind::SoundCloudRefresh => {
+                crate::diagnostics::event(
+                    "WARN",
+                    format!("SoundCloud token refresh could not be stored: {error}"),
+                );
             }
             SessionWriteKind::Repair => {}
         }

@@ -510,6 +510,10 @@ fn service_scopes_change_again_after_deezer_and_soundcloud_commit() {
                 desktop: "new-deezer".into(),
                 mobile: None,
                 soundcloud_cookies: None,
+                soundcloud_refresh: None,
+                soundcloud_mobile_refresh: None,
+                soundcloud_expires_at: None,
+                soundcloud_mobile_expires_at: None,
                 deezer_cookies: None,
                 deezer_user_id: Some("99".into()),
                 identity: Some(ServiceIdentity::new("deezer-user", None).unwrap()),
@@ -518,6 +522,10 @@ fn service_scopes_change_again_after_deezer_and_soundcloud_commit() {
                 desktop: "new-soundcloud".into(),
                 mobile: Some("new-mobile".into()),
                 soundcloud_cookies: Some("oauth_token=new-soundcloud; datadome=guard".into()),
+                soundcloud_refresh: Some("desktop-refresh".into()),
+                soundcloud_mobile_refresh: Some("mobile-refresh".into()),
+                soundcloud_expires_at: Some(1_700_000_000),
+                soundcloud_mobile_expires_at: Some(1_700_003_600),
                 deezer_cookies: None,
                 deezer_user_id: None,
                 identity: Some(ServiceIdentity::new("soundcloud-user", None).unwrap()),
@@ -564,6 +572,10 @@ fn service_auth_attempts_are_serial_and_completion_is_terminal() {
             desktop: "stale-deezer".into(),
             mobile: None,
             soundcloud_cookies: None,
+            soundcloud_refresh: None,
+            soundcloud_mobile_refresh: None,
+            soundcloud_expires_at: None,
+            soundcloud_mobile_expires_at: None,
             deezer_cookies: None,
             deezer_user_id: Some("stale-user".into()),
             identity: Some(ServiceIdentity::new("stale-user", None).unwrap()),
@@ -598,6 +610,10 @@ fn service_auth_survives_closing_and_reopening_settings() {
             desktop: "fresh-deezer".into(),
             mobile: None,
             soundcloud_cookies: None,
+            soundcloud_refresh: None,
+            soundcloud_mobile_refresh: None,
+            soundcloud_expires_at: None,
+            soundcloud_mobile_expires_at: None,
             deezer_cookies: None,
             deezer_user_id: Some("99".into()),
             identity: Some(ServiceIdentity::new("fresh-user", None).unwrap()),
@@ -719,6 +735,10 @@ fn provider_persistence_does_not_replace_a_global_murglar_error() {
             desktop: "new-deezer".into(),
             mobile: None,
             soundcloud_cookies: None,
+            soundcloud_refresh: None,
+            soundcloud_mobile_refresh: None,
+            soundcloud_expires_at: None,
+            soundcloud_mobile_expires_at: None,
             deezer_cookies: None,
             deezer_user_id: Some("99".into()),
             identity: Some(ServiceIdentity::new("deezer-user", None).unwrap()),
@@ -764,6 +784,10 @@ fn starting_new_provider_auth_resets_only_that_identity_attempt() {
             desktop: "new-deezer".into(),
             mobile: None,
             soundcloud_cookies: None,
+            soundcloud_refresh: None,
+            soundcloud_mobile_refresh: None,
+            soundcloud_expires_at: None,
+            soundcloud_mobile_expires_at: None,
             deezer_cookies: None,
             deezer_user_id: Some("99".into()),
             identity: None,
@@ -1818,4 +1842,146 @@ fn rollback_restores_only_durable_deezer_cookies() {
         state.deezer_cookie_jar.snapshot().as_deref(),
         Some("sid=old")
     );
+}
+
+#[test]
+fn soundcloud_refresh_runs_only_for_tokens_inside_the_expiry_margin() {
+    let temp = TempDir::new().unwrap();
+    let now = Utc::now().timestamp();
+    let mut store = SessionStore::load(temp.path()).unwrap();
+    store
+        .persist_service_login(
+            Service::SoundCloud,
+            "desktop-token".into(),
+            Some("mobile-token".into()),
+            Some("oauth_token=desktop-token; datadome=guard".into()),
+            Some("desktop-refresh".into()),
+            Some("mobile-refresh".into()),
+            Some(now + 3_600),
+            Some(now + 3_600),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let mut state = AccountState::new(identity(), Ok(store));
+
+    assert!(state.begin_soundcloud_refresh().is_none());
+}
+
+#[test]
+fn soundcloud_refresh_persists_rotated_tokens_for_both_sessions() {
+    let temp = TempDir::new().unwrap();
+    let now = Utc::now().timestamp();
+    let mut store = SessionStore::load(temp.path()).unwrap();
+    store
+        .persist_service_login(
+            Service::SoundCloud,
+            "desktop-token".into(),
+            Some("mobile-token".into()),
+            Some("oauth_token=mobile-token; datadome=guard".into()),
+            Some("desktop-refresh".into()),
+            Some("mobile-refresh".into()),
+            Some(now - 1),
+            Some(now - 1),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let mut state = AccountState::new(identity(), Ok(store));
+
+    let (generation, request) = state.begin_soundcloud_refresh().unwrap();
+    assert_eq!(
+        request
+            .desktop
+            .as_ref()
+            .map(|request| request.refresh_token.as_str()),
+        Some("desktop-refresh")
+    );
+    assert_eq!(
+        request
+            .mobile
+            .as_ref()
+            .map(|request| request.refresh_token.as_str()),
+        Some("mobile-refresh")
+    );
+
+    state.complete_soundcloud_refresh(
+        generation,
+        crate::soundcloud_oauth::SoundCloudRefreshCompletion {
+            desktop: Some(crate::soundcloud_oauth::RefreshedToken {
+                access_token: "new-desktop".into(),
+                refresh_token: "new-desktop-refresh".into(),
+                expires_at: Some(now + 3_600),
+            }),
+            mobile: Some(crate::soundcloud_oauth::RefreshedToken {
+                access_token: "new-mobile".into(),
+                refresh_token: "new-mobile-refresh".into(),
+                expires_at: Some(now + 3_600),
+            }),
+            errors: Vec::new(),
+        },
+        &mut DirectPersistence,
+    );
+
+    let session = state.session_store.as_ref().unwrap().session();
+    assert_eq!(session.soundcloud(), "new-desktop");
+    assert_eq!(session.soundcloud_refresh(), "new-desktop-refresh");
+    assert_eq!(session.soundcloud_mobile(), "new-mobile");
+    assert_eq!(session.soundcloud_mobile_refresh(), "new-mobile-refresh");
+    assert_eq!(
+        session.soundcloud_cookies(),
+        "oauth_token=new-mobile; datadome=guard"
+    );
+
+    let persisted = SessionStore::load(temp.path()).unwrap();
+    assert_eq!(persisted.session().soundcloud(), "new-desktop");
+    assert_eq!(
+        persisted.session().soundcloud_mobile_refresh(),
+        "new-mobile-refresh"
+    );
+}
+
+#[test]
+fn soundcloud_refresh_completion_is_discarded_when_a_login_starts() {
+    let temp = TempDir::new().unwrap();
+    let now = Utc::now().timestamp();
+    let mut store = SessionStore::load(temp.path()).unwrap();
+    store
+        .persist_service_login(
+            Service::SoundCloud,
+            "desktop-token".into(),
+            Some("mobile-token".into()),
+            Some("oauth_token=mobile-token".into()),
+            Some("desktop-refresh".into()),
+            Some("mobile-refresh".into()),
+            Some(now - 1),
+            Some(now - 1),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let mut state = AccountState::new(identity(), Ok(store));
+
+    let (generation, _) = state.begin_soundcloud_refresh().unwrap();
+    assert!(state.begin_service_auth(Service::SoundCloud).is_some());
+    state.complete_soundcloud_refresh(
+        generation,
+        crate::soundcloud_oauth::SoundCloudRefreshCompletion {
+            desktop: Some(crate::soundcloud_oauth::RefreshedToken {
+                access_token: "stale-desktop".into(),
+                refresh_token: "stale-refresh".into(),
+                expires_at: Some(now + 3_600),
+            }),
+            mobile: None,
+            errors: Vec::new(),
+        },
+        &mut DirectPersistence,
+    );
+
+    let session = state.session_store.as_ref().unwrap().session();
+    assert_eq!(session.soundcloud(), "desktop-token");
+    assert_eq!(session.soundcloud_refresh(), "desktop-refresh");
 }

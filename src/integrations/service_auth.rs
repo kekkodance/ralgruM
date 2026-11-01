@@ -1,19 +1,21 @@
-use futures::StreamExt as _;
+use chrono::Utc;
 use reqwest::header::{
     AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, USER_AGENT,
 };
 use serde_json::Value;
 
+use super::http::read_response_limited;
 use crate::account_session::ServiceIdentity;
 use crate::search::{DEEZER_USER_AGENT, DeezerArl, SoundCloudToken};
+use crate::soundcloud_oauth::{
+    DESKTOP_CLIENT_ID as SOUNDCLOUD_DESKTOP_CLIENT_ID,
+    MOBILE_CLIENT_ID as SOUNDCLOUD_MOBILE_CLIENT_ID, TOKEN_ENDPOINTS, token_expires_at,
+    token_expiry,
+};
 const DEEZER_USER_DATA_URL: &str = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
 const DEEZER_PROFILE_IMAGE_ORIGIN: &str = "https://cdn-images.dzcdn.net";
 const DEEZER_PROFILE_IMAGE_SIZE: &str = "100x100-000000-80-0-0.jpg";
 const SOUNDCLOUD_API: &str = "https://api-v2.soundcloud.com/me";
-// These OAuth validation IDs are tied to the desktop and mobile token flows.
-// Playback and catalog API requests use the shared search client ID instead.
-const SOUNDCLOUD_DESKTOP_CLIENT_ID: &str = "emAJdGEj1mm9yjoCD2jkixmgqrGIyfpi";
-const SOUNDCLOUD_MOBILE_CLIENT_ID: &str = "SSdQ80vM8nLPhbDBylHl2JFK6ElhBr9B";
 const MAX_DEEZER_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_SOUNDCLOUD_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_SOUNDCLOUD_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
@@ -29,6 +31,10 @@ pub(crate) struct ValidatedCredentials {
     pub(crate) desktop: String,
     pub(crate) mobile: Option<String>,
     pub(crate) soundcloud_cookies: Option<String>,
+    pub(crate) soundcloud_refresh: Option<String>,
+    pub(crate) soundcloud_mobile_refresh: Option<String>,
+    pub(crate) soundcloud_expires_at: Option<i64>,
+    pub(crate) soundcloud_mobile_expires_at: Option<i64>,
     pub(crate) deezer_cookies: Option<String>,
     pub(crate) deezer_user_id: Option<String>,
     pub(crate) identity: Option<ServiceIdentity>,
@@ -38,6 +44,13 @@ pub(crate) struct ValidatedCredentials {
 struct SoundCloudAuthenticatedUser {
     identity: ServiceIdentity,
     stable_id: String,
+}
+
+#[derive(Debug)]
+struct ExchangedMobileToken {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_at: i64,
 }
 
 pub(crate) async fn web_login(
@@ -56,6 +69,12 @@ pub(crate) async fn web_login(
         Service::SoundCloud => {
             let desktop = SoundCloudToken::from_saved(&captured.desktop)
                 .ok_or_else(|| "SoundCloud returned an invalid desktop OAuth token.".to_string())?;
+            if captured.soundcloud_refresh_token.is_none() {
+                crate::diagnostics::event(
+                    "WARN",
+                    "SoundCloud sign-in did not expose a desktop refresh token",
+                );
+            }
             let desktop_user =
                 validate_soundcloud_token(client, &desktop, SOUNDCLOUD_DESKTOP_CLIENT_ID).await?;
             let authorization = captured
@@ -67,15 +86,29 @@ pub(crate) async fn web_login(
                 &authorization.verifier,
             )
             .await?;
-            let mobile = SoundCloudToken::from_saved(&mobile)
+            if mobile.refresh_token.is_none() {
+                crate::diagnostics::event(
+                    "WARN",
+                    "SoundCloud mobile token exchange did not return a refresh token",
+                );
+            }
+            let mobile_token = SoundCloudToken::from_saved(&mobile.access_token)
                 .ok_or_else(|| "SoundCloud returned an invalid mobile OAuth token.".to_string())?;
             let mobile_user =
-                validate_soundcloud_token(client, &mobile, SOUNDCLOUD_MOBILE_CLIENT_ID).await?;
+                validate_soundcloud_token(client, &mobile_token, SOUNDCLOUD_MOBILE_CLIENT_ID)
+                    .await?;
             let identity = soundcloud_pair_identity(desktop_user, mobile_user)?;
             Ok(ValidatedCredentials {
                 desktop: captured.desktop,
-                mobile: Some(mobile.expose().to_owned()),
+                mobile: Some(mobile.access_token),
                 soundcloud_cookies: captured.soundcloud_cookies,
+                soundcloud_refresh: captured.soundcloud_refresh_token,
+                soundcloud_mobile_refresh: mobile.refresh_token,
+                soundcloud_expires_at: Some(token_expires_at(
+                    desktop.expose(),
+                    Utc::now().timestamp(),
+                )),
+                soundcloud_mobile_expires_at: Some(mobile.expires_at),
                 deezer_cookies: None,
                 deezer_user_id: None,
                 identity: Some(identity),
@@ -163,36 +196,14 @@ async fn validate_deezer(
         desktop: arl.expose().to_owned(),
         mobile: None,
         soundcloud_cookies: None,
+        soundcloud_refresh: None,
+        soundcloud_mobile_refresh: None,
+        soundcloud_expires_at: None,
+        soundcloud_mobile_expires_at: None,
         deezer_cookies: None,
         deezer_user_id: Some(profile.user_id),
         identity: profile.identity,
     })
-}
-
-async fn read_response_limited(
-    response: reqwest::Response,
-    limit: usize,
-) -> Result<Vec<u8>, String> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit as u64)
-    {
-        return Err(format!("response body exceeded the {limit}-byte limit"));
-    }
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream
-        .next()
-        .await
-        .transpose()
-        .map_err(|error| format!("response body read failed: {error}"))?
-    {
-        if chunk.len() > limit.saturating_sub(body.len()) {
-            return Err(format!("response body exceeded the {limit}-byte limit"));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
 }
 
 fn deezer_validation_request(
@@ -374,6 +385,10 @@ async fn validate_soundcloud(
         desktop: desktop.expose().to_owned(),
         mobile: Some(mobile.expose().to_owned()),
         soundcloud_cookies: None,
+        soundcloud_refresh: None,
+        soundcloud_mobile_refresh: None,
+        soundcloud_expires_at: token_expiry(desktop.expose()),
+        soundcloud_mobile_expires_at: token_expiry(mobile.expose()),
         deezer_cookies: None,
         deezer_user_id: None,
         identity: Some(identity),
@@ -477,31 +492,31 @@ async fn exchange_soundcloud_mobile_token(
     client: &reqwest::Client,
     code: &str,
     verifier: &str,
-) -> Result<String, String> {
-    const MOBILE_CLIENT_ID: &str = "SSdQ80vM8nLPhbDBylHl2JFK6ElhBr9B";
+) -> Result<ExchangedMobileToken, String> {
     const REDIRECT_URI: &str = "sc://auth";
     let form = [
         ("grant_type", "authorization_code"),
         ("code", code),
         ("code_verifier", verifier),
         ("redirect_uri", REDIRECT_URI),
-        ("client_id", MOBILE_CLIENT_ID),
+        ("client_id", SOUNDCLOUD_MOBILE_CLIENT_ID),
     ];
     let mut last_error = String::new();
-    for endpoint in [
-        "https://secure.soundcloud.com/oauth/token",
-        "https://api-auth.soundcloud.com/oauth/token",
-    ] {
-        let response = client
+    for endpoint in TOKEN_ENDPOINTS {
+        let response = match client
             .post(endpoint)
-            .query(&[("client_id", MOBILE_CLIENT_ID)])
+            .query(&[("client_id", SOUNDCLOUD_MOBILE_CLIENT_ID)])
             .header(USER_AGENT, DEEZER_USER_AGENT)
             .form(&form)
             .send()
             .await
-            .map_err(|error| {
-                format!("Could not exchange the SoundCloud mobile session: {error}")
-            })?;
+        {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = error.to_string();
+                continue;
+            }
+        };
         let status = response.status();
         let body = read_response_limited(response, MAX_SOUNDCLOUD_TOKEN_RESPONSE_BYTES)
             .await
@@ -516,9 +531,31 @@ async fn exchange_soundcloud_mobile_token(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| "SoundCloud did not return a mobile OAuth token.".to_string())?;
-            return SoundCloudToken::from_saved(token)
+            let access_token = SoundCloudToken::from_saved(token)
                 .map(|token| token.expose().to_owned())
-                .ok_or_else(|| "SoundCloud returned an invalid mobile OAuth token.".to_string());
+                .ok_or_else(|| "SoundCloud returned an invalid mobile OAuth token.".to_string())?;
+            let refresh_token = data
+                .get("refresh_token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let expires_at = data
+                .get("expires_in")
+                .and_then(|value| {
+                    value.as_i64().or_else(|| {
+                        value
+                            .as_u64()
+                            .map(|seconds| seconds.min(i64::MAX as u64) as i64)
+                    })
+                })
+                .map(|seconds| Utc::now().timestamp().saturating_add(seconds.max(0)))
+                .unwrap_or_else(|| token_expires_at(&access_token, Utc::now().timestamp()));
+            return Ok(ExchangedMobileToken {
+                access_token,
+                refresh_token,
+                expires_at,
+            });
         }
         last_error = format!(
             "{status}: {}",

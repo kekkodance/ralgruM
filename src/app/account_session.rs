@@ -24,6 +24,14 @@ pub(crate) struct AuthSession {
     soundcloud_mobile: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     soundcloud_cookies: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    soundcloud_refresh: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    soundcloud_mobile_refresh: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    soundcloud_expires_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    soundcloud_mobile_expires_at: Option<i64>,
     deezer: String,
     deezer_user_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -132,6 +140,22 @@ impl AuthSession {
 
     pub(crate) fn soundcloud_cookies(&self) -> &str {
         &self.soundcloud_cookies
+    }
+
+    pub(crate) fn soundcloud_refresh(&self) -> &str {
+        &self.soundcloud_refresh
+    }
+
+    pub(crate) fn soundcloud_mobile_refresh(&self) -> &str {
+        &self.soundcloud_mobile_refresh
+    }
+
+    pub(crate) fn soundcloud_expires_at(&self) -> Option<i64> {
+        self.soundcloud_expires_at
+    }
+
+    pub(crate) fn soundcloud_mobile_expires_at(&self) -> Option<i64> {
+        self.soundcloud_mobile_expires_at
     }
 
     pub(crate) fn soundcloud_profile(&self) -> Option<&ServiceIdentity> {
@@ -341,6 +365,10 @@ impl SessionStore {
         desktop: String,
         mobile: Option<String>,
         soundcloud_cookies: Option<String>,
+        soundcloud_refresh: Option<String>,
+        soundcloud_mobile_refresh: Option<String>,
+        soundcloud_expires_at: Option<i64>,
+        soundcloud_mobile_expires_at: Option<i64>,
         deezer_cookies: Option<String>,
         deezer_user_id: Option<String>,
         profile: Option<ServiceIdentity>,
@@ -353,11 +381,64 @@ impl SessionStore {
                 self.session.deezer_profile = profile;
             }
             crate::service_auth::Service::SoundCloud => {
+                let previous_desktop = self.session.soundcloud.clone();
+                let previous_mobile = self.session.soundcloud_mobile.clone();
+                let desktop_unchanged =
+                    !previous_desktop.trim().is_empty() && previous_desktop == desktop;
+                let mobile_unchanged = !previous_mobile.trim().is_empty()
+                    && mobile.as_deref() == Some(previous_mobile.as_str());
+                if !desktop_unchanged {
+                    self.session.soundcloud_refresh.clear();
+                    self.session.soundcloud_expires_at = None;
+                }
+                if !mobile_unchanged {
+                    self.session.soundcloud_mobile_refresh.clear();
+                    self.session.soundcloud_mobile_expires_at = None;
+                }
+                if let Some(refresh) = soundcloud_refresh {
+                    self.session.soundcloud_refresh = refresh;
+                }
+                if let Some(refresh) = soundcloud_mobile_refresh {
+                    self.session.soundcloud_mobile_refresh = refresh;
+                }
+                if let Some(expires_at) = soundcloud_expires_at {
+                    self.session.soundcloud_expires_at = Some(expires_at);
+                }
+                if let Some(expires_at) = soundcloud_mobile_expires_at {
+                    self.session.soundcloud_mobile_expires_at = Some(expires_at);
+                }
                 self.session.soundcloud = desktop;
                 self.session.soundcloud_mobile = mobile.unwrap_or_default();
                 self.session.soundcloud_cookies = soundcloud_cookies.unwrap_or_default();
                 self.session.soundcloud_profile = profile;
             }
+        }
+        self.prepare_write()
+    }
+
+    /// Applies one refresh round. Rotated refresh tokens are staged with the
+    /// access tokens so a crash between the two can never lose the only valid
+    /// refresh token.
+    pub(crate) fn stage_soundcloud_tokens(
+        &mut self,
+        desktop: Option<crate::soundcloud_oauth::RefreshedToken>,
+        mobile: Option<crate::soundcloud_oauth::RefreshedToken>,
+    ) -> SessionWrite {
+        if let Some(token) = desktop {
+            self.session.soundcloud = token.access_token;
+            self.session.soundcloud_refresh = token.refresh_token;
+            self.session.soundcloud_expires_at = token.expires_at;
+        }
+        if let Some(token) = mobile {
+            if !self.session.soundcloud_cookies.trim().is_empty() {
+                self.session.soundcloud_cookies = crate::search::merge_cookie_parts(
+                    &self.session.soundcloud_cookies,
+                    &format!("oauth_token={}", token.access_token),
+                );
+            }
+            self.session.soundcloud_mobile = token.access_token;
+            self.session.soundcloud_mobile_refresh = token.refresh_token;
+            self.session.soundcloud_mobile_expires_at = token.expires_at;
         }
         self.prepare_write()
     }
@@ -369,6 +450,10 @@ impl SessionStore {
         desktop: String,
         mobile: Option<String>,
         soundcloud_cookies: Option<String>,
+        soundcloud_refresh: Option<String>,
+        soundcloud_mobile_refresh: Option<String>,
+        soundcloud_expires_at: Option<i64>,
+        soundcloud_mobile_expires_at: Option<i64>,
         deezer_cookies: Option<String>,
         deezer_user_id: Option<String>,
         profile: Option<ServiceIdentity>,
@@ -379,6 +464,10 @@ impl SessionStore {
             desktop,
             mobile,
             soundcloud_cookies,
+            soundcloud_refresh,
+            soundcloud_mobile_refresh,
+            soundcloud_expires_at,
+            soundcloud_mobile_expires_at,
             deezer_cookies,
             deezer_user_id,
             profile,
@@ -439,6 +528,10 @@ impl SessionStore {
                 self.session.soundcloud = String::new();
                 self.session.soundcloud_mobile = String::new();
                 self.session.soundcloud_cookies.clear();
+                self.session.soundcloud_refresh.clear();
+                self.session.soundcloud_mobile_refresh.clear();
+                self.session.soundcloud_expires_at = None;
+                self.session.soundcloud_mobile_expires_at = None;
                 self.session.soundcloud_profile = None;
             }
         }
@@ -464,6 +557,10 @@ impl SessionStore {
         self.session.soundcloud = String::new();
         self.session.soundcloud_mobile = String::new();
         self.session.soundcloud_cookies.clear();
+        self.session.soundcloud_refresh.clear();
+        self.session.soundcloud_mobile_refresh.clear();
+        self.session.soundcloud_expires_at = None;
+        self.session.soundcloud_mobile_expires_at = None;
         self.session.soundcloud_profile = None;
         self.prepare_write()
     }
@@ -600,6 +697,10 @@ fn parse_legacy_session(bytes: &[u8]) -> Option<AuthSession> {
         "soundcloud",
         "soundcloudMobile",
         "soundcloudCookies",
+        "soundcloudRefresh",
+        "soundcloudMobileRefresh",
+        "soundcloudExpiresAt",
+        "soundcloudMobileExpiresAt",
         "deezer",
         "deezerUserId",
         "soundcloudProfile",

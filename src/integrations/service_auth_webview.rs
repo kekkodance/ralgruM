@@ -5,6 +5,7 @@ pub(crate) struct BrowserCredentials {
     pub(crate) desktop: String,
     pub(crate) mobile_authorization: Option<MobileAuthorization>,
     pub(crate) soundcloud_cookies: Option<String>,
+    pub(crate) soundcloud_refresh_token: Option<String>,
     pub(crate) deezer_cookies: Option<String>,
 }
 
@@ -32,16 +33,17 @@ mod shared {
     use url::Url;
     use uuid::Uuid;
 
-    use crate::service_auth::Service;
+    use crate::{service_auth::Service, soundcloud_oauth::MOBILE_CLIENT_ID};
 
     pub(super) const DEEZER_LOGIN_URL: &str =
         "https://www.deezer.com/login?redirect_type=page&redirect_link=%2Faccount%2F";
     pub(super) const DEEZER_COOKIE_URL: &str = "https://www.deezer.com/";
     pub(super) const SOUNDCLOUD_LOGIN_URL: &str = "https://soundcloud.com/signin";
     pub(super) const SOUNDCLOUD_COOKIE_URL: &str = "https://soundcloud.com/";
+    pub(super) const SOUNDCLOUD_REFRESH_COOKIE_NAME: &str = "oauth_refresh_token";
     pub(super) const SOUNDCLOUD_MOBILE_COOKIE_URL: &str = "https://api-mobile.soundcloud.com/";
     pub(super) const SOUNDCLOUD_AUTHORIZE_URL: &str = "https://secure.soundcloud.com/authorize";
-    pub(super) const SOUNDCLOUD_MOBILE_CLIENT_ID: &str = "SSdQ80vM8nLPhbDBylHl2JFK6ElhBr9B";
+    pub(super) const SOUNDCLOUD_MOBILE_CLIENT_ID: &str = MOBILE_CLIENT_ID;
     pub(super) const SOUNDCLOUD_MOBILE_REDIRECT_URI: &str = "sc://auth";
     pub(super) const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
     pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -68,6 +70,19 @@ mod shared {
             Service::Deezer => "arl",
             Service::SoundCloud => "oauth_token",
         }
+    }
+
+    /// Extracts the rotating SoundCloud refresh cookie from a harvested
+    /// soundcloud.com cookie list. The access token cookie is polled
+    /// separately because the refresh cookie may appear a moment later.
+    pub(super) fn soundcloud_refresh_token<'a>(
+        cookies: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Option<String> {
+        cookies
+            .into_iter()
+            .find(|(name, _)| *name == SOUNDCLOUD_REFRESH_COOKIE_NAME)
+            .map(|(_, value)| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
     }
 
     pub(super) fn navigation_allowed(raw_url: &str) -> bool {
@@ -268,9 +283,10 @@ mod platform {
 
     use super::shared::{
         COOKIE_CONSENT_REJECTION_SCRIPT, DEEZER_COOKIE_URL, LOGIN_TIMEOUT, POLL_INTERVAL,
-        SOUNDCLOUD_MOBILE_COOKIE_URL, cookie_name, cookie_url, is_soundcloud_redirect, login_url,
-        navigation_allowed, open_auth_profile, pkce_pair, schedule_profile_cleanup,
-        soundcloud_authorization_code, soundcloud_authorize_url,
+        SOUNDCLOUD_COOKIE_URL, SOUNDCLOUD_MOBILE_COOKIE_URL, cookie_name, cookie_url,
+        is_soundcloud_redirect, login_url, navigation_allowed, open_auth_profile, pkce_pair,
+        schedule_profile_cleanup, soundcloud_authorization_code, soundcloud_authorize_url,
+        soundcloud_refresh_token,
     };
     use super::{BrowserCredentials, MobileAuthorization, Service};
 
@@ -532,6 +548,21 @@ mod platform {
                 None
             };
 
+            let soundcloud_refresh_token = if service == Service::SoundCloud {
+                let cookies = webview
+                    .as_ref()
+                    .expect("WebView was just initialized")
+                    .cookies_for_url(SOUNDCLOUD_COOKIE_URL)
+                    .map_err(|error| {
+                        format!("Could not preserve the SoundCloud refresh session: {error}")
+                    })?;
+                soundcloud_refresh_token(
+                    cookies.iter().map(|cookie| (cookie.name(), cookie.value())),
+                )
+            } else {
+                None
+            };
+
             let deezer_cookies = if service == Service::Deezer {
                 // The ARL is captured separately in the loop above, so every
                 // other deezer.com cookie joins the persistent jar here.
@@ -583,6 +614,7 @@ mod platform {
                 desktop,
                 mobile_authorization,
                 soundcloud_cookies,
+                soundcloud_refresh_token,
                 deezer_cookies,
             })
         })();
@@ -656,8 +688,9 @@ mod platform {
 
     use super::shared::{
         COOKIE_CONSENT_REJECTION_SCRIPT, DEEZER_COOKIE_URL, LOGIN_TIMEOUT, POLL_INTERVAL,
-        SOUNDCLOUD_MOBILE_COOKIE_URL, cookie_name, cookie_url, is_soundcloud_redirect, login_url,
-        navigation_allowed, pkce_pair, soundcloud_authorization_code, soundcloud_authorize_url,
+        SOUNDCLOUD_COOKIE_URL, SOUNDCLOUD_MOBILE_COOKIE_URL, cookie_name, cookie_url,
+        is_soundcloud_redirect, login_url, navigation_allowed, pkce_pair,
+        soundcloud_authorization_code, soundcloud_authorize_url, soundcloud_refresh_token,
     };
     use super::{BrowserCredentials, MobileAuthorization, Service};
 
@@ -1008,10 +1041,25 @@ mod platform {
         } else {
             None
         };
+        let soundcloud_refresh_token = if session.service == Service::SoundCloud {
+            let cookies = match session.webview.cookies_for_url(SOUNDCLOUD_COOKIE_URL) {
+                Ok(cookies) => cookies,
+                Err(error) => {
+                    session.result = Some(Err(format!(
+                        "Could not preserve the SoundCloud refresh session: {error}"
+                    )));
+                    return;
+                }
+            };
+            soundcloud_refresh_token(cookies.iter().map(|cookie| (cookie.name(), cookie.value())))
+        } else {
+            None
+        };
         session.result = Some(Ok(BrowserCredentials {
             desktop,
             mobile_authorization: session.mobile_authorization.take(),
             soundcloud_cookies,
+            soundcloud_refresh_token,
             deezer_cookies,
         }));
     }
@@ -1292,6 +1340,7 @@ mod tests {
     use super::shared::{
         AUTH_PROFILE_PREFIX, AUTH_PROFILE_SWEEP_AGE, is_soundcloud_redirect, navigation_allowed,
         open_auth_profile_in, pkce_pair, soundcloud_authorization_code, soundcloud_authorize_url,
+        soundcloud_refresh_token,
     };
 
     fn history_played_at(value: &serde_json::Value, track_id: u64) -> Option<u64> {
@@ -1341,6 +1390,25 @@ mod tests {
         assert_eq!(
             parameters.get("redirect_uri").map(|value| value.as_ref()),
             Some("sc://auth")
+        );
+    }
+
+    #[test]
+    fn soundcloud_refresh_cookie_is_trimmed_and_ignores_other_cookies() {
+        assert_eq!(
+            soundcloud_refresh_token([
+                ("oauth_token", "access"),
+                ("oauth_refresh_token", "  refresh-sentinel  "),
+            ]),
+            Some("refresh-sentinel".into())
+        );
+        assert_eq!(
+            soundcloud_refresh_token([("oauth_token", "access"), ("datadome", "guard")]),
+            None
+        );
+        assert_eq!(
+            soundcloud_refresh_token([("oauth_refresh_token", "   ")]),
+            None
         );
     }
 

@@ -25,7 +25,7 @@ pub(crate) use app::{
     window_state,
 };
 pub(crate) use domain::smart_mix_title;
-pub(crate) use integrations::{discord, service_auth, service_auth_webview};
+pub(crate) use integrations::{discord, service_auth, service_auth_webview, soundcloud_oauth};
 #[cfg(target_os = "linux")]
 pub(crate) use platform::linux_window;
 pub(crate) use platform::{browser_link, external_url, media_control, tray};
@@ -303,7 +303,10 @@ fn main() {
                             cx,
                         )
                     });
-                    settings.update(cx, |settings, cx| settings.fetch_startup_profile(cx));
+                    settings.update(cx, |settings, cx| {
+                        settings.fetch_startup_profile(cx);
+                        settings.start_soundcloud_refresh(cx);
+                    });
                     let window_state = cx.new(|cx| {
                         window_state::WindowStateManager::new(
                             settings.clone(),

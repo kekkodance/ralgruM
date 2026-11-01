@@ -43,6 +43,7 @@ mod plugins_panel;
 mod runtime_persistence;
 mod service_panel;
 mod settings_transfer_dialog;
+mod soundcloud_refresh;
 mod toggle;
 
 pub(crate) use account_state::{AccountState, SidebarPass};
