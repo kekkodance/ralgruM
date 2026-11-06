@@ -35,7 +35,7 @@ use crate::{
     context_menu::ContextMenuExt,
     motion::SegmentedSelectorMotion,
     navigation_state::LyricsSource,
-    playback::{PlaybackModel, PlaybackStatus, PlaybackTrack, RightSidebar},
+    playback::{PlaybackModel, PlaybackProgress, PlaybackStatus, PlaybackTrack, RightSidebar},
     playing_indicator::playing_bars,
     theme::{BACKGROUND, BORDER, FOREGROUND, MUTED, PRIMARY, SURFACE_RAISED},
 };
@@ -108,6 +108,7 @@ fn lyrics_track_identity(track: &PlaybackTrack) -> String {
 
 pub(crate) struct LyricsPanel {
     playback: gpui::Entity<PlaybackModel>,
+    progress: gpui::Entity<PlaybackProgress>,
     runtime: Arc<Runtime>,
     client: client::LyricsClient,
     cache: LyricsCache,
@@ -152,9 +153,15 @@ enum Status {
 }
 
 impl LyricsPanel {
-    pub(crate) fn new(playback: gpui::Entity<PlaybackModel>, runtime: Arc<Runtime>) -> Self {
-        Self {
+    pub(crate) fn new(
+        playback: gpui::Entity<PlaybackModel>,
+        progress: gpui::Entity<PlaybackProgress>,
+        runtime: Arc<Runtime>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let this = Self {
             playback,
+            progress,
             runtime,
             client: client::LyricsClient::new(),
             cache: LyricsCache::default(),
@@ -187,7 +194,50 @@ impl LyricsPanel {
             center_retry_remaining: 0,
             center_retry_task_id: 0,
             center_retry_task_running: false,
-        }
+        };
+        cx.observe(&this.playback, |this, _, cx| this.sync_from_playback(cx))
+            .detach();
+        cx.observe(&this.progress, |this, _, cx| this.sync_from_playback(cx))
+            .detach();
+        this
+    }
+
+    /// Re-read the transport after construction or an external state reset.
+    pub(crate) fn refresh_from_playback(&mut self, cx: &mut Context<Self>) {
+        self.sync_from_playback(cx);
+    }
+
+    /// Keep the panel in step with the track lifecycle and the high-frequency
+    /// transport clock. The 4 Hz clock only repaints when the active lyric
+    /// line changes.
+    fn sync_from_playback(&mut self, cx: &mut Context<Self>) {
+        let (visible, track, follows_playback, generation) = {
+            let state = &self.playback.read(cx).state;
+            let visible = state.right_sidebar == RightSidebar::Lyrics
+                || state.right_sidebar_popped() == Some(RightSidebar::Lyrics);
+            let track = if visible {
+                state.lyrics_display_track()
+            } else {
+                state.current()
+            };
+            (
+                visible,
+                track.cloned(),
+                state.lyrics_follows_playback(),
+                state.generation,
+            )
+        };
+        let position = if visible && follows_playback {
+            self.progress.read(cx).for_generation(generation).position.as_secs_f64()
+        } else {
+            0.0
+        };
+        self.sync_track(
+            visible,
+            track.as_ref().map(LyricsTrackInput::from_playback),
+            position,
+            cx,
+        );
     }
 
     /// Whether this panel renders inside the detached floating window.

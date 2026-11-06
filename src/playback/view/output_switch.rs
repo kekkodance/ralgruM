@@ -88,6 +88,7 @@ impl PlaybackModel {
                 );
             }
         }
+        self.publish_progress(cx);
         self.sync_discord();
     }
 

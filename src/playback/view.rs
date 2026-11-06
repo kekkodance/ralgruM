@@ -30,8 +30,8 @@ use output_switch::{OutputResume, restore_output_state};
 use super::state::{ExactQueueAppend, ExactQueueAppendTicket};
 use super::{
     AudioCache, ContentPreferences, DeezerFlowKind, ExtensionApply, PlaybackContext,
-    PlaybackProvider, PlaybackState, PlaybackStatus, PlaybackTrack, PreviousAction,
-    QueueExtensionTicket, ResolvedTrackInfo, RightSidebar, asio_drivers,
+    PlaybackProgress, PlaybackProvider, PlaybackState, PlaybackStatus, PlaybackTrack,
+    PreviousAction, QueueExtensionTicket, ResolvedTrackInfo, RightSidebar, asio_drivers,
     deezer_extension::{self, ExtensionObserverKey},
     engine::{AudioEngine, AudioOutputTarget, RodioEngine, SeekCompletion, SeekOutcome},
     fade::{
@@ -63,6 +63,7 @@ pub(crate) struct PlaybackModel {
     cancellation: CancellationToken,
     pub(crate) seek_slider: Entity<SliderState>,
     pub(crate) volume_slider: Entity<SliderState>,
+    pub(crate) progress: Entity<PlaybackProgress>,
     seek_slider_interaction: SeekSliderInteraction,
     seek_commit_epoch: u64,
     discord: DiscordPresence,
@@ -452,6 +453,7 @@ impl PlaybackModel {
                 .step(0.01)
                 .default_value(volume)
         });
+        let progress = cx.new(|_| PlaybackProgress::from_state(&state));
         let target = resolve_saved_output_target(
             audio_output.asio_mode,
             audio_output.output_device.as_deref(),
@@ -490,6 +492,7 @@ impl PlaybackModel {
             cancellation: CancellationToken::new(),
             seek_slider: seek_slider.clone(),
             volume_slider: volume_slider.clone(),
+            progress,
             seek_slider_interaction: SeekSliderInteraction::default(),
             seek_commit_epoch: 0,
             discord: DiscordPresence::new(discord_presence, &runtime),
@@ -663,7 +666,7 @@ impl PlaybackModel {
         }
     }
 
-    fn finish_user_toggle_immediately(&mut self, playing: bool) {
+    fn finish_user_toggle_immediately(&mut self, playing: bool, cx: &mut Context<Self>) {
         self.user_fade_task.take();
         self.user_fade_supervisor.cancel();
         if let Ok(engine) = &self.engine {
@@ -676,6 +679,7 @@ impl PlaybackModel {
                 engine.reset_transport_gain(0.0);
                 pause_silently(|| engine.set_volume(0.0), || engine.pause());
                 self.state.position = engine.position().min(self.state.duration);
+                self.publish_progress(cx);
             }
         }
     }
@@ -685,7 +689,7 @@ impl PlaybackModel {
             return;
         };
         if !may_fade || self.state.volume <= f32::EPSILON {
-            self.finish_user_toggle_immediately(playing);
+            self.finish_user_toggle_immediately(playing, cx);
             return;
         }
 
@@ -735,6 +739,7 @@ impl PlaybackModel {
                             }
                             pause_silently(|| engine.set_volume(0.0), || engine.pause());
                             this.state.position = engine.position().min(this.state.duration);
+                            this.publish_progress(cx);
                             cx.notify();
                         }
                         this.user_fade_supervisor.complete(plan);
@@ -769,6 +774,7 @@ impl PlaybackModel {
             self.pending_output_resume = None;
         }
         self.state.fail(generation, error.to_owned());
+        self.publish_progress(cx);
         self.sync_discord();
         crate::toast::push_global(
             cx,
@@ -793,6 +799,7 @@ impl PlaybackModel {
     }
 
     fn start(&mut self, generation: u64, cx: &mut Context<Self>) {
+        self.publish_progress(cx);
         let restoring_output = self
             .pending_output_resume
             .is_some_and(|resume| resume.generation == generation);
@@ -939,6 +946,7 @@ impl PlaybackModel {
                                     duration,
                                     initial_progress,
                                 );
+                                this.publish_progress(cx);
                                 this.reapply_automation_after_load(cx);
                                 this.restore_output_position(generation, cx);
                                 this.current_audio_info =
@@ -1102,10 +1110,12 @@ impl PlaybackModel {
             engine.stop();
         }
         if self.state.abandon_pending_load() {
+            self.publish_progress(cx);
             cx.notify();
             return;
         }
         if self.state.stop_loading() {
+            self.publish_progress(cx);
             self.sync_discord();
             cx.notify();
         }
@@ -1130,6 +1140,7 @@ impl PlaybackModel {
             engine.stop();
         }
         if self.state.begin_pending_load() {
+            self.publish_progress(cx);
             self.sync_discord();
             cx.notify();
         }
@@ -1139,6 +1150,7 @@ impl PlaybackModel {
     /// track.
     pub(crate) fn abandon_pending_load(&mut self, cx: &mut Context<Self>) {
         if self.state.abandon_pending_load() {
+            self.publish_progress(cx);
             cx.notify();
         }
     }
@@ -1181,6 +1193,7 @@ impl PlaybackModel {
                 if standby_dropped {
                     self.standby = StandbyPhase::Idle;
                 }
+                self.publish_progress(cx);
                 self.sync_discord();
                 cx.notify();
             }
@@ -1209,6 +1222,7 @@ impl PlaybackModel {
             if let Ok(engine) = self.engine.as_mut() {
                 engine.stop();
             }
+            self.publish_progress(cx);
             self.sync_discord();
             cx.notify();
         }
@@ -1302,6 +1316,7 @@ impl PlaybackModel {
             }
             Err(_) => {
                 self.state.seek(position);
+                self.publish_progress(cx);
                 return;
             }
         };
@@ -1325,6 +1340,7 @@ impl PlaybackModel {
             ),
         }
         self.arm_seek_completion(completion, cx);
+        self.publish_progress(cx);
     }
 
     pub(crate) fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
@@ -1398,6 +1414,7 @@ impl PlaybackModel {
         self.reset_extension_state();
         self.reset_download_progress();
         self.current_audio_info = None;
+        self.publish_progress(cx);
         self.sync_discord();
         cx.notify();
     }
@@ -1420,8 +1437,22 @@ impl PlaybackModel {
         self.reset_extension_state();
         self.reset_download_progress();
         self.current_audio_info = None;
+        self.publish_progress(cx);
         self.sync_discord();
         cx.notify();
+    }
+
+    /// Publish the transport snapshot without invalidating the whole playback
+    /// model. Views that only care about track identity stay on the model's
+    /// discrete lifecycle notifications.
+    fn publish_progress(&mut self, cx: &mut Context<Self>) {
+        let next = PlaybackProgress::from_state(&self.state);
+        self.progress.update(cx, |progress, cx| {
+            if *progress != next {
+                *progress = next;
+                cx.notify();
+            }
+        });
     }
 
     fn poll(&mut self, cx: &mut Context<Self>) {
@@ -1437,10 +1468,13 @@ impl PlaybackModel {
                 .and_then(|engine| engine.timeline_suffix_state()),
             _ => None,
         };
-        let buffered_changed = apply_buffered_progress(&mut self.state, progress, timeline_suffix);
+        // Buffered range changes reach the views through the progress entity
+        // below, so the model itself does not need a separate notification.
+        apply_buffered_progress(&mut self.state, progress, timeline_suffix);
         match self.state.status {
             PlaybackStatus::Loading => {
-                if buffered_changed || completed_audio_info {
+                self.publish_progress(cx);
+                if completed_audio_info {
                     cx.notify();
                 }
             }
@@ -1477,7 +1511,8 @@ impl PlaybackModel {
                 }
                 let (deferred_seek, position, ended, completion) = {
                     let Ok(engine) = self.engine.as_mut() else {
-                        if buffered_changed || completed_audio_info {
+                        self.publish_progress(cx);
+                        if completed_audio_info {
                             cx.notify();
                         }
                         return;
@@ -1511,6 +1546,7 @@ impl PlaybackModel {
                     }
                 };
                 self.state.position = position;
+                self.publish_progress(cx);
                 if self.wake_stall_probe.is_some() && self.check_wake_stall(position, cx) {
                     return;
                 }
@@ -1545,18 +1581,17 @@ impl PlaybackModel {
                     self.next(cx);
                     return;
                 }
-                if buffered_changed
-                    || completed_audio_info
-                    || self.state.status == PlaybackStatus::Playing
-                {
+                if completed_audio_info {
                     cx.notify();
                 }
                 if self.state.status == PlaybackStatus::Playing {
                     self.advance_standby(cx);
                 }
+                self.publish_progress(cx);
             }
             _ => {
-                if buffered_changed || completed_audio_info {
+                self.publish_progress(cx);
+                if completed_audio_info {
                     cx.notify();
                 }
             }

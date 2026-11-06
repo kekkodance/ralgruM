@@ -19,7 +19,7 @@ use crate::{
         Category as LibraryCategory, FavoriteController, FavoriteState, LibraryEvent, LibraryView,
         Service as LibraryService,
     },
-    lyrics::{LyricsPanel, LyricsTrackInput},
+    lyrics::LyricsPanel,
     navigation_state::{RightSidebarView, StartPage},
     playback::{
         AudioOutputSettings, ListenHistorySignal, PlaybackModel, PlaybackProvider, PlaybackView,
@@ -88,7 +88,6 @@ pub(crate) struct RalgrumApp {
     last_library_selection: (LibraryService, LibraryCategory),
     last_account_scope: String,
     last_download_scope: u128,
-    last_lyrics_track_identity: Option<(PlaybackProvider, String)>,
     search: Entity<SearchView>,
     settings: Entity<SettingsView>,
     account: Entity<AccountState>,
@@ -801,9 +800,11 @@ impl RalgrumApp {
         subscribe_download_notices(&downloads, cx);
         let favorite_controller = cx
             .new(|_| FavoriteController::new(account.clone(), favorites.clone(), runtime.clone()));
-        let lyrics = cx.new(|_| LyricsPanel::new(playback.clone(), runtime.clone()));
+        let progress = playback.read(cx).progress.clone();
+        let lyrics = cx.new(|cx| LyricsPanel::new(playback.clone(), progress, runtime.clone(), cx));
         lyrics.update(cx, |lyrics, cx| {
-            lyrics.set_default_provider(saved.lyrics_source, cx)
+            lyrics.set_default_provider(saved.lyrics_source, cx);
+            lyrics.refresh_from_playback(cx);
         });
         let library = cx.new(|cx| {
             LibraryView::new(
@@ -918,7 +919,6 @@ impl RalgrumApp {
             }
         })
         .detach();
-        let lyrics_for_playback = lyrics.clone();
         let mut last_shell_playback = {
             let state = &playback.read(cx).state;
             (
@@ -936,24 +936,9 @@ impl RalgrumApp {
         let popout_lyrics = lyrics.clone();
         let popout_queue = queue.clone();
         cx.observe(&playback, move |this, playback, cx| {
-            let (sync_args, current) = {
+            let current = {
                 let state = &playback.read(cx).state;
-                let is_lyrics = state.right_sidebar == RightSidebar::Lyrics
-                    || state.right_sidebar_popped() == Some(RightSidebar::Lyrics);
-                let lyrics_track = if is_lyrics {
-                    state
-                        .lyrics_display_track()
-                        .map(LyricsTrackInput::from_playback)
-                } else {
-                    state.current().map(LyricsTrackInput::from_playback)
-                };
-                let position = if is_lyrics && state.lyrics_follows_playback() {
-                    state.position.as_secs_f64()
-                } else {
-                    0.0
-                };
-                let sync_args = Some((lyrics_track, position, is_lyrics));
-                let current = (
+                (
                     state.right_sidebar,
                     state.current().map(|t| (t.provider, t.id.clone())),
                     state
@@ -961,8 +946,7 @@ impl RalgrumApp {
                         .map(|t| (t.provider, t.id.clone())),
                     state.status,
                     state.player_bar_open(),
-                );
-                (sync_args, current)
+                )
             };
             this.sync_right_sidebar_transition(current.0, cx);
             let popped = playback.read(cx).state.right_sidebar_popped();
@@ -985,11 +969,6 @@ impl RalgrumApp {
             if sidebar_exits_settings {
                 this.settings_mode = false;
                 this.mobile_sidebar_open = false;
-            }
-            if let Some((lyrics_track, position, is_lyrics)) = sync_args {
-                lyrics_for_playback.update(cx, |lyrics, cx| {
-                    lyrics.sync_track(is_lyrics, lyrics_track, position, cx);
-                });
             }
             if exited_settings || last_shell_playback != current {
                 last_shell_playback = current;
@@ -1275,7 +1254,6 @@ impl RalgrumApp {
             last_library_selection: initial_library_selection,
             last_account_scope: initial_account_scope,
             last_download_scope: account.read(cx).credential_generation(),
-            last_lyrics_track_identity: None,
             search,
             settings,
             account,
@@ -1494,56 +1472,13 @@ impl Render for RalgrumApp {
             now,
             cx.reduce_motion(),
         );
-        let (right_sidebar, position, player_bar_open, right_sidebar_popped) = {
-            let state = &self.playback.read(cx).state;
-            (
-                state.right_sidebar,
-                state.position,
-                state.player_bar_open(),
-                state.right_sidebar_popped(),
-            )
-        };
+        let player_bar_open = self.playback.read(cx).state.player_bar_open();
         let player_bar_visual = self.player_bar_motion.prepare(
             player_bar_open,
             metrics.narrow_content,
             now,
             cx.reduce_motion(),
         );
-        // The lyrics panel shows the playing track unless a context track was
-        // requested from a menu; a context track has no playback position, so
-        // synced highlighting stays parked at the top.
-        let (lyrics_track, lyrics_follows_playback) = {
-            let state = &self.playback.read(cx).state;
-            if right_sidebar == RightSidebar::Lyrics
-                || right_sidebar_popped == Some(RightSidebar::Lyrics)
-            {
-                (
-                    state.lyrics_display_track().cloned(),
-                    state.lyrics_follows_playback(),
-                )
-            } else {
-                (state.current().cloned(), true)
-            }
-        };
-        let lyrics_track_identity = lyrics_track.as_ref().map(|t| (t.provider, t.id.clone()));
-        let lyrics_track_changed = self.last_lyrics_track_identity != lyrics_track_identity;
-        let lyrics_visible = right_sidebar == RightSidebar::Lyrics
-            || right_sidebar_popped == Some(RightSidebar::Lyrics);
-        if lyrics_visible || lyrics_track_changed {
-            self.last_lyrics_track_identity = lyrics_track_identity;
-            self.lyrics.update(cx, |lyrics, cx| {
-                lyrics.sync_track(
-                    lyrics_visible,
-                    lyrics_track.as_ref().map(LyricsTrackInput::from_playback),
-                    if lyrics_follows_playback {
-                        position.as_secs_f64()
-                    } else {
-                        0.0
-                    },
-                    cx,
-                );
-            });
-        }
         let main_page_key = if self.settings_mode {
             "settings"
         } else {

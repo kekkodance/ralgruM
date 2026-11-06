@@ -14,10 +14,7 @@ impl Render for PlaybackView {
         let (
             current,
             status,
-            position,
             duration,
-            buffered,
-            suffix_buffered,
             volume,
             generation,
             seek_commit_epoch,
@@ -34,10 +31,7 @@ impl Render for PlaybackView {
             (
                 state.current().cloned(),
                 state.status,
-                state.position,
                 state.duration,
-                state.buffered,
-                state.suffix_buffered,
                 state.volume,
                 state.generation,
                 model.seek_commit_epoch(),
@@ -50,6 +44,10 @@ impl Render for PlaybackView {
                 state.pending_queue_load(),
             )
         };
+        let progress = self.progress.read(cx).for_generation(generation);
+        let position = progress.position;
+        let buffered = progress.buffered;
+        let suffix_buffered = progress.suffix_buffered;
         // Loading a SmartMix queue begins before an audio track exists. Keep
         // rendering that request as a loading player even if a transport
         // lifecycle update temporarily reports Empty.

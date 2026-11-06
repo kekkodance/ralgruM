@@ -10,6 +10,7 @@ mod listen_history;
 pub(crate) mod media_source;
 pub(crate) mod output_devices;
 mod player_bar;
+mod progress;
 pub(crate) mod progressive;
 mod queue;
 mod queue_list;
@@ -40,6 +41,7 @@ pub(crate) use download_variant::{
 pub(crate) use listen_history::ListenHistorySignal;
 #[allow(unused_imports)]
 pub(crate) use media_source::{AudioFormat, DownloadOutput, ProgressCallback, ProgressUpdate};
+pub(crate) use progress::PlaybackProgress;
 pub(crate) use queue::QueuePanel;
 pub(crate) use resolver::{ResolvedSource, StreamResolver};
 pub(crate) use state::{

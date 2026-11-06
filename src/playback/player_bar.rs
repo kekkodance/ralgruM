@@ -34,8 +34,8 @@ use crate::{
 
 use super::view::SEEK_SLIDER_STEP;
 use super::{
-    PlaybackModel, PlaybackProvider, PlaybackStatus, PlaybackTrack, RepeatMode, RightSidebar,
-    VolumeIconLevel,
+    PlaybackModel, PlaybackProgress, PlaybackProvider, PlaybackStatus, PlaybackTrack, RepeatMode,
+    RightSidebar, VolumeIconLevel,
 };
 
 const QUALITY_BADGE_HEIGHT_PX: f32 = 20.;
@@ -64,6 +64,7 @@ const FAVORITE_PINK: u32 = 0xec4899;
 
 pub(crate) struct PlaybackView {
     model: Entity<PlaybackModel>,
+    progress: Entity<PlaybackProgress>,
     seek_slider: Entity<SliderState>,
     volume_slider: Entity<SliderState>,
     account: Entity<AccountState>,
@@ -103,11 +104,14 @@ impl PlaybackView {
         artwork_cache: Entity<ArtworkCache>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let progress = model.read(cx).progress.clone();
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        cx.observe(&progress, |_, _, cx| cx.notify()).detach();
         cx.observe(&favorites, |_, _, cx| cx.notify()).detach();
         Self {
             seek_slider: model.read(cx).seek_slider.clone(),
             volume_slider: model.read(cx).volume_slider.clone(),
+            progress,
             model,
             account,
             downloads,

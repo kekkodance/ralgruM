@@ -203,6 +203,7 @@ impl PlaybackModel {
                     if let Ok(engine) = self.engine.as_mut() {
                         engine.stop();
                     }
+                    self.publish_progress(cx);
                     self.sync_discord();
                     cx.notify();
                 }
@@ -221,6 +222,7 @@ impl PlaybackModel {
             if let Ok(engine) = self.engine.as_mut() {
                 engine.stop();
             }
+            self.publish_progress(cx);
             self.sync_discord();
             cx.notify();
             return;
