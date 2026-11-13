@@ -48,7 +48,7 @@ clack-host = "0.2.0"
 clack-extensions = { version = "0.2.0", features = ["audio-ports", "gui", "clack-host"] }
 crossbeam-queue = "0.3.12"
 cs2-gsi = "=0.1.1"
-roxmltree = "0.20.0"
+roxmltree = "0.21.1"
 ogg = "0.9.2"
 opus-decoder = "0.1.1"
 blowfish = "0.9.1"
