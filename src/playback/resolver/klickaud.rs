@@ -1,32 +1,21 @@
 use std::time::Duration;
 
-use reqwest::{
-    Client, Method, RequestBuilder, StatusCode, Url,
-    header::{self, HeaderValue},
-};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 use super::StreamResolver;
-use super::{
-    AudioFormat, RemoteAudio, SourceData, SourceVariant, response_cookies, stable_cache_identity,
-};
-use crate::playback::retry::{RequestClass, send_with_retry};
-use crate::search::merge_cookie_parts;
+use super::{AudioFormat, RemoteAudio, SourceData, SourceVariant, stable_cache_identity};
 
-const KLICKAUD_ORIGIN: &str = "https://www.klickaud.org";
 const KLICKAUD_REFERER: &str = "https://www.klickaud.org/";
-const KLICKAUD_DOWNLOAD_REFERER: &str = "https://www.klickaud.org/download.php";
-const KLICKAUD_EN17_REFERER: &str = "https://www.klickaud.org/en17/";
-/// Browser User-Agent on every request; the service rejects bare clients.
-const KLICKAUD_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-/// Total budget for the worker SSE stream.
-const SSE_BUDGET: Duration = Duration::from_secs(30);
 /// Retry attempts for the overall flow when the service misbehaves early.
 const FLOW_ATTEMPTS: u32 = 2;
 
-pub(super) struct KlickaudOutcome {
-    pub(super) download_url: String,
+mod browser;
+
+#[cfg(windows)]
+pub(crate) fn preview_verification_if_requested() -> Result<(), String> {
+    browser::preview_verification_if_requested()
 }
 
 impl StreamResolver {
@@ -51,13 +40,18 @@ impl StreamResolver {
                     _ = tokio::time::sleep(Duration::from_millis(750 + u64::from(attempt) * 250)) => {}
                 }
             }
-            match self.klickaud_flow(&web_url, cancellation).await {
-                Ok(outcome) => {
+            let outcome = browser::resolve_download_url(&web_url, cancellation)
+                .await
+                .and_then(|target| {
+                    validate_download_url(&target.url).map(|url| (url, target.cookies))
+                });
+            match outcome {
+                Ok((download_url, cookies)) => {
                     crate::diagnostics::event("INFO", "klickaud resolve outcome=ready");
                     if let Ok(mut sources) = self.klickaud_sources.lock() {
                         sources.insert(track.id.clone());
                     }
-                    return Ok(klickaud_remote_audio(track, outcome.download_url));
+                    return Ok(klickaud_remote_audio(track, download_url, cookies));
                 }
                 Err(error) => {
                     if cancellation.is_cancelled() || error == "Playback request cancelled" {
@@ -116,285 +110,24 @@ impl StreamResolver {
             None => Err(native_error),
         }
     }
-
-    async fn klickaud_flow(
-        &self,
-        web_url: &str,
-        cancellation: &CancellationToken,
-    ) -> Result<KlickaudOutcome, String> {
-        // One cookie-jar session across steps 1-4. A fresh client without a
-        // cookie store loses the CSRF cookie and download.php answers 302.
-        let session = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(SSE_BUDGET)
-            .build()
-            .map_err(|_| "The klickaud session could not be created".to_string())?;
-
-        let (csrf_token, csrf_cookies) = self.klickaud_csrf(&session, cancellation).await?;
-        let ((grant, mode), grant_cookies) = self
-            .klickaud_grant(&session, web_url, &csrf_token, &csrf_cookies, cancellation)
-            .await?;
-        if mode != "worker" {
-            return Err(format!("klickaud downloadMode={mode} is unsupported"));
-        }
-        // download.php sets a flow cookie the later endpoints require, so
-        // the session cookies accumulate across every step.
-        let cookies = merge_cookie_parts(&csrf_cookies, &grant_cookies);
-        let capability = self
-            .klickaud_capability(&session, &grant, web_url, &cookies, cancellation)
-            .await?;
-        let download_url = self
-            .klickaud_worker_sse(&session, web_url, &capability, &cookies, cancellation)
-            .await?;
-        Ok(KlickaudOutcome { download_url })
-    }
-
-    async fn klickaud_csrf(
-        &self,
-        session: &Client,
-        cancellation: &CancellationToken,
-    ) -> Result<(String, String), String> {
-        let response = send_with_retry(
-            "klickaud.csrf",
-            RequestClass::Provider,
-            cancellation,
-            || {
-                klickaud_get(
-                    session,
-                    format!("{KLICKAUD_ORIGIN}/csrf-token-endpoint.php"),
-                )
-                .header(header::REFERER, KLICKAUD_EN17_REFERER)
-                .header(header::ACCEPT, "application/json")
-            },
-        )
-        .await?;
-        let cookies = response_cookies(&response);
-        let token = response
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("csrf_token")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .filter(|token| !token.is_empty() && token.len() <= 128)
-            .ok_or_else(|| "klickaud returned no csrf token".to_string())?;
-        crate::diagnostics::event("INFO", "klickaud csrf token acquired");
-        Ok((token, cookies))
-    }
-
-    async fn klickaud_grant(
-        &self,
-        session: &Client,
-        web_url: &str,
-        csrf_token: &str,
-        cookies: &str,
-        cancellation: &CancellationToken,
-    ) -> Result<((String, String), String), String> {
-        let body = format!(
-            "value={}&csrf_token={}",
-            urlencoding_min(web_url),
-            urlencoding_min(csrf_token)
-        );
-        let response = send_with_retry(
-            "klickaud.download",
-            RequestClass::Provider,
-            cancellation,
-            || {
-                klickaud_post(
-                    session,
-                    format!("{KLICKAUD_ORIGIN}/download.php"),
-                    &body,
-                    "application/x-www-form-urlencoded",
-                )
-                .header(header::REFERER, KLICKAUD_EN17_REFERER)
-                .header(header::COOKIE, cookies)
-            },
-        )
-        .await?;
-        if response.status() == StatusCode::FOUND
-            || response.status() == StatusCode::MOVED_PERMANENTLY
-        {
-            // The session cookie was not honored; retrying with a fresh
-            // session sometimes recovers it.
-            return Err("klickaud download.php redirected".into());
-        }
-        if !response.status().is_success() {
-            return Err(format!(
-                "klickaud download.php status={}",
-                response.status()
-            ));
-        }
-        let grant_cookies = response_cookies(&response);
-        let html = response
-            .text()
-            .await
-            .map_err(|_| "klickaud download.php response could not be read".to_string())?;
-        let grant = extract_html_assignment(&html, "sseGrant")
-            .ok_or_else(|| "klickaud did not provide a grant".to_string())?;
-        let mode = extract_html_assignment(&html, "downloadMode").unwrap_or_default();
-        crate::diagnostics::event("INFO", format!("klickaud grant acquired mode={mode}"));
-        Ok(((grant, mode), grant_cookies))
-    }
-
-    async fn klickaud_capability(
-        &self,
-        session: &Client,
-        grant: &str,
-        web_url: &str,
-        cookies: &str,
-        cancellation: &CancellationToken,
-    ) -> Result<String, String> {
-        let body = format!(
-            "{{\"grant\":\"{}\",\"url\":\"{}\"}}",
-            json_escape(grant),
-            json_escape(web_url)
-        );
-        let response = send_with_retry(
-            "klickaud.capability",
-            RequestClass::Provider,
-            cancellation,
-            || {
-                klickaud_post(
-                    session,
-                    format!("{KLICKAUD_ORIGIN}/sse_capability.php"),
-                    &body,
-                    "application/json",
-                )
-                .header(header::REFERER, KLICKAUD_DOWNLOAD_REFERER)
-                .header(header::COOKIE, cookies)
-            },
-        )
-        .await?;
-        let capability = response
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("capability")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .filter(|capability| !capability.is_empty() && capability.len() <= 256)
-            .ok_or_else(|| "klickaud returned no capability".to_string())?;
-        crate::diagnostics::event("INFO", "klickaud capability acquired");
-        Ok(capability)
-    }
-
-    async fn klickaud_worker_sse(
-        &self,
-        session: &Client,
-        web_url: &str,
-        capability: &str,
-        cookies: &str,
-        cancellation: &CancellationToken,
-    ) -> Result<String, String> {
-        let url = format!(
-            "{KLICKAUD_ORIGIN}/worker_sse.php?url={}&cap={}",
-            urlencoding_min(web_url),
-            urlencoding_min(capability)
-        );
-        let request = klickaud_get(session, url)
-            .header(header::ACCEPT, "text/event-stream")
-            .header(header::REFERER, KLICKAUD_DOWNLOAD_REFERER)
-            .header(header::COOKIE, cookies);
-        let mut response = tokio::select! {
-            _ = cancellation.cancelled() => return Err("Playback request cancelled".into()),
-            response = request.send() => response
-                .map_err(|_| "klickaud worker could not be reached".to_string())?,
-        };
-        if !response.status().is_success() {
-            return Err(format!("klickaud worker status={}", response.status()));
-        }
-        let mut parser = SseParser::default();
-        let deadline = tokio::time::Instant::now() + SSE_BUDGET;
-        let mut stream = response.chunk();
-        loop {
-            let chunk = tokio::select! {
-                _ = cancellation.cancelled() => {
-                    return Err("Playback request cancelled".into());
-                }
-                _ = tokio::time::sleep_until(deadline) => {
-                    return Err("klickaud worker timed out".into());
-                }
-                chunk = stream => chunk
-                    .map_err(|_| "klickaud worker stream failed".to_string())?,
-            };
-            let Some(chunk) = chunk else {
-                return Err("klickaud worker stream ended".into());
-            };
-            match parser.push(&chunk) {
-                SseEvent::None => {}
-                SseEvent::Ready { download_url } => {
-                    let download_url = download_url
-                        .filter(|url| Url::parse(url).is_ok_and(|url| url.scheme() == "https"))
-                        .ok_or_else(|| "klickaud ready event had no download url".to_string())?;
-                    return Ok(download_url);
-                }
-                SseEvent::Failed => {
-                    return Err("klickaud worker reported failure".into());
-                }
-            }
-            stream = response.chunk();
-        }
-    }
 }
 
-/// Parses the `name = "value"` assignments klickaud embeds in download.php.
-fn extract_html_assignment(html: &str, name: &str) -> Option<String> {
-    let needle = format!("{name} = \"");
-    let start = html.find(&needle)? + needle.len();
-    let rest = &html[start..];
-    let end = rest.find('"')?;
-    let value = &rest[..end];
-    (!value.is_empty() && value.len() <= 256).then(|| value.to_owned())
-}
-
-fn json_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Minimal percent-encoding for query and form values.
-fn urlencoding_min(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => {
-                encoded.push('%');
-                encoded.push_str(&format!("{byte:02X}"));
-            }
-        }
+/// The delivery URL must stay on klickaud: the browser returns it to Rust and
+/// the media client follows it without another browser check.
+fn validate_download_url(raw: &str) -> Result<String, String> {
+    let url =
+        Url::parse(raw).map_err(|_| "klickaud returned an invalid download url".to_string())?;
+    if url.scheme() != "https" {
+        return Err("klickaud returned a non-https download url".into());
     }
-    encoded
-}
-
-fn klickaud_get(session: &Client, url: String) -> RequestBuilder {
-    session.request(Method::GET, url).header(
-        header::USER_AGENT,
-        HeaderValue::from_static(KLICKAUD_USER_AGENT),
-    )
-}
-
-fn klickaud_post(
-    session: &Client,
-    url: String,
-    body: &str,
-    content_type: &'static str,
-) -> RequestBuilder {
-    session
-        .request(Method::POST, url)
-        .header(
-            header::USER_AGENT,
-            HeaderValue::from_static(KLICKAUD_USER_AGENT),
-        )
-        .header(header::CONTENT_TYPE, content_type)
-        .body(body.to_owned())
+    let host = url
+        .host_str()
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| "klickaud returned a download url without a host".to_string())?;
+    if host != "klickaud.org" && !host.ends_with(".klickaud.org") {
+        return Err("klickaud returned a download url on an unexpected host".into());
+    }
+    Ok(url.into())
 }
 
 /// The SoundCloud web URL for a track, preferring the canonical permalink
@@ -437,6 +170,7 @@ pub(super) fn klickaud_placeholder_source(track: &super::PlaybackTrack) -> Remot
         data: SourceData::Remote {
             url: format!("about:klickaud-{}", track.id),
             referer: Some(KLICKAUD_REFERER),
+            cookies: None,
         },
         size: 0,
         deezer_track_id: None,
@@ -448,19 +182,24 @@ pub(super) fn klickaud_placeholder_source(track: &super::PlaybackTrack) -> Remot
     }
 }
 
-fn klickaud_remote_audio(track: &super::PlaybackTrack, download_url: String) -> RemoteAudio {
+fn klickaud_remote_audio(
+    track: &super::PlaybackTrack,
+    download_url: String,
+    cookies: Option<String>,
+) -> RemoteAudio {
     RemoteAudio {
         data: SourceData::Remote {
             url: download_url,
             referer: Some(KLICKAUD_REFERER),
+            cookies,
         },
         size: 0,
         deezer_track_id: None,
         format: AudioFormat::Mp3,
         format_name: "MP3".to_owned(),
         declared_bitrate: Some(128),
-        // dl.klickaud.org is not a SoundCloud host; the sndcdn validators
-        // must never see it.
+        // The delivery host is klickaud, not SoundCloud; the sndcdn
+        // validators must never see it.
         is_soundcloud: false,
         cache_identity: Some(stable_cache_identity(
             super::PlaybackProvider::SoundCloud,
@@ -472,99 +211,119 @@ fn klickaud_remote_audio(track: &super::PlaybackTrack, download_url: String) -> 
     }
 }
 
-#[derive(Default)]
-struct SseParser {
-    buffer: Vec<u8>,
-    event: String,
-    data_lines: Vec<String>,
-    saw_event_line: bool,
-}
-
-enum SseEvent {
-    None,
-    Ready { download_url: Option<String> },
-    Failed,
-}
-
-impl SseParser {
-    fn push(&mut self, chunk: &[u8]) -> SseEvent {
-        self.buffer.extend_from_slice(chunk);
-        while let Some(position) = self.buffer.iter().position(|byte| *byte == b'\n') {
-            let line: Vec<u8> = self.buffer.drain(..=position).collect();
-            let line = String::from_utf8_lossy(&line[..line.len() - 1]);
-            let line = line.trim_end_matches('\r');
-            if line.is_empty() {
-                if let Some(event) = self.take_event() {
-                    return event;
-                }
-                continue;
-            }
-            let Some((field, value)) = line.split_once(':') else {
-                continue;
-            };
-            let value = value.trim();
-            match field {
-                "event" => {
-                    self.event = value.to_owned();
-                    self.saw_event_line = true;
-                }
-                "data" => self.data_lines.push(value.to_owned()),
-                _ => {}
-            }
-        }
-        SseEvent::None
-    }
-
-    fn take_event(&mut self) -> Option<SseEvent> {
-        if !self.saw_event_line && self.data_lines.is_empty() {
-            return None;
-        }
-        let event = std::mem::take(&mut self.event);
-        let data_lines = std::mem::take(&mut self.data_lines);
-        self.saw_event_line = false;
-        let data = data_lines.join("\n");
-        match event.as_str() {
-            "ready" => Some(SseEvent::Ready {
-                download_url: serde_json::from_str::<Value>(&data).ok().and_then(|value| {
-                    value
-                        .get("download_url")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                }),
-            }),
-            "failed" => Some(SseEvent::Failed),
-            _ => None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
     #[ignore = "live network probe for manual klickaud verification"]
-    async fn live_klickaud_flow_reaches_a_download_url() {
+    async fn live_klickaud_flow_reaches_playable_audio() {
         let resolver = StreamResolver::new().unwrap();
         let track = test_track();
         let track_json = serde_json::json!({
             "policy": "SNIP",
-            "permalink_url": "https://soundcloud.com/ladygaga/glamorous-life",
+            "permalink_url": "https://soundcloud.com/kendrick-lamar-music/money-trees",
             "media": {"transcodings": [{"snipped": true}]},
         });
         let cancellation = CancellationToken::new();
-        match resolver
+        let source = resolver
             .resolve_klickaud(&track, &track_json, &cancellation)
             .await
-        {
-            Ok(source) => {
-                let SourceData::Remote { url, .. } = source.data else {
-                    panic!("expected remote source");
-                };
-                assert!(url.starts_with("https://dl.klickaud.org/"), "url: {url}");
-            }
-            Err(error) => panic!("klickaud flow failed: {error}"),
-        }
+            .unwrap_or_else(|error| panic!("klickaud flow failed: {error}"));
+        let resolved = super::super::ResolvedSource::from_remote(source);
+        let size = resolver
+            .source_size_for_info(&resolved, &cancellation)
+            .await
+            .expect("klickaud size probe");
+        assert!(size > 0, "klickaud delivery size");
+        let download_path =
+            std::env::temp_dir().join(format!("ralgrum-klickaud-live-{}.mp3", std::process::id()));
+        let file = tokio::fs::File::create(&download_path).await.unwrap();
+        resolver
+            .download_source(resolved.clone(), file, &cancellation, None)
+            .await
+            .expect("klickaud download");
+        let downloaded = tokio::fs::metadata(&download_path).await.unwrap().len();
+        let _ = tokio::fs::remove_file(&download_path).await;
+        assert!(downloaded > 1_000_000, "download size: {downloaded}");
+        let SourceData::Remote {
+            url,
+            referer,
+            cookies,
+        } = resolved.data
+        else {
+            panic!("expected remote source");
+        };
+        assert!(
+            url.starts_with("https://www.klickaud.org/worker_sse.php?")
+                || url.starts_with("https://dl.klickaud.org/"),
+            "url: {url}"
+        );
+        let cookies = cookies.expect("klickaud delivery requires the browser session cookies");
+        let client = reqwest::Client::builder()
+            .user_agent(super::super::BROWSER_USER_AGENT)
+            .build()
+            .unwrap();
+        let request = super::super::apply_media_headers(
+            client
+                .get(&url)
+                .header(reqwest::header::RANGE, "bytes=0-1023")
+                .header(reqwest::header::ACCEPT_ENCODING, "identity"),
+            referer,
+            Some(cookies.as_str()),
+        );
+        let response = request
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("klickaud delivery failed: {error}"));
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            "delivery status"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("audio/mpeg")
+        );
+        let bytes = response.bytes().await.unwrap();
+        assert!(!bytes.is_empty(), "delivery body");
+    }
+
+    #[test]
+    fn download_url_must_stay_on_klickaud() {
+        assert!(
+            validate_download_url("https://www.klickaud.org/worker_sse.php?delivery=x&name=y")
+                .is_ok()
+        );
+        assert!(validate_download_url("https://dl.klickaud.org/download?token=x").is_ok());
+        assert!(validate_download_url("https://klickaud.org/download?token=x").is_ok());
+        assert!(validate_download_url("http://www.klickaud.org/worker_sse.php").is_err());
+        assert!(validate_download_url("https://evil.example/download").is_err());
+        assert!(validate_download_url("https://klickaud.org.evil.example/x").is_err());
+    }
+
+    #[test]
+    fn track_url_prefers_the_canonical_permalink() {
+        let track = test_track();
+        let track_json = serde_json::json!({
+            "permalink_url": "https://soundcloud.com/artist/canonical",
+            "permalinkUrl": "https://soundcloud.com/artist/alternate",
+        });
+        assert_eq!(
+            klickaud_track_url(&track, &track_json).unwrap(),
+            "https://soundcloud.com/artist/canonical"
+        );
+
+        let invalid = serde_json::json!({
+            "permalink_url": "https://example.com/not-soundcloud",
+        });
+        assert_eq!(
+            klickaud_track_url(&track, &invalid).unwrap(),
+            "https://soundcloud.com/artist/track"
+        );
     }
 
     #[test]
@@ -607,6 +366,7 @@ mod tests {
             &serde_json::json!({})
         ));
     }
+
     use crate::playback::resolver::soundcloud_track_is_go_plus_gated;
     use crate::playback::{PlaybackProvider, PlaybackTrack};
 
@@ -647,63 +407,13 @@ mod tests {
     }
 
     #[test]
-    fn sse_parser_handles_progress_ready_and_failed() {
-        let mut parser = SseParser::default();
-        assert!(matches!(
-            parser.push(b"event: progress\ndata: {\"pct\":0}\n\n"),
-            SseEvent::None
-        ));
-        assert!(matches!(
-            parser.push(b"event: ready\ndata: {\"download_url\":\"https://dl.klickaud.org/download?token=abc\"}\n\n"),
-            SseEvent::Ready { download_url: Some(url) } if url == "https://dl.klickaud.org/download?token=abc"
-        ));
-        assert!(matches!(
-            parser.push(b"event: failed\ndata: {\"reason\":\"x\"}\n\n"),
-            SseEvent::Failed
-        ));
-    }
-
-    #[test]
-    fn sse_parser_handles_partial_chunks_and_multi_line_data() {
-        let mut parser = SseParser::default();
-        assert!(matches!(parser.push(b"event: rea"), SseEvent::None));
-        assert!(matches!(
-            parser.push(b"dy\ndata: {\"download"),
-            SseEvent::None
-        ));
-        assert!(matches!(
-            parser.push(b"_url\":\"https://dl.klickaud.org/download?token=split\"}\n\n"),
-            SseEvent::Ready {
-                download_url: Some(url)
-            } if url == "https://dl.klickaud.org/download?token=split"
-        ));
-
-        // Multiple data lines are joined with newlines before parsing; JSON
-        // whitespace keeps the value valid.
-        let mut multi = SseParser::default();
-        assert!(matches!(
-            multi.push(b"event: ready\ndata: {\"download_url\":\ndata: \"https://dl.klickaud.org/x\"}\n\n"),
-            SseEvent::Ready {
-                download_url: Some(url)
-            } if url == "https://dl.klickaud.org/x"
-        ));
-    }
-
-    #[test]
-    fn html_assignments_are_extracted_with_bounds() {
-        let html = r#"var sseGrant = "a".repeat(43).valueOf(); downloadMode = "worker";"#;
-        assert_eq!(
-            extract_html_assignment(html, "downloadMode"),
-            Some("worker".into())
-        );
-        assert_eq!(extract_html_assignment(html, "missing"), None);
-    }
-
-    #[test]
     fn klickaud_source_never_pretends_to_be_soundcloud() {
         let track = test_track();
-        let audio =
-            klickaud_remote_audio(&track, "https://dl.klickaud.org/download?token=x".into());
+        let audio = klickaud_remote_audio(
+            &track,
+            "https://dl.klickaud.org/download?token=x".into(),
+            Some("PHPSESSID=session".into()),
+        );
         assert!(!audio.is_soundcloud);
         assert_eq!(audio.size, 0);
         assert_eq!(audio.declared_bitrate, Some(128));
@@ -713,18 +423,14 @@ mod tests {
             Some("soundcloud:track-id:standard:mp3:MP3")
         );
         match audio.data {
-            SourceData::Remote { referer, .. } => assert_eq!(referer, Some(KLICKAUD_REFERER)),
+            SourceData::Remote {
+                referer, cookies, ..
+            } => {
+                assert_eq!(referer, Some(KLICKAUD_REFERER));
+                assert_eq!(cookies.as_deref(), Some("PHPSESSID=session"));
+            }
             _ => panic!("expected a remote source"),
         }
-    }
-
-    #[test]
-    fn percent_encoding_covers_the_track_url() {
-        assert_eq!(
-            urlencoding_min("https://soundcloud.com/a b/c?d=e&f"),
-            "https%3A%2F%2Fsoundcloud.com%2Fa%20b%2Fc%3Fd%3De%26f"
-        );
-        assert_eq!(urlencoding_min("abc-DEF_123~."), "abc-DEF_123~.");
     }
 
     fn test_track() -> PlaybackTrack {

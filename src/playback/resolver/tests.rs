@@ -503,6 +503,7 @@ fn source_cache_provenance_keeps_direct_fallback_out_of_murglar_key() {
         SourceData::Remote {
             url: "https://cdn.example.test/direct".into(),
             referer: None,
+            cookies: None,
         },
         stable_cache_identity(
             PlaybackProvider::Deezer,
@@ -554,6 +555,7 @@ async fn murglar_eligible_playback_reuses_a_cached_direct_fallback() {
         SourceData::Remote {
             url: "https://cdn.example.test/direct".into(),
             referer: None,
+            cookies: None,
         },
         stable_cache_identity(
             PlaybackProvider::Deezer,
@@ -590,6 +592,7 @@ fn clearing_resolved_sources_prevents_cross_account_reuse() {
         SourceData::Remote {
             url: "https://cdn.example.test/audio".into(),
             referer: None,
+            cookies: None,
         },
         "source-cache-test".into(),
     );
@@ -620,6 +623,7 @@ fn stale_resolution_cannot_reinsert_after_account_clear() {
         SourceData::Remote {
             url: "https://cdn.example.test/audio".into(),
             referer: None,
+            cookies: None,
         },
         "stale-source".into(),
     );
@@ -774,6 +778,146 @@ async fn unknown_size_completion_persists_total_and_reuses_cached_blocks() {
         cache.read(&path, bytes.len()).await.as_deref(),
         Some(bytes.as_slice())
     );
+}
+
+#[tokio::test]
+async fn cached_go_plus_playback_skips_klickaud_resolution() {
+    let track = PlaybackTrack {
+        provider: PlaybackProvider::SoundCloud,
+        id: "go-plus-cached".into(),
+        title: "Cached Go+".into(),
+        artist: "Artist".into(),
+        album: String::new(),
+        album_id: String::new(),
+        release_date: String::new(),
+        artists: Vec::new(),
+        artwork: String::new(),
+        duration: Duration::from_secs(30),
+        downloadable: false,
+        progressive: false,
+        explicit: false,
+        ai_generated: false,
+        go_plus: true,
+        service_url: String::new(),
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let cache = AudioCache::new(temp.path().into(), 8);
+    let key = "soundcloud:go-plus-cached:standard:mp3:MP3";
+    // 30 seconds at the standard 128 kbps.
+    let bytes = vec![0x5a_u8; 480_000];
+    let total = bytes.len() as u64;
+    cache_bytes(&cache, key, total, &bytes, cache.generation(), None).await;
+    cache.remember_track(&track, key, Some(total)).await;
+    assert!(cache.is_fully_cached(key, total).await);
+
+    let resolver = StreamResolver::new().unwrap().with_cache(cache);
+    let source = resolver
+        .resolve_source(&track, None, None, None, CancellationToken::new(), true)
+        .await
+        .expect("cached go plus source");
+
+    assert_eq!(source.cache_identity.as_deref(), Some(key));
+    assert_eq!(source.size, total);
+    assert_eq!(source.format, AudioFormat::Mp3);
+    assert_eq!(source.format_name, "MP3");
+    assert!(matches!(
+        &source.data,
+        SourceData::Remote {
+            url,
+            referer: None,
+            cookies: None
+        } if url == "about:offline-cached"
+    ));
+}
+
+#[test]
+fn nominal_bitrate_snaps_codec_delivery_tiers() {
+    assert_eq!(AudioFormat::M4a.nominal_bitrate(162), 160);
+    assert_eq!(AudioFormat::Aac.nominal_bitrate(97), 96);
+    assert_eq!(AudioFormat::Mp3.nominal_bitrate(129), 128);
+    assert_eq!(AudioFormat::Flac.nominal_bitrate(162), 162);
+}
+
+#[tokio::test]
+async fn cached_standard_capability_reports_the_cached_aac_variant() {
+    let track = PlaybackTrack {
+        provider: PlaybackProvider::SoundCloud,
+        id: "239027362".into(),
+        title: "Stranger (Skrillex Remix with Tennyson & White Sea)".into(),
+        artist: "Skrillex".into(),
+        album: String::new(),
+        album_id: String::new(),
+        release_date: String::new(),
+        artists: Vec::new(),
+        artwork: String::new(),
+        duration: Duration::from_secs(30),
+        downloadable: false,
+        progressive: false,
+        explicit: false,
+        ai_generated: false,
+        go_plus: false,
+        service_url: String::new(),
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let cache = AudioCache::new(temp.path().into(), 8);
+    let key = "soundcloud:239027362:standard:m4a:M4A/MP4 AAC";
+    // 30 seconds at 160 kbps plus container overhead.
+    let bytes = vec![0x5a_u8; 605_000];
+    let total = bytes.len() as u64;
+    cache_bytes(&cache, key, total, &bytes, cache.generation(), None).await;
+    cache.remember_track(&track, key, Some(total)).await;
+
+    let resolver = StreamResolver::new().unwrap().with_cache(cache);
+    let choices = resolver
+        .probe_download_capabilities_inner(
+            &track,
+            None,
+            None,
+            None,
+            vec![DownloadVariant::Standard],
+            CancellationToken::new(),
+        )
+        .await
+        .expect("capability probe");
+
+    assert_eq!(choices.len(), 1);
+    assert_eq!(choices[0].variant, DownloadVariant::Standard);
+    assert_eq!(choices[0].label, "AAC 160 kbps");
+    assert_eq!(choices[0].detail, "Standard quality");
+}
+
+#[tokio::test]
+async fn cached_go_plus_preview_does_not_satisfy_full_track_playback() {
+    let track = PlaybackTrack {
+        provider: PlaybackProvider::SoundCloud,
+        id: "go-plus-preview".into(),
+        title: "Previewed Go+".into(),
+        artist: "Artist".into(),
+        album: String::new(),
+        album_id: String::new(),
+        release_date: String::new(),
+        artists: Vec::new(),
+        artwork: String::new(),
+        // A three-minute track, but the cache only holds a 30-second preview.
+        duration: Duration::from_secs(180),
+        downloadable: false,
+        progressive: false,
+        explicit: false,
+        ai_generated: false,
+        go_plus: true,
+        service_url: String::new(),
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let cache = AudioCache::new(temp.path().into(), 8);
+    let key = "soundcloud:go-plus-preview:standard:mp3:MP3";
+    let preview = vec![0x5a_u8; 480_000];
+    let total = preview.len() as u64;
+    cache_bytes(&cache, key, total, &preview, cache.generation(), None).await;
+    cache.remember_track(&track, key, Some(total)).await;
+    assert!(cache.is_fully_cached(key, total).await);
+
+    let resolver = StreamResolver::new().unwrap().with_cache(cache);
+    assert!(resolver.cached_playback_source(&track).await.is_none());
 }
 
 #[tokio::test]
@@ -994,6 +1138,20 @@ fn capability_absence_classification_keeps_empty_results_cacheable() {
 }
 
 #[test]
+fn soundcloud_standard_cache_identity_rejects_snipped_previews() {
+    let snip = serde_json::json!({"snipped": true});
+    assert_eq!(
+        soundcloud_standard_cache_identity("track-42", &snip, AudioFormat::Mp3, "MP3"),
+        None
+    );
+    let full = serde_json::json!({"snipped": false});
+    assert_eq!(
+        soundcloud_standard_cache_identity("track-42", &full, AudioFormat::Mp3, "MP3").as_deref(),
+        Some("soundcloud:track-42:standard:mp3:MP3")
+    );
+}
+
+#[test]
 fn soundcloud_cache_identity_ignores_signed_url_but_separates_variants() {
     let standard = stable_cache_identity(
         PlaybackProvider::SoundCloud,
@@ -1013,6 +1171,7 @@ fn soundcloud_cache_identity_ignores_signed_url_but_separates_variants() {
         SourceData::Remote {
             url: "https://cdn.example/track?expires=1".into(),
             referer: None,
+            cookies: None,
         },
         standard.clone(),
     ));
@@ -1020,6 +1179,7 @@ fn soundcloud_cache_identity_ignores_signed_url_but_separates_variants() {
         SourceData::Remote {
             url: "https://cdn.example/track?expires=2".into(),
             referer: None,
+            cookies: None,
         },
         standard,
     ));
@@ -1029,7 +1189,8 @@ fn soundcloud_cache_identity_ignores_signed_url_but_separates_variants() {
         cache_key(&cache_test_source(
             SourceData::Remote {
                 url: "https://cdn.example/track?expires=3".into(),
-                referer: None
+                referer: None,
+                cookies: None,
             },
             hq,
         ))
@@ -1038,6 +1199,7 @@ fn soundcloud_cache_identity_ignores_signed_url_but_separates_variants() {
         SourceData::Remote {
             url: "https://cdnt-stream.dzcdn.net/media/file.flac".into(),
             referer: None,
+            cookies: None,
         },
         stable_cache_identity(
             PlaybackProvider::SoundCloud,
@@ -1057,6 +1219,7 @@ fn playback_source_label_prefers_logical_soundcloud_over_decryption_metadata() {
         data: SourceData::Remote {
             url: "https://cdnt-stream.dzcdn.net/media/42/file.flac".into(),
             referer: None,
+            cookies: None,
         },
         size: 0,
         deezer_track_id: Some("42".into()),
@@ -1079,6 +1242,7 @@ fn playback_source_label_prefers_logical_soundcloud_over_decryption_metadata() {
         data: SourceData::Remote {
             url: "https://cdnt-stream.dzcdn.net/media/42/file.flac".into(),
             referer: None,
+            cookies: None,
         },
         size: 0,
         deezer_track_id: Some("42".into()),
@@ -2345,4 +2509,41 @@ async fn oversized_provider_bodies_are_rejected_by_the_shared_playback_decoder()
         "The deezer.media provider returned an invalid playback response"
     );
     server.join().unwrap();
+}
+
+#[test]
+fn media_headers_carry_referer_and_session_cookies() {
+    let request = apply_media_headers(
+        reqwest::Client::new().get("https://www.klickaud.org/worker_sse.php"),
+        Some("https://www.klickaud.org/"),
+        Some("PHPSESSID=session"),
+    )
+    .build()
+    .unwrap();
+    assert_eq!(
+        request.headers().get(reqwest::header::REFERER).unwrap(),
+        "https://www.klickaud.org/"
+    );
+    assert_eq!(
+        request.headers().get(reqwest::header::COOKIE).unwrap(),
+        "PHPSESSID=session"
+    );
+    assert!(
+        request
+            .headers()
+            .get(reqwest::header::COOKIE)
+            .unwrap()
+            .is_sensitive(),
+        "session cookies must be marked sensitive"
+    );
+
+    let bare = apply_media_headers(
+        reqwest::Client::new().get("https://cdn.example.test/audio"),
+        None,
+        Some(""),
+    )
+    .build()
+    .unwrap();
+    assert!(bare.headers().get(reqwest::header::REFERER).is_none());
+    assert!(bare.headers().get(reqwest::header::COOKIE).is_none());
 }

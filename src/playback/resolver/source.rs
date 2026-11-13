@@ -132,19 +132,32 @@ impl StreamResolver {
                 }
             }
             PlaybackProvider::SoundCloud => {
-                let prefetched_track = self
-                    .fetch_soundcloud_track(&track.id, soundcloud_token.as_ref(), &cancellation)
-                    .await
-                    .ok();
                 let klickaud_before = self
                     .klickaud_sources
                     .lock()
                     .is_ok_and(|sources| sources.contains(&track.id));
+                // A complete klickaud variant is already on disk, so playback
+                // can use the block cache without fetching metadata or running
+                // the browser verification again.
+                if (track.go_plus || klickaud_before)
+                    && let Some(source) = self.cached_playback_source(track).await
+                {
+                    return Ok(source);
+                }
+                let prefetched_track = self
+                    .fetch_soundcloud_track(&track.id, soundcloud_token.as_ref(), &cancellation)
+                    .await
+                    .ok();
                 if let Some(track_json) = prefetched_track.as_ref()
                     && (klickaud_before
                         || soundcloud_track_is_go_plus_gated(track_json)
                         || soundcloud_track_has_no_playable_transcoding(track_json))
                 {
+                    // Provider metadata can reveal the gate after the fetch;
+                    // check the cache again before starting the browser flow.
+                    if let Some(source) = self.cached_playback_source(track).await {
+                        return Ok(source);
+                    }
                     match self
                         .resolve_klickaud(track, track_json, &cancellation)
                         .await
@@ -258,8 +271,18 @@ impl StreamResolver {
         }
         match &source.data {
             SourceData::Inline(bytes) => Ok(bytes.len() as u64),
-            SourceData::Remote { url, .. } => Ok(self
-                .probe_remote_size(url, cancellation, source.is_soundcloud)
+            SourceData::Remote {
+                url,
+                referer,
+                cookies,
+            } => Ok(self
+                .probe_remote_size(
+                    url,
+                    *referer,
+                    cookies.as_deref(),
+                    cancellation,
+                    source.is_soundcloud,
+                )
                 .await
                 .unwrap_or(0)),
             SourceData::Backend(backend) => {
@@ -313,14 +336,20 @@ impl StreamResolver {
     pub(super) async fn probe_remote_size(
         &self,
         url: &str,
+        referer: Option<&'static str>,
+        cookies: Option<&str>,
         cancellation: &CancellationToken,
         is_soundcloud: bool,
     ) -> Option<u64> {
         let head = send_with_retry("media.info.head", RequestClass::Media, cancellation, || {
-            self.client
-                .head(url)
-                .header(header::USER_AGENT, BROWSER_USER_AGENT)
-                .header(header::ACCEPT_ENCODING, "identity")
+            apply_media_headers(
+                self.client
+                    .head(url)
+                    .header(header::USER_AGENT, BROWSER_USER_AGENT)
+                    .header(header::ACCEPT_ENCODING, "identity"),
+                referer,
+                cookies,
+            )
         })
         .await
         .ok();
@@ -340,11 +369,15 @@ impl StreamResolver {
             RequestClass::Media,
             cancellation,
             || {
-                self.client
-                    .get(url)
-                    .header(header::USER_AGENT, BROWSER_USER_AGENT)
-                    .header(header::ACCEPT_ENCODING, "identity")
-                    .header(header::RANGE, "bytes=0-0")
+                apply_media_headers(
+                    self.client
+                        .get(url)
+                        .header(header::USER_AGENT, BROWSER_USER_AGENT)
+                        .header(header::ACCEPT_ENCODING, "identity")
+                        .header(header::RANGE, "bytes=0-0"),
+                    referer,
+                    cookies,
+                )
             },
         )
         .await
@@ -409,6 +442,37 @@ impl StreamResolver {
         .await
     }
 
+    /// Build the same source shape the download action would use when it
+    /// finds a complete cached variant. This keeps the capability menu label
+    /// tied to the file the user will actually receive.
+    async fn cached_download_source(
+        &self,
+        track: &PlaybackTrack,
+        variant: DownloadVariant,
+        cancellation: &CancellationToken,
+    ) -> Option<ResolvedSource> {
+        let cached = self
+            .cache
+            .as_ref()?
+            .complete_download_variant(track, variant, cancellation)
+            .await?;
+        let format = AudioFormat::from_extension(&cached.extension)?;
+        Some(ResolvedSource {
+            data: SourceData::Remote {
+                url: "about:offline-cached".to_owned(),
+                referer: None,
+                cookies: None,
+            },
+            size: cached.total,
+            deezer_track_id: (track.provider == PlaybackProvider::Deezer).then(|| track.id.clone()),
+            is_soundcloud: track.provider == PlaybackProvider::SoundCloud,
+            cache_identity: Some(cached.cache_key),
+            format,
+            format_name: cached.format_name,
+            declared_bitrate: cached.declared_bitrate,
+        })
+    }
+
     pub(crate) async fn resolve_download_source(
         &self,
         track: &PlaybackTrack,
@@ -448,6 +512,17 @@ impl StreamResolver {
         include_remote_size: bool,
         capability_only: bool,
     ) -> Result<ResolvedSource, String> {
+        // The download action reuses a complete cached variant before it
+        // resolves anything from the provider. A capability probe must report
+        // that same variant, otherwise the menu can advertise a different
+        // format or bitrate than the file the user will actually receive.
+        if capability_only
+            && let Some(source) = self
+                .cached_download_source(track, variant, &cancellation)
+                .await
+        {
+            return Ok(source);
+        }
         if track.provider == PlaybackProvider::Deezer {
             let source = match variant {
                 DownloadVariant::DeezerFlac => {
@@ -597,7 +672,7 @@ impl StreamResolver {
                         soundcloud_token.as_ref(),
                         &cancellation,
                         include_remote_size,
-                        false,
+                        soundcloud_download_prefers_hls(variant),
                         prefetched_track.clone(),
                     )
                     .await
@@ -605,11 +680,11 @@ impl StreamResolver {
                     Ok(source) => Ok(ResolvedSource::from_remote(source)),
                     Err(error) if error == "Playback request cancelled" => Err(error),
                     Err(error) => {
-                        // SoundCloud can list a progressive transcoding
-                        // whose endpoint rejects this access context; a
-                        // dead native standard stream falls back to
-                        // klickaud. A capability probe fabricates the row
-                        // instead of running the flow on their server.
+                        // SoundCloud can list a native transcoding whose
+                        // endpoint rejects this access context; a dead
+                        // native standard stream falls back to klickaud. A
+                        // capability probe fabricates the row instead of
+                        // running the flow on their server.
                         self.klickaud_standard_fallback(
                             track,
                             prefetched_track.as_ref(),
@@ -688,7 +763,7 @@ impl StreamResolver {
                                 None,
                                 &cancellation,
                                 include_remote_size,
-                                false,
+                                soundcloud_download_prefers_hls(*selected),
                                 prefetched_track.clone(),
                             )
                             .await
@@ -731,7 +806,7 @@ impl StreamResolver {
                 "Murglar did not return a lossless or high-quality file for this track."
             }
             DownloadVariant::Standard => {
-                "A downloadable MP3 128 kbps stream is unavailable for this track."
+                "A downloadable standard-quality stream is unavailable for this track."
             }
             DownloadVariant::Best => {
                 "No downloadable SoundCloud audio source is available for this track."

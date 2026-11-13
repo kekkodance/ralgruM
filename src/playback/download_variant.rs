@@ -16,6 +16,15 @@ pub(crate) enum DownloadVariant {
     DeezerMp3_128,
 }
 
+/// Standard SoundCloud downloads use the same native source order as
+/// playback: AAC HLS is preferred before progressive MP3. This keeps the
+/// downloaded file and the format menu label aligned with the stream the
+/// player actually uses. Gated tracks never reach this policy; they are
+/// routed to klickaud before a native source is resolved.
+pub(crate) const fn soundcloud_download_prefers_hls(variant: DownloadVariant) -> bool {
+    matches!(variant, DownloadVariant::Standard | DownloadVariant::Best)
+}
+
 impl DownloadVariant {
     pub(crate) const fn label(self) -> &'static str {
         match self {
@@ -323,6 +332,23 @@ mod tests {
         assert!(
             selection_order(&track, DownloadVariant::DeezerFlac, false, false, false).is_empty()
         );
+    }
+
+    #[test]
+    fn soundcloud_standard_and_best_downloads_prefer_native_aac_hls() {
+        assert!(soundcloud_download_prefers_hls(DownloadVariant::Standard));
+        assert!(soundcloud_download_prefers_hls(DownloadVariant::Best));
+        assert!(!soundcloud_download_prefers_hls(DownloadVariant::Original));
+        assert!(!soundcloud_download_prefers_hls(DownloadVariant::Murglar));
+        assert!(!soundcloud_download_prefers_hls(
+            DownloadVariant::DeezerFlac
+        ));
+        assert!(!soundcloud_download_prefers_hls(
+            DownloadVariant::DeezerMp3_320
+        ));
+        assert!(!soundcloud_download_prefers_hls(
+            DownloadVariant::DeezerMp3_128
+        ));
     }
 
     #[test]

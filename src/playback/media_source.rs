@@ -77,6 +77,22 @@ impl AudioFormat {
             Self::M4a => "audio/mp4",
         }
     }
+
+    /// Snap a measured average bitrate to the codec's nominal delivery tier.
+    /// Container overhead makes a cached 160 kbps AAC stream measure slightly
+    /// higher, so the UI reports the tier the provider actually served.
+    pub(crate) fn nominal_bitrate(self, bitrate: u32) -> u32 {
+        let (tiers, tolerance): (&[u32], u32) = match self {
+            Self::Mp3 => (&[64, 128, 320], 4),
+            Self::M4a | Self::Aac => (&[64, 96, 128, 160, 192, 256, 320], 8),
+            _ => return bitrate,
+        };
+        tiers
+            .iter()
+            .copied()
+            .find(|tier| bitrate.abs_diff(*tier) <= tolerance)
+            .unwrap_or(bitrate)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

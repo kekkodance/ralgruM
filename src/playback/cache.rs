@@ -5,7 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use super::download_variant::DownloadVariant;
+use super::media_source::AudioFormat;
 use super::state::{PlaybackProvider, PlaybackTrack};
 
 pub(crate) const LIMITS_MB: [u64; 4] = [256, 512, 1024, 4096];
@@ -91,6 +92,7 @@ pub(crate) struct CachedDownload {
     pub(crate) total: u64,
     pub(crate) extension: String,
     pub(crate) format_name: String,
+    pub(crate) declared_bitrate: Option<u32>,
     token: CacheTrackToken,
 }
 
@@ -253,6 +255,21 @@ fn parse_cached_key_from_prefix(
         return None;
     }
     Some((variant.to_owned(), extension, format_name))
+}
+
+/// Estimate the delivered bitrate of a complete cached variant. Container
+/// overhead pushes the measured average slightly above the nominal tier, so
+/// the value is snapped back to the codec tier the provider served.
+fn cached_variant_bitrate(format: AudioFormat, total: u64, duration: Duration) -> Option<u32> {
+    let seconds = duration.as_secs_f64();
+    if total == 0 || seconds <= 0.0 {
+        return None;
+    }
+    let measured = ((total as f64 * 8.0) / (seconds * 1_000.0)).round();
+    if !(1.0..=f64::from(u32::MAX)).contains(&measured) {
+        return None;
+    }
+    Some(format.nominal_bitrate(measured as u32))
 }
 
 fn cached_variant_rank(
@@ -488,11 +505,14 @@ impl AudioCache {
     /// Find the best fully-cached variant of a track for offline playback.
     /// Returns the cache key, total size, and the extension/format name pair
     /// so the caller can synthesize a source without touching the network.
-    /// Highest quality wins; ties prefer the newest catalog record.
+    /// Highest quality wins; ties prefer the newest catalog record. Variants
+    /// smaller than `minimum_total` are ignored, so a short preview can never
+    /// stand in for the full track.
     pub(crate) async fn offline_playback_variant(
         &self,
         provider: PlaybackProvider,
         track_id: &str,
+        minimum_total: u64,
     ) -> Option<OfflinePlaybackVariant> {
         if track_id.trim().is_empty() {
             return None;
@@ -527,6 +547,9 @@ impl AudioCache {
                     None => continue,
                 },
             };
+            if total < minimum_total {
+                continue;
+            }
             if !self.is_fully_cached(&record.cache_key, total).await {
                 continue;
             }
@@ -597,11 +620,16 @@ impl AudioCache {
             {
                 continue;
             }
+            let Some(format) = AudioFormat::from_extension(&extension) else {
+                continue;
+            };
+            let declared_bitrate = cached_variant_bitrate(format, total, track.duration);
             let cached = CachedDownload {
                 cache_key: record.cache_key,
                 total,
                 extension,
                 format_name,
+                declared_bitrate,
                 token: token.clone(),
             };
             if selected
@@ -1652,7 +1680,7 @@ mod tests {
             .await;
 
         let variant = cache
-            .offline_playback_variant(PlaybackProvider::SoundCloud, "offline-id")
+            .offline_playback_variant(PlaybackProvider::SoundCloud, "offline-id", 0)
             .await
             .expect("complete variant");
         assert_eq!(variant.cache_key, flac_key);
@@ -1663,16 +1691,72 @@ mod tests {
         // Unknown tracks and empty ids resolve to nothing.
         assert!(
             cache
-                .offline_playback_variant(PlaybackProvider::SoundCloud, "missing")
+                .offline_playback_variant(PlaybackProvider::SoundCloud, "missing", 0)
                 .await
                 .is_none()
         );
         assert!(
             cache
-                .offline_playback_variant(PlaybackProvider::SoundCloud, "")
+                .offline_playback_variant(PlaybackProvider::SoundCloud, "", 0)
                 .await
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn offline_playback_variant_skips_entries_below_the_minimum_size() {
+        let temp = TempDir::new().unwrap();
+        let cache = AudioCache::new(temp.path().into(), 1 << 20);
+        let track = test_track("snippet-id", "Snippet track");
+        let preview_key = "soundcloud:snippet-id:standard:mp3:MP3";
+        cache.remember_track(&track, preview_key, Some(4)).await;
+        cache
+            .write(
+                &cache.block_path(preview_key, 4, 0, 3),
+                &[0; 4],
+                cache.generation(),
+            )
+            .await;
+
+        assert!(
+            cache
+                .offline_playback_variant(PlaybackProvider::SoundCloud, "snippet-id", 4)
+                .await
+                .is_some()
+        );
+        assert!(
+            cache
+                .offline_playback_variant(PlaybackProvider::SoundCloud, "snippet-id", 5)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_download_variant_reports_the_cached_bitrate() {
+        let temp = TempDir::new().unwrap();
+        let cache = AudioCache::new(temp.path().into(), 256);
+        let mut track = test_track("aac-bitrate", "AAC bitrate");
+        track.duration = Duration::from_secs(30);
+        let key = "soundcloud:aac-bitrate:standard:m4a:M4A/MP4 AAC";
+        // 30 seconds at 160 kbps plus container overhead.
+        let total = 605_000;
+        cache.remember_track(&track, key, Some(total)).await;
+        cache
+            .write(
+                &cache.block_path(key, total, 0, total - 1),
+                &vec![0; total as usize],
+                cache.generation(),
+            )
+            .await;
+
+        let cached = cache
+            .complete_download_variant(&track, DownloadVariant::Standard, &CancellationToken::new())
+            .await
+            .expect("complete cached variant");
+        assert_eq!(cached.extension, "m4a");
+        assert_eq!(cached.format_name, "M4A/MP4 AAC");
+        assert_eq!(cached.declared_bitrate, Some(160));
     }
 
     #[tokio::test]

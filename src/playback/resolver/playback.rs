@@ -421,6 +421,37 @@ impl StreamResolver {
         })
     }
 
+    /// Build a playback source from a fully cached variant without touching
+    /// the network. Klickaud-backed tracks use this so a completed download
+    /// does not re-run the browser verification.
+    pub(super) async fn cached_playback_source(
+        &self,
+        track: &PlaybackTrack,
+    ) -> Option<ResolvedSource> {
+        let cache = self.cache.as_ref()?;
+        let cached = cache
+            .offline_playback_variant(
+                track.provider,
+                track.id.as_str(),
+                minimum_cached_total(track.duration),
+            )
+            .await?;
+        Some(ResolvedSource {
+            data: SourceData::Remote {
+                url: "about:offline-cached".to_owned(),
+                referer: None,
+                cookies: None,
+            },
+            size: cached.total,
+            deezer_track_id: (track.provider == PlaybackProvider::Deezer).then(|| track.id.clone()),
+            is_soundcloud: track.provider == PlaybackProvider::SoundCloud,
+            cache_identity: Some(cached.cache_key),
+            format: offline_cached_format(&cached.extension),
+            format_name: cached.format_name,
+            declared_bitrate: None,
+        })
+    }
+
     pub(crate) async fn resolve_progressive(
         &self,
         track: &PlaybackTrack,
@@ -460,41 +491,19 @@ impl StreamResolver {
                 // fully offline). A fully-cached variant still plays: the
                 // catalog carries the block-store identity and the block
                 // loop serves every byte from disk.
-                let cached = match self.cache.as_ref() {
-                    Some(cache) => {
-                        cache
-                            .offline_playback_variant(track.provider, track.id.as_str())
-                            .await
-                    }
-                    None => None,
-                };
-                let Some(cached) = cached else {
+                let Some(cached) = self.cached_playback_source(track).await else {
                     return Err(error);
                 };
-                let format = offline_cached_format(&cached.extension);
                 crate::diagnostics::event(
                     "INFO",
                     format!(
                         "playback offline cache key={} total={} format={}",
-                        cached.cache_key,
-                        cached.total,
-                        format.label()
+                        cached.cache_identity.as_deref().unwrap_or(""),
+                        cached.size,
+                        cached.format.label()
                     ),
                 );
-                ResolvedSource {
-                    data: SourceData::Remote {
-                        url: "about:offline-cached".to_owned(),
-                        referer: None,
-                    },
-                    size: cached.total,
-                    deezer_track_id: (track.provider == PlaybackProvider::Deezer)
-                        .then(|| track.id.clone()),
-                    is_soundcloud: track.provider == PlaybackProvider::SoundCloud,
-                    cache_identity: Some(cached.cache_key),
-                    format,
-                    format_name: cached.format_name.clone(),
-                    declared_bitrate: None,
-                }
+                cached
             }
         };
         if source.size == 0
@@ -764,8 +773,14 @@ impl StreamResolver {
                         Some(front_buffer.clone()),
                     )
                 }),
-            SourceData::Remote { url, .. } => self.progressive_range_seek_session(
+            SourceData::Remote {
                 url,
+                referer,
+                cookies,
+            } => self.progressive_range_seek_session(
+                url,
+                *referer,
+                cookies.as_deref(),
                 &source,
                 total,
                 duration,
@@ -808,6 +823,8 @@ impl StreamResolver {
     pub(super) fn progressive_range_seek_session(
         &self,
         url: &str,
+        referer: Option<&'static str>,
+        cookies: Option<&str>,
         source: &ResolvedSource,
         total: Option<u64>,
         duration: Option<Duration>,
@@ -820,16 +837,20 @@ impl StreamResolver {
         let duration = duration.filter(|duration| !duration.is_zero())?;
         let resolver = self.clone();
         let url = url.to_string();
+        let cookies = cookies.map(str::to_owned);
         let deezer_track_id = source.deezer_track_id.clone();
         let is_soundcloud = source.is_soundcloud;
         let fetch: range_seek::RangeFetch = Arc::new(move |start, end, fetch_cancellation| {
             let resolver = resolver.clone();
             let url = url.clone();
+            let cookies = cookies.clone();
             let deezer_track_id = deezer_track_id.clone();
             Box::pin(async move {
                 resolver
                     .fetch_cached_range(
                         &url,
+                        referer,
+                        cookies.as_deref(),
                         start,
                         end,
                         total,
@@ -1150,6 +1171,8 @@ impl StreamResolver {
     pub(super) async fn fetch_cached_range(
         &self,
         url: &str,
+        referer: Option<&'static str>,
+        cookies: Option<&str>,
         start: u64,
         end: u64,
         total: u64,
@@ -1163,14 +1186,18 @@ impl StreamResolver {
             RequestClass::Media,
             cancellation,
             || {
-                self.client
-                    .get(url)
-                    .header(header::USER_AGENT, BROWSER_USER_AGENT)
-                    .header(
-                        header::RANGE,
-                        format!("bytes={request_start}-{request_end}"),
-                    )
-                    .header(header::ACCEPT_ENCODING, "identity")
+                apply_media_headers(
+                    self.client
+                        .get(url)
+                        .header(header::USER_AGENT, BROWSER_USER_AGENT)
+                        .header(
+                            header::RANGE,
+                            format!("bytes={request_start}-{request_end}"),
+                        )
+                        .header(header::ACCEPT_ENCODING, "identity"),
+                    referer,
+                    cookies,
+                )
             },
         )
         .await?;
@@ -1258,9 +1285,15 @@ impl StreamResolver {
                 .await;
         }
         cache.promote_prefetch(&key, size).await;
-        let remote_url = match &source.data {
-            SourceData::Remote { url, .. } => Some(url.as_str()),
-            SourceData::Backend(_) | SourceData::Hls(_) | SourceData::Inline(_) => None,
+        let (remote_url, remote_referer, remote_cookies) = match &source.data {
+            SourceData::Remote {
+                url,
+                referer,
+                cookies,
+            } => (Some(url.as_str()), *referer, cookies.as_deref()),
+            SourceData::Backend(_) | SourceData::Hls(_) | SourceData::Inline(_) => {
+                (None, None, None)
+            }
         };
         crate::diagnostics::event(
             "INFO",
@@ -1367,6 +1400,8 @@ impl StreamResolver {
                     let prefix = self
                         .fetch_cached_range(
                             url,
+                            remote_referer,
+                            remote_cookies,
                             0,
                             prefix_end,
                             size,
@@ -1394,6 +1429,8 @@ impl StreamResolver {
                     let rest = self
                         .fetch_cached_range(
                             url,
+                            remote_referer,
+                            remote_cookies,
                             rest_start,
                             end,
                             size,
@@ -1430,6 +1467,8 @@ impl StreamResolver {
                     let bytes = self
                         .fetch_cached_range(
                             url,
+                            remote_referer,
+                            remote_cookies,
                             start,
                             end,
                             size,
@@ -1672,7 +1711,12 @@ impl StreamResolver {
             }
             return Ok(());
         }
-        let SourceData::Remote { url, .. } = &source.data else {
+        let SourceData::Remote {
+            url,
+            referer,
+            cookies,
+        } = &source.data
+        else {
             return Ok(());
         };
         let response = send_with_retry(
@@ -1680,14 +1724,18 @@ impl StreamResolver {
             RequestClass::Media,
             cancellation,
             || {
-                self.client
-                    .get(url)
-                    .header(header::USER_AGENT, BROWSER_USER_AGENT)
-                    .header(
-                        header::RANGE,
-                        format!("bytes=0-{}", BLOCK_SIZE.saturating_sub(1)),
-                    )
-                    .header(header::ACCEPT_ENCODING, "identity")
+                apply_media_headers(
+                    self.client
+                        .get(url)
+                        .header(header::USER_AGENT, BROWSER_USER_AGENT)
+                        .header(
+                            header::RANGE,
+                            format!("bytes=0-{}", BLOCK_SIZE.saturating_sub(1)),
+                        )
+                        .header(header::ACCEPT_ENCODING, "identity"),
+                    *referer,
+                    cookies.as_deref(),
+                )
             },
         )
         .await?;
@@ -1773,14 +1821,18 @@ impl StreamResolver {
                 .await
                 .map_err(|error| error.message)?,
             SourceData::Hls(_) => return Ok(()),
-            SourceData::Remote { url, referer } => {
+            SourceData::Remote {
+                url,
+                referer,
+                cookies,
+            } => {
                 let (request_start, request_end) = aligned_range(start, end, size);
                 let response = send_with_retry(
                     "media.prefetch_range",
                     RequestClass::Media,
                     cancellation,
                     || {
-                        apply_referer(
+                        apply_media_headers(
                             self.client
                                 .get(url)
                                 .header(header::USER_AGENT, BROWSER_USER_AGENT)
@@ -1790,6 +1842,7 @@ impl StreamResolver {
                                 )
                                 .header(header::ACCEPT_ENCODING, "identity"),
                             *referer,
+                            cookies.as_deref(),
                         )
                     },
                 )
@@ -1838,4 +1891,17 @@ impl StreamResolver {
 /// it. The format name is informational; the extension is authoritative.
 fn offline_cached_format(extension: &str) -> AudioFormat {
     AudioFormat::from_extension(extension).unwrap_or(AudioFormat::Flac)
+}
+
+/// Minimum plausible byte size for a full cached rendition of a track.
+/// SoundCloud serves Go+ gated tracks as 30-second snipped previews, and a
+/// preview cached by an older build must not satisfy full-track playback.
+/// Every full rendition the app resolves is at least 64 kbps, so a smaller
+/// average rate over the track's duration means the file is a preview or a
+/// truncated download, not the whole track.
+fn minimum_cached_total(duration: Duration) -> u64 {
+    const MINIMUM_FULL_TRACK_BYTES_PER_SECOND: u64 = 8_000;
+    duration
+        .as_secs()
+        .saturating_mul(MINIMUM_FULL_TRACK_BYTES_PER_SECOND)
 }

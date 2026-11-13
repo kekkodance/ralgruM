@@ -371,5 +371,12 @@ fn main() {
             .unwrap();
             cx.activate(true);
             diagnostics::event("INFO", "GPUI application activated");
+            #[cfg(windows)]
+            if let Err(error) = playback::resolver::preview_klickaud_verification_if_requested() {
+                diagnostics::event(
+                    "WARN",
+                    format!("klickaud preview unavailable reason={error}"),
+                );
+            }
         });
 }

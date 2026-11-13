@@ -45,7 +45,7 @@ use super::retry::{RequestClass, RetryBudget, send_with_retry};
 use super::soundcloud_hls::{self, HlsDescriptor};
 use super::{
     DownloadChoice, DownloadVariant, PlaybackProvider, PlaybackTrack,
-    deezer_collection_download_choices, selection_order,
+    deezer_collection_download_choices, selection_order, soundcloud_download_prefers_hls,
 };
 
 // Single deezer.com browser profile shared by every direct client; kept as a
@@ -403,10 +403,12 @@ fn stable_cache_identity(
 enum SourceData {
     Remote {
         url: String,
-        /// Referer the remote host requires on every media fetch. Sources
-        /// served by hosts that check it (klickaud's CDN) fail with 403
-        /// when it is missing, while the ordinary providers ignore it.
+        /// Referer the remote host requires on every media fetch, when the
+        /// host checks it. Ordinary providers ignore it.
         referer: Option<&'static str>,
+        /// Cookie header for hosts that bind a media URL to the browser
+        /// session that created it. `None` for ordinary providers.
+        cookies: Option<String>,
     },
     Hls(Box<HlsDescriptor>),
     Backend(BackendSource),
@@ -418,6 +420,11 @@ mod flac_coverage;
 mod format;
 mod klickaud;
 mod playback;
+
+#[cfg(windows)]
+pub(crate) fn preview_klickaud_verification_if_requested() -> Result<(), String> {
+    klickaud::preview_verification_if_requested()
+}
 mod providers;
 mod range;
 mod range_seek;
@@ -430,11 +437,12 @@ use format::{
     normalize_release_date, percent_decode_filename, read_bounded_response,
     sniff_soundcloud_original_format, soundcloud_format_from_media_headers, soundcloud_format_name,
     soundcloud_original_bitrate, soundcloud_original_head_can_fallback,
-    soundcloud_playback_transcodings, soundcloud_track_authorization,
-    soundcloud_track_has_no_playable_transcoding, soundcloud_track_is_go_plus_gated,
-    soundcloud_transcoding_bitrate, soundcloud_transcodings, transcoding_format,
-    validate_audio_output, validate_media_response_url, validate_progressive_prefix,
-    validate_soundcloud_stream_url, validate_soundcloud_transcoding_url,
+    soundcloud_playback_transcodings, soundcloud_standard_cache_identity,
+    soundcloud_track_authorization, soundcloud_track_has_no_playable_transcoding,
+    soundcloud_track_is_go_plus_gated, soundcloud_transcoding_bitrate, soundcloud_transcodings,
+    transcoding_format, validate_audio_output, validate_media_response_url,
+    validate_progressive_prefix, validate_soundcloud_stream_url,
+    validate_soundcloud_transcoding_url,
 };
 use klickaud::klickaud_placeholder_source;
 use range::{
@@ -574,13 +582,24 @@ fn response_cookies(response: &Response) -> String {
         .join("; ")
 }
 
-fn apply_referer(
+fn apply_media_headers(
     request: reqwest::RequestBuilder,
     referer: Option<&'static str>,
+    cookies: Option<&str>,
 ) -> reqwest::RequestBuilder {
-    match referer {
+    let request = match referer {
         Some(referer) => request.header(header::REFERER, referer),
         None => request,
+    };
+    match cookies {
+        Some(cookies) if !cookies.is_empty() => {
+            let Ok(mut value) = header::HeaderValue::from_str(cookies) else {
+                return request;
+            };
+            value.set_sensitive(true);
+            request.header(header::COOKIE, value)
+        }
+        _ => request,
     }
 }
 
@@ -760,10 +779,15 @@ fn playback_source_label(source: &ResolvedSource) -> &'static str {
 
 fn download_choice_text(variant: DownloadVariant, source: &ResolvedSource) -> (String, String) {
     let format = source.format_name.trim();
-    let bitrate = source.declared_bitrate;
+    let bitrate = source
+        .declared_bitrate
+        .map(|bitrate| source.format.nominal_bitrate(bitrate));
     let display_format = match (source.format, bitrate) {
         (AudioFormat::Flac, _) => "FLAC".to_owned(),
         (AudioFormat::Mp3, Some(bitrate)) => format!("MP3 {bitrate} kbps"),
+        (AudioFormat::M4a | AudioFormat::Aac, Some(bitrate)) => format!("AAC {bitrate} kbps"),
+        (AudioFormat::OggOpus, Some(bitrate)) => format!("Opus {bitrate} kbps"),
+        (AudioFormat::OggVorbis, Some(bitrate)) => format!("OGG Vorbis {bitrate} kbps"),
         _ if !format.is_empty() => format.to_owned(),
         _ => source.format.label().to_owned(),
     };

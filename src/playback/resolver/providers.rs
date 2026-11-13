@@ -175,6 +175,7 @@ impl StreamResolver {
             data: SourceData::Remote {
                 url: url.into(),
                 referer: None,
+                cookies: None,
             },
             size,
             deezer_track_id: None,
@@ -672,7 +673,7 @@ impl StreamResolver {
         {
             Some(size) => size,
             None if include_remote_size => self
-                .probe_remote_size(url, cancellation, false)
+                .probe_remote_size(url, None, None, cancellation, false)
                 .await
                 .unwrap_or(0),
             None => 0,
@@ -698,6 +699,7 @@ impl StreamResolver {
             data: SourceData::Remote {
                 url: url.into(),
                 referer: None,
+                cookies: None,
             },
             size,
             deezer_track_id: Some(identity.source_track_id.clone()),
@@ -820,7 +822,7 @@ impl StreamResolver {
                 validate_soundcloud_stream_url(&stream_url)?;
                 let stream_url = stream_url.to_string();
                 let size = if include_remote_size {
-                    self.probe_remote_size(&stream_url, cancellation, true)
+                    self.probe_remote_size(&stream_url, None, None, cancellation, true)
                         .await
                         .unwrap_or(0)
                 } else {
@@ -830,6 +832,7 @@ impl StreamResolver {
                     SourceData::Remote {
                         url: stream_url,
                         referer: None,
+                        cookies: None,
                     },
                     size,
                 )
@@ -851,13 +854,12 @@ impl StreamResolver {
                 format_name: format_name.clone(),
                 declared_bitrate: soundcloud_transcoding_bitrate(selected),
                 is_soundcloud: true,
-                cache_identity: Some(stable_cache_identity(
-                    PlaybackProvider::SoundCloud,
+                cache_identity: soundcloud_standard_cache_identity(
                     track_id,
-                    SourceVariant::SoundCloudStandard,
+                    selected,
                     format,
                     &format_name,
-                )),
+                ),
             });
         }
         Err("No active stream link found for this SoundCloud track".into())
@@ -1087,7 +1089,7 @@ impl StreamResolver {
         W: DownloadOutput,
     {
         let mut downloaded = 0;
-        let (remote_url, remote_referer) = match remote.data {
+        let (remote_url, remote_referer, remote_cookies) = match remote.data {
             SourceData::Inline(bytes) => {
                 if bytes.len() as u64 > MAX_AUDIO_SIZE {
                     return Err("The download is too large".into());
@@ -1112,7 +1114,11 @@ impl StreamResolver {
                     .map_err(|_| "The playback buffer could not be finalized".to_string())?;
                 return Ok(());
             }
-            SourceData::Remote { url, referer } => (url, referer),
+            SourceData::Remote {
+                url,
+                referer,
+                cookies,
+            } => (url, referer, cookies),
             SourceData::Hls(descriptor) => {
                 return soundcloud_hls::download(
                     &self.client,
@@ -1142,13 +1148,14 @@ impl StreamResolver {
                 let end = (start + RANGE_CHUNK - 1).min(remote.size - 1);
                 let response =
                     send_with_retry("media.range", RequestClass::Media, cancellation, || {
-                        apply_referer(
+                        apply_media_headers(
                             self.client
                                 .get(&remote_url)
                                 .header(header::USER_AGENT, BROWSER_USER_AGENT)
                                 .header(header::RANGE, format!("bytes={start}-{end}"))
                                 .header(header::ACCEPT_ENCODING, "identity"),
                             remote_referer,
+                            remote_cookies.as_deref(),
                         )
                     })
                     .await?;
@@ -1196,13 +1203,14 @@ impl StreamResolver {
             }
         } else {
             let response = send_with_retry("media.full", RequestClass::Media, cancellation, || {
-                apply_referer(
+                apply_media_headers(
                     self.client
                         .get(&remote_url)
                         .header(header::USER_AGENT, BROWSER_USER_AGENT)
                         .header(header::RANGE, "bytes=0-")
                         .header(header::ACCEPT_ENCODING, "identity"),
                     remote_referer,
+                    remote_cookies.as_deref(),
                 )
             })
             .await?;

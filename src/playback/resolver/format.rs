@@ -212,6 +212,28 @@ pub(super) fn soundcloud_format_name(value: &Value, format: AudioFormat) -> Stri
     }
 }
 
+/// Block-cache identity for a native SoundCloud standard stream. A snipped
+/// stream is a short preview served for gated tracks, so it must not share
+/// the full-track identity: caching it there would make the preview look
+/// like a completed standard variant.
+pub(super) fn soundcloud_standard_cache_identity(
+    track_id: &str,
+    transcoding: &Value,
+    format: AudioFormat,
+    format_name: &str,
+) -> Option<String> {
+    if transcoding.get("snipped") == Some(&Value::Bool(true)) {
+        return None;
+    }
+    Some(stable_cache_identity(
+        PlaybackProvider::SoundCloud,
+        track_id,
+        SourceVariant::SoundCloudStandard,
+        format,
+        format_name,
+    ))
+}
+
 pub(super) fn soundcloud_transcoding_bitrate(value: &Value) -> Option<u32> {
     value_bitrate(value)
 }

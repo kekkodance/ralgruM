@@ -993,6 +993,7 @@ async fn direct_deezer_progressive_sources_attach_range_seek_sessions() {
         data: SourceData::Remote {
             url: url.into(),
             referer: None,
+            cookies: None,
         },
         size: 0,
         deezer_track_id: Some("42".into()),
@@ -1005,6 +1006,8 @@ async fn direct_deezer_progressive_sources_attach_range_seek_sessions() {
     let session = |format: AudioFormat| {
         resolver.progressive_range_seek_session(
             url,
+            None,
+            None,
             &source(format),
             Some(262_144),
             Some(Duration::from_secs(4)),

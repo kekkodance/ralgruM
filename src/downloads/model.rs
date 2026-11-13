@@ -456,7 +456,7 @@ impl DownloadModel {
                 cached.extension.clone(),
                 cached.format_name.clone(),
                 cached.total,
-                None,
+                cached.declared_bitrate,
             ),
         };
         let path = destination_with_extension(&track, &extension, &downloads_dir);

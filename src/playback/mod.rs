@@ -36,7 +36,7 @@ pub(crate) use deezer_extension::{
 };
 pub(crate) use download_variant::{
     DownloadChoice, DownloadVariant, collection_download_availability,
-    deezer_collection_download_choices, selection_order,
+    deezer_collection_download_choices, selection_order, soundcloud_download_prefers_hls,
 };
 pub(crate) use listen_history::ListenHistorySignal;
 #[allow(unused_imports)]

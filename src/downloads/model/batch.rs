@@ -47,16 +47,9 @@ impl DownloadModel {
                 return ids;
             }
         };
-        let target_paths = ids
+        let targets = ids
             .iter()
-            .filter_map(|id| {
-                let job = self.job(*id)?;
-                let extension = batch_download_extension(job.track.provider, variant)?;
-                Some((
-                    *id,
-                    destination_with_extension(&job.track, extension, &downloads_dir),
-                ))
-            })
+            .filter_map(|id| self.job(*id).map(|job| (*id, job.track.clone())))
             .collect::<Vec<_>>();
         let batch_key = self.next_batch_key();
         self.begin_batch_tracking(&ids);
@@ -66,14 +59,34 @@ impl DownloadModel {
             existing_targets: Vec::new(),
             key: batch_key,
         });
-        let task = self.runtime.spawn_blocking(move || {
-            let inspection =
-                inspect_batch_targets(target_paths.iter().map(|(_, path)| path.clone()));
-            batch_conflict_targets(target_paths, inspection)
-        });
+        let runtime = self.runtime.clone();
+        let cache = self.cache.clone();
         let entity = cx.entity();
         let batch_ids = ids.clone();
         cx.spawn(async move |_, cx| {
+            // The extension lookup is async because a SoundCloud standard
+            // download may reuse a cached variant whose format differs from
+            // the static prediction. Everything after it is filesystem work
+            // and stays on the blocking pool.
+            let cancellation = CancellationToken::new();
+            let mut target_paths = Vec::with_capacity(targets.len());
+            for (id, track) in targets {
+                let Some(extension) =
+                    batch_download_extension_for(cache.as_ref(), &track, variant, &cancellation)
+                        .await
+                else {
+                    continue;
+                };
+                target_paths.push((
+                    id,
+                    destination_with_extension(&track, &extension, &downloads_dir),
+                ));
+            }
+            let task = runtime.spawn_blocking(move || {
+                let inspection =
+                    inspect_batch_targets(target_paths.iter().map(|(_, path)| path.clone()));
+                batch_conflict_targets(target_paths, inspection)
+            });
             let targets = task.await;
             entity.update(cx, |model, cx| {
                 let Some(batch) = model
@@ -259,10 +272,106 @@ pub(super) fn batch_download_extension(
     }
 }
 
+/// The extension a batch destination will actually use. Deezer's fixed
+/// variants are predicted exactly from the selection, but a SoundCloud
+/// standard download first reuses a complete cached variant, and playback
+/// can cache an AAC stream under the standard identity. Consulting the cache
+/// keeps the conflict preflight pointed at the filename the transfer writes.
+pub(super) async fn batch_download_extension_for(
+    cache: Option<&AudioCache>,
+    track: &PlaybackTrack,
+    variant: DownloadVariant,
+    cancellation: &CancellationToken,
+) -> Option<String> {
+    let predicted = batch_download_extension(track.provider, variant);
+    if track.provider != PlaybackProvider::SoundCloud || variant != DownloadVariant::Standard {
+        return predicted.map(str::to_owned);
+    }
+    if let Some(cache) = cache
+        && let Some(cached) = cache
+            .complete_download_variant(track, variant, cancellation)
+            .await
+    {
+        return Some(cached.extension);
+    }
+    predicted.map(str::to_owned)
+}
+
 pub(super) fn destination_with_extension(
     track: &PlaybackTrack,
     extension: &str,
     directory: &Path,
 ) -> PathBuf {
     directory.join(download_filename(&track.artist, &track.title, extension))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn soundcloud_track(id: &str) -> PlaybackTrack {
+        PlaybackTrack {
+            provider: PlaybackProvider::SoundCloud,
+            id: id.into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            album: String::new(),
+            album_id: String::new(),
+            release_date: String::new(),
+            artists: Vec::new(),
+            artwork: String::new(),
+            duration: std::time::Duration::from_secs(30),
+            downloadable: false,
+            progressive: false,
+            explicit: false,
+            ai_generated: false,
+            go_plus: true,
+            service_url: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn soundcloud_standard_batch_extension_follows_a_cached_aac_variant() {
+        let temp = tempdir().unwrap();
+        let cache = AudioCache::new(temp.path().into(), 8);
+        let track = soundcloud_track("cached-aac");
+        let key = "soundcloud:cached-aac:standard:m4a:M4A/MP4 AAC";
+        // 30 seconds at 160 kbps plus container overhead.
+        let bytes = vec![0x5a_u8; 605_000];
+        let total = bytes.len() as u64;
+        cache
+            .write(
+                &cache.block_path(key, total, 0, total - 1),
+                &bytes,
+                cache.generation(),
+            )
+            .await;
+        cache.remember_track(&track, key, Some(total)).await;
+
+        let extension = batch_download_extension_for(
+            Some(&cache),
+            &track,
+            DownloadVariant::Standard,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(extension.as_deref(), Some("m4a"));
+    }
+
+    #[tokio::test]
+    async fn soundcloud_standard_batch_extension_predicts_mp3_without_a_cached_variant() {
+        let temp = tempdir().unwrap();
+        let cache = AudioCache::new(temp.path().into(), 8);
+        let track = soundcloud_track("uncached");
+
+        let extension = batch_download_extension_for(
+            Some(&cache),
+            &track,
+            DownloadVariant::Standard,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(extension.as_deref(), Some("mp3"));
+    }
 }
