@@ -5,6 +5,25 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # Cargo.lock pins the Zed git stack to the revision that the vendored GPUI
+    # is built against. Adding a rev to individual dependencies splits package
+    # identity because the vendored and upstream manifests use the unqualified
+    # git URL, so ignore the whole stack instead of bumping it piecemeal.
+    ignore:
+      - dependency-name: "gpui*"
+      - dependency-name: "bench_metrics"
+      - dependency-name: "collections"
+      - dependency-name: "derive_refineable"
+      - dependency-name: "http_client"
+      - dependency-name: "http_client_tls"
+      - dependency-name: "perf"
+      - dependency-name: "refineable"
+      - dependency-name: "reqwest_client"
+      - dependency-name: "scheduler"
+      - dependency-name: "sum_tree"
+      - dependency-name: "util_macros"
+      - dependency-name: "ztracing"
+      - dependency-name: "ztracing_macro"
 
   - package-ecosystem: github-actions
     directory: /
