@@ -84,10 +84,10 @@ impl AlbumInfoPrefetch {
     /// Marks a key as loading. Returns false when the key is already cached
     /// or another fetch is running, so callers avoid duplicate requests.
     pub(crate) fn begin(&mut self, key: AlbumInfoCacheKey) -> bool {
-        if self.pages.contains_key(&key) || !self.in_flight.insert(key) {
+        if self.pages.contains_key(&key) {
             return false;
         }
-        true
+        self.in_flight.insert(key)
     }
 
     pub(crate) fn complete(&mut self, key: AlbumInfoCacheKey, page: DetailPage) {

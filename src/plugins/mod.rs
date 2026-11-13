@@ -30,14 +30,10 @@ pub(crate) fn all() -> &'static [PluginDefinition] {
 }
 
 fn valid_id(id: &str) -> bool {
-    if id.is_empty()
-        || !id
+    !id.is_empty()
+        && id
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
-        return false;
-    }
-    true
 }
 
 pub(crate) fn prepare_startup(mut store: PluginStore) -> (PluginStore, Vec<String>) {

@@ -213,10 +213,14 @@ impl HlsSeekSession {
                         "The HLS seek result was cancelled",
                     ));
                 }
-                for index in target.index.saturating_add(1)..descriptor.segments.len() {
+                for segment in descriptor
+                    .segments
+                    .iter()
+                    .skip(target.index.saturating_add(1))
+                {
                     let fragment = fetch_media_bytes(
                         &client,
-                        &descriptor.segments[index],
+                        segment,
                         &worker_cancellation,
                         &user_agent,
                         budget.clone(),
