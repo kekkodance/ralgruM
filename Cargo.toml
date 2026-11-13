@@ -78,7 +78,7 @@ wmi = { version = "0.18.4", default-features = false }
 # the native menu), sign-in webview (wry on WebKitGTK), and logind power
 # events (zbus).
 [target.'cfg(target_os = "linux")'.dependencies]
-souvlaki = "0.8.3"
+souvlaki = "0.9.3"
 tray-icon = { version = "=0.24.1", default-features = false, features = ["gtk"] }
 wry = { version = "0.55.1", default-features = false, features = ["os-webview", "x11"] }
 # The sign-in webview configures the WebKit cookie policy directly. Keep this
@@ -93,7 +93,7 @@ gtk = "0.18"
 # Media keys use souvlaki on every desktop OS: SMTC on Windows, MPRIS over
 # libdbus on Linux, and MRemoteCommandCenter on macOS.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
-souvlaki = "0.8.3"
+souvlaki = "0.9.3"
 [profile.dev]
 opt-level = 1
 debug = 1
