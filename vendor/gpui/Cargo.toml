@@ -100,7 +100,7 @@ smallvec = { version = "1.6", features = ["union", "const_new"] }
 stacksafe = { version = "1.0", optional = true }
 strum = { version = "0.28", features = ["derive"] }
 sum_tree = { git = "https://github.com/zed-industries/zed" }
-taffy = { version = "=0.15.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "float_layout", "content_size"] }
+taffy = { version = "=0.15.1", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "float_layout", "content_size"] }
 thiserror = { version = "2.0.12" }
 gpui_util = { git = "https://github.com/zed-industries/zed" }
 hdrhistogram = { version = "7", default-features = false, optional = true }

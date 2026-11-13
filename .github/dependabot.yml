@@ -5,6 +5,35 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # Cargo.lock pins the Zed git stack to the revision that the vendored GPUI
+    # is built against. Adding a rev to individual dependencies splits package
+    # identity because the vendored and upstream manifests use the unqualified
+    # git URL, so ignore the whole stack instead of bumping it piecemeal.
+    # accesskit, usvg, resvg, and fontdb stay on the APIs implemented by the
+    # vendored GPUI. tray-icon stays pinned because newer releases drop the gtk
+    # feature this project uses, and rodio stays on cpal 0.17 because the ASIO
+    # fixes are vendored there.
+    ignore:
+      - dependency-name: "accesskit*"
+      - dependency-name: "gpui*"
+      - dependency-name: "bench_metrics"
+      - dependency-name: "collections"
+      - dependency-name: "derive_refineable"
+      - dependency-name: "fontdb"
+      - dependency-name: "http_client"
+      - dependency-name: "http_client_tls"
+      - dependency-name: "perf"
+      - dependency-name: "refineable"
+      - dependency-name: "reqwest_client"
+      - dependency-name: "resvg*"
+      - dependency-name: "rodio"
+      - dependency-name: "scheduler"
+      - dependency-name: "sum_tree"
+      - dependency-name: "tray-icon"
+      - dependency-name: "usvg*"
+      - dependency-name: "util_macros"
+      - dependency-name: "ztracing"
+      - dependency-name: "ztracing_macro"
 
   - package-ecosystem: github-actions
     directory: /

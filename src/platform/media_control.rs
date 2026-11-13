@@ -339,6 +339,9 @@ mod native {
             | MediaControlEvent::OpenUri(_)
             | MediaControlEvent::Raise
             | MediaControlEvent::Quit => None,
+            // souvlaki 0.9 marks the event enum non-exhaustive, so events
+            // added by future releases are dropped until this app handles them.
+            _ => None,
         }
     }
 
