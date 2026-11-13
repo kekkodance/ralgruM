@@ -11,7 +11,7 @@ struct RegistryAsioDriver {
     canonical_name: String,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 impl RegistryAsioDriver {
     fn new(key_name: String, description: Option<String>) -> Self {
         let canonical_name = description
