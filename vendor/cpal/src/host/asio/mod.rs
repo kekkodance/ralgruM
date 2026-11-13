@@ -13,7 +13,7 @@ use crate::{
     SupportedStreamConfigsError,
 };
 
-pub use self::device::{AsioDriverMessage, clear_shared_asio_streams, on_driver_message};
+pub use self::device::{clear_shared_asio_streams, on_driver_message, AsioDriverMessage};
 pub use self::device::{Device, Devices, SupportedInputConfigs, SupportedOutputConfigs};
 pub use self::stream::Stream;
 use std::sync::{Arc, OnceLock};
@@ -41,6 +41,28 @@ impl Host {
             .clone();
         let host = Host { asio };
         Ok(host)
+    }
+
+    /// Loads a single driver by its registry `Description` and returns it as
+    /// a device. Unlike enumerating `output_devices`, this never tries other
+    /// installed drivers first, so a driver whose hardware is missing cannot
+    /// disturb the requested one.
+    ///
+    /// ASIO drivers are Apartment-threaded COM servers, so the caller must
+    /// have COM available on its thread and must keep using and dropping the
+    /// device there. Initializing the thread as an STA before the first
+    /// load keeps creation working; a pre-initialized MTA makes the SDK's
+    /// `CoCreateInstance` fail.
+    pub fn device_from_name(&self, name: &str) -> Result<Device, crate::DevicesError> {
+        let driver =
+            self.asio
+                .load_driver(name)
+                .map_err(|error| crate::DevicesError::BackendSpecific {
+                    err: crate::BackendSpecificError {
+                        description: error.to_string(),
+                    },
+                })?;
+        Ok(Device::from_driver(Arc::new(driver)))
     }
 }
 

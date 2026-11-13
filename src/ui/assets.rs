@@ -7,6 +7,7 @@ use rust_embed::RustEmbed;
 pub(crate) enum LocalIcon {
     Music,
     QuoteRight,
+    TextHeight,
     Compass,
     Layers,
     Download,
@@ -98,9 +99,10 @@ pub(crate) enum LocalIcon {
 
 impl LocalIcon {
     #[cfg(test)]
-    pub(crate) const ALL: [LocalIcon; 89] = [
+    pub(crate) const ALL: [LocalIcon; 90] = [
         LocalIcon::Music,
         LocalIcon::QuoteRight,
+        LocalIcon::TextHeight,
         LocalIcon::Compass,
         LocalIcon::Layers,
         LocalIcon::Download,
@@ -194,6 +196,7 @@ impl LocalIcon {
         match self {
             Self::Music => "ralgrum/icons/fontawesome-free-7.3.1/solid/music.svg",
             Self::QuoteRight => "ralgrum/icons/fontawesome-free-7.3.1/solid/quote-right.svg",
+            Self::TextHeight => "ralgrum/icons/fontawesome-free-7.3.1/solid/text-height.svg",
             Self::Compass => "ralgrum/icons/fontawesome-free-7.3.1/solid/compass.svg",
             Self::Layers => "ralgrum/icons/fontawesome-free-7.3.1/solid/layer-group.svg",
             Self::Download => "ralgrum/icons/fontawesome-free-7.3.1/solid/download.svg",
@@ -385,6 +388,7 @@ impl LocalIcon {
             | Self::IdCard
             | Self::ObjectGroup
             | Self::ShieldUser
+            | Self::TextHeight
             | Self::ThumbtackSlash
             | Self::UserGroup
             | Self::UserLock

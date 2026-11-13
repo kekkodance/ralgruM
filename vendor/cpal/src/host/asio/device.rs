@@ -144,6 +144,28 @@ impl Hash for Device {
 }
 
 impl Device {
+    /// Wraps a freshly loaded driver in a device. Enumeration and
+    /// direct-by-name loads share this so both register the same
+    /// process-global message dispatcher and stream slot.
+    pub(crate) fn from_driver(driver: Arc<sys::Driver>) -> Self {
+        // Forward driver-requested resets and resyncs to the subscribers so
+        // a host can recover a session that died across a system sleep.
+        register_driver_message_dispatch(&driver);
+        // The driver is process-global, so its ASIO buffers are too: every
+        // Device handle for the same driver must share one stream slot.
+        // Without this, a second Device would dispose and recreate the
+        // buffers while callbacks registered by the first Device still read
+        // them, crashing the process with a use-after-free on the audio
+        // thread.
+        let asio_streams = shared_asio_streams(&driver);
+        let current_callback_flag = shared_current_callback_flag(&driver);
+        Self {
+            driver,
+            asio_streams,
+            current_callback_flag,
+        }
+    }
+
     pub fn description(&self) -> Result<DeviceDescription, DeviceNameError> {
         let driver_name = self.driver.name().to_string();
 
@@ -340,27 +362,7 @@ impl Iterator for Devices {
         loop {
             match self.drivers.next() {
                 Some(name) => match self.asio.load_driver(&name) {
-                    Ok(driver) => {
-                        let driver = Arc::new(driver);
-                        // Forward driver-requested resets and resyncs to the
-                        // subscribers so a host can recover a session that
-                        // died across a system sleep.
-                        register_driver_message_dispatch(&driver);
-                        // The driver is process-global, so its ASIO buffers
-                        // are too: every Device handle for the same driver
-                        // must share one stream slot. Without this, a
-                        // second Device would dispose and recreate the
-                        // buffers while callbacks registered by the first
-                        // Device still read them, crashing the process
-                        // with a use-after-free on the audio thread.
-                        let asio_streams = shared_asio_streams(&driver);
-                        let current_callback_flag = shared_current_callback_flag(&driver);
-                        return Some(Device {
-                            driver,
-                            asio_streams,
-                            current_callback_flag,
-                        });
-                    }
+                    Ok(driver) => return Some(Device::from_driver(Arc::new(driver))),
                     Err(_) => continue,
                 },
                 None => return None,

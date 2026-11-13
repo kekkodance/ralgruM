@@ -1,18 +1,24 @@
 //! A dedicated thread that owns the ASIO driver's COM lifecycle.
 //!
-//! The MiniFuse ASIO driver DLL is registered with
-//! `ThreadingModel = Apartment`: it is an STA COM server whose object only
-//! works reliably when created and released from one COM-initialized
-//! thread. Opening the driver from arbitrary tokio blocking workers (no
-//! COM apartment) fails instantly, and releasing it from a thread other
-//! than its creator wedges the DLL for the rest of the process: every
-//! later load returns "could not be loaded" until restart.
+//! The MiniFuse and TASCAM ASIO driver DLLs are registered with
+//! `ThreadingModel = Apartment`: they are STA COM servers whose objects only
+//! work reliably when created and released from one COM-initialized thread.
+//! Opening the driver from a thread pre-initialized as an MTA fails: the
+//! ASIO SDK creates the object with `CoCreateInstance` from the loading
+//! thread, so `loadDriver` returns false even though the driver is
+//! installed. Releasing the driver from a thread other than its creator
+//! wedges the DLL for the rest of the process: every later load returns
+//! "could not be loaded" until restart.
 //!
 //! Every ASIO COM operation (open stream, drop stream) therefore runs
 //! here, on the single dedicated thread created at first use. The thread
 //! initializes COM with `CoInitializeEx(STA)`. It never pumps window
 //! messages: the reference implementation works without pumping, and a
 //! message loop here would swallow messages the driver posts to itself.
+//! The apartment must be STA before the ASIO SDK creates its process-wide
+//! driver list. The SDK calls `CoCreateInstance` for the Apartment-threaded
+//! driver from the loading thread, and an MTA thread makes that fail while
+//! its own nested `CoInitialize(0)` can no longer switch the apartment.
 #[cfg(windows)]
 use rodio::cpal::traits::DeviceTrait;
 #[cfg(windows)]
@@ -71,16 +77,24 @@ fn owner_sender() -> Sender<AsioRequest> {
 /// The owner thread body: initializes COM and serves requests forever.
 #[cfg(windows)]
 fn owner_thread(receiver: Receiver<AsioRequest>) {
-    // Multithreaded apartment: the reference implementation loads the
-    // driver from a plain, never-pumping thread (implicit MTA) and works,
-    // while an STA that blocks in recv() without pumping leaves
-    // Apartment-marked internal objects without a working apartment. MTA
-    // objects never need the initializing thread to pump. The result is
-    // ignored because COM may already be initialized for this thread.
-    unsafe {
-        let _ = windows::Win32::System::Com::CoInitializeEx(
+    // Both the MiniFuse and the TASCAM ASIO servers register
+    // `ThreadingModel = Apartment`. The ASIO SDK creates the driver with
+    // `CoCreateInstance` from this thread, and an MTA thread makes that
+    // fail: `loadDriver` returns false even though the driver is installed.
+    // Initializing the STA here, before the SDK's process-wide driver list
+    // exists, lets its nested `CoInitialize(0)` succeed in the same
+    // apartment. Every COM call stays on this thread, so the blocking
+    // `recv()` loop never needs to pump cross-apartment messages.
+    let com_result = unsafe {
+        windows::Win32::System::Com::CoInitializeEx(
             None,
-            windows::Win32::System::Com::COINIT_MULTITHREADED,
+            windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+        )
+    };
+    if com_result.is_err() {
+        crate::diagnostics::event(
+            "WARN",
+            format!("ASIO owner thread could not initialize COM: {com_result:?}"),
         );
     }
     while let Ok(request) = receiver.recv() {

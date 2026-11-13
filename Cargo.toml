@@ -1,6 +1,6 @@
 [package]
 name = "ralgrum-gpui"
-version = "0.8.4"
+version = "0.8.5"
 edition = "2024"
 license-file = "LICENSE"
 default-run = "ralgruM"
@@ -116,14 +116,18 @@ gpui = { path = "vendor/gpui" }
 # suspend/session forwarding, custom windows, and the existing direct native prompts.
 gpui_windows = { path = "vendor/gpui_windows" }
 [patch.crates-io]
-# Vendored cpal (0.16.0) with one fix: every ASIO Device handle shares the
+# Vendored cpal (0.16.0) with two fixes: every ASIO Device handle shares the
 # driver's stream slot, so reopening an ASIO output reuses the existing
 # buffers instead of disposing them under a live audio callback, which
-# crashed the process with a use-after-free on the driver's audio thread.
+# crashed the process with a use-after-free on the driver's audio thread;
+# and ASIO can load a single driver by its canonical registry description
+# without enumerating every installed driver first.
 cpal = { path = "vendor/cpal" }
-# Vendored asio-sys (0.2.6) with one fix: driver teardown always removes the
+# Vendored asio-sys (0.2.6) with two fixes: driver teardown always removes the
 # C++ singleton entry, so a driver whose hardware vanished across a system
-# sleep can be reloaded instead of failing until the app restarts.
+# sleep can be reloaded instead of failing until the app restarts; and the
+# ASIO driver info struct is zero-initialized so `sysRef` is never a random
+# pointer when the driver initializes.
 asio-sys = { path = "vendor/asio-sys" }
 
 [workspace]

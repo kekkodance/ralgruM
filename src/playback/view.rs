@@ -374,7 +374,14 @@ fn resolve_saved_output_target(
 ) -> AudioOutputTarget {
     let target = if asio_mode {
         let registry_drivers = asio_drivers::list_registry_asio_drivers();
-        asio_drivers::effective_target(true, asio_driver, &registry_drivers, output_device, &[])
+        let canonical_driver = asio_driver.map(asio_drivers::canonical_asio_driver_name);
+        asio_drivers::effective_target(
+            true,
+            canonical_driver.as_deref(),
+            &registry_drivers,
+            output_device,
+            &[],
+        )
     } else {
         output_devices::resolve_saved_device_target(output_device)
     };

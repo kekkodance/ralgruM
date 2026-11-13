@@ -1946,6 +1946,20 @@ pub(crate) fn ghost_icon_button_with_nudge(
     nudge_up: f32,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    ghost_icon_trigger_element(id, icon, label, icon_size, nudge_up)
+        .on_click(handler)
+        .into_any_element()
+}
+
+/// The visual shell shared by ghost header actions and menu triggers. Callers
+/// attach their own click or context-menu handling.
+pub(crate) fn ghost_icon_trigger_element(
+    id: &'static str,
+    icon: LocalIcon,
+    label: &'static str,
+    icon_size: f32,
+    nudge_up: f32,
+) -> Stateful<Div> {
     div()
         .id(id)
         .group(id)
@@ -1990,8 +2004,6 @@ pub(crate) fn ghost_icon_button_with_nudge(
                         .child(local_icon(icon, FOREGROUND).size_full()),
                 ),
         )
-        .on_click(handler)
-        .into_any_element()
 }
 
 fn row_action_tooltip(icon: LocalIcon) -> &'static str {

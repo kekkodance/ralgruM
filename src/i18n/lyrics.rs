@@ -23,6 +23,7 @@ pub(super) fn translate(source: &str) -> Option<&'static str> {
         "Lyrics" => "Testi",
         "Disable always on top" => "Disattiva sempre in primo piano",
         "Enable always on top" => "Attiva sempre in primo piano",
+        "Text size" => "Dimensione testo",
         "Pop out" => "Apri in una finestra separata",
         _ => return None,
     })

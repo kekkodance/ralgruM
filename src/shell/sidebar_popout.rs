@@ -16,10 +16,6 @@ const POPOUT_MIN_WIDTH: f32 = 320.;
 const POPOUT_MIN_HEIGHT: f32 = 400.;
 const POPOUT_INITIAL_WIDTH: f32 = 400.;
 const POPOUT_INITIAL_HEIGHT: f32 = 640.;
-// Slightly wider than the in-app sidebar clamp; the floating window can
-// afford more room than the docked column.
-const POPOUT_MAX_WIDTH: f32 = 480.;
-const POPOUT_MAX_HEIGHT: f32 = 900.;
 
 /// Result of a popout lifecycle request.
 enum PopoutSlot {
@@ -91,7 +87,6 @@ pub(super) fn open_or_focus_popout(
             // Animations in the popout must run at the monitor rate even
             // while the main window holds focus.
             inactive_frame_interval: Some(Duration::ZERO),
-            window_max_size: Some(size(px(POPOUT_MAX_WIDTH), px(POPOUT_MAX_HEIGHT))),
             window_min_size: Some(size(px(POPOUT_MIN_WIDTH), px(POPOUT_MIN_HEIGHT))),
             ..Default::default()
         },

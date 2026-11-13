@@ -1,6 +1,7 @@
 mod annotation;
 mod client;
 mod core;
+mod font_control;
 mod genius_fragment;
 mod scroll_motion;
 mod scroll_state;
@@ -19,7 +20,10 @@ use gpui::{
     AnimationExt, AnyElement, App, ClickEvent, Context, FontWeight, HighlightStyle, IntoElement,
     Render, ScrollHandle, StyledText, Task, Window, div, point, prelude::*, px, rgb, rgba,
 };
-use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
+use gpui_component::{
+    scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow},
+    slider::{SliderState, SliderValue},
+};
 use tokio::{runtime::Runtime, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -47,8 +51,16 @@ const CENTER_RETRY_ATTEMPTS: u8 = 4;
 const LYRICS_HEADER_BLOCK_HEIGHT: f32 = 117.;
 const MIN_LYRICS_VIEWPORT_HEIGHT: f32 = 20.;
 const LYRICS_BOTTOM_PADDING_PX: f32 = 16.;
-const LYRIC_LINE_CONTENT_HEIGHT: f32 = 22.5;
+const LYRIC_FONT_SIZE: f32 = 15.;
+const LYRIC_LINE_HEIGHT_RATIO: f32 = 1.5;
 const LYRIC_LINE_PADDING_Y: f32 = 6.;
+const LYRIC_FONT_SCALE_MIN: f32 = 100.;
+const LYRIC_FONT_SCALE_MAX: f32 = 200.;
+const LYRIC_FONT_SCALE_STEP: f32 = 1.;
+
+fn lyric_font_size_for_scale(percent: f32) -> f32 {
+    LYRIC_FONT_SIZE * percent.clamp(LYRIC_FONT_SCALE_MIN, LYRIC_FONT_SCALE_MAX) / 100.
+}
 
 fn annotation_panel_max_height(viewport_height: f32) -> f32 {
     let available_height =
@@ -141,6 +153,8 @@ pub(crate) struct LyricsPanel {
     center_retry_remaining: u8,
     center_retry_task_id: u64,
     center_retry_task_running: bool,
+    popout_font_size: f32,
+    popout_font_slider: gpui::Entity<SliderState>,
 }
 
 #[derive(Clone, Debug)]
@@ -159,6 +173,13 @@ impl LyricsPanel {
         runtime: Arc<Runtime>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let popout_font_slider = cx.new(|_| {
+            SliderState::new()
+                .min(LYRIC_FONT_SCALE_MIN)
+                .max(LYRIC_FONT_SCALE_MAX)
+                .step(LYRIC_FONT_SCALE_STEP)
+                .default_value(LYRIC_FONT_SCALE_MIN)
+        });
         let this = Self {
             playback,
             progress,
@@ -194,11 +215,24 @@ impl LyricsPanel {
             center_retry_remaining: 0,
             center_retry_task_id: 0,
             center_retry_task_running: false,
+            popout_font_size: LYRIC_FONT_SIZE,
+            popout_font_slider: popout_font_slider.clone(),
         };
         cx.observe(&this.playback, |this, _, cx| this.sync_from_playback(cx))
             .detach();
         cx.observe(&this.progress, |this, _, cx| this.sync_from_playback(cx))
             .detach();
+        cx.observe(&this.popout_font_slider, |this, slider, cx| {
+            let SliderValue::Single(percent) = slider.read(cx).value() else {
+                return;
+            };
+            let size = lyric_font_size_for_scale(percent);
+            if (this.popout_font_size - size).abs() > f32::EPSILON {
+                this.popout_font_size = size;
+                cx.notify();
+            }
+        })
+        .detach();
         this
     }
 
@@ -228,7 +262,11 @@ impl LyricsPanel {
             )
         };
         let position = if visible && follows_playback {
-            self.progress.read(cx).for_generation(generation).position.as_secs_f64()
+            self.progress
+                .read(cx)
+                .for_generation(generation)
+                .position
+                .as_secs_f64()
         } else {
             0.0
         };
@@ -930,15 +968,15 @@ fn track_changed(current: Option<&LyricsTrack>, next: Option<&LyricsTrack>) -> b
     current != next
 }
 
-fn lyric_line_container(id: String) -> gpui::Stateful<gpui::Div> {
+fn lyric_line_container(id: String, font_size: f32) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .w_full()
         .px(px(10.))
         .py(px(LYRIC_LINE_PADDING_Y))
         .rounded(px(6.))
-        .text_size(px(15.))
-        .line_height(px(LYRIC_LINE_CONTENT_HEIGHT))
+        .text_size(px(font_size))
+        .line_height(px(font_size * LYRIC_LINE_HEIGHT_RATIO))
         .text_color(rgb(MUTED))
 }
 
@@ -948,14 +986,15 @@ fn lyric_gap_visualizer(
     animating: bool,
     active: bool,
     reduce_motion: bool,
+    font_size: f32,
 ) -> gpui::Stateful<gpui::Div> {
-    lyric_line_container(id)
+    lyric_line_container(id, font_size)
         .cursor_pointer()
         .hover(|style| style.bg(rgba(0xffffff0a)))
         .when(active, |this| this.bg(rgba(0xffffff14)))
         .child(
             div()
-                .h(px(LYRIC_LINE_CONTENT_HEIGHT))
+                .h(px(font_size * LYRIC_LINE_HEIGHT_RATIO))
                 .flex()
                 .items_center()
                 .justify_start()
@@ -1165,6 +1204,12 @@ impl Render for LyricsPanel {
         });
         let playing = self.playback.read(cx).state.status == PlaybackStatus::Playing;
         let reduce_motion = cx.reduce_motion();
+        let detached = self.detached(cx);
+        let lyric_font_size = if detached {
+            self.popout_font_size
+        } else {
+            LYRIC_FONT_SIZE
+        };
         let body: Vec<gpui::AnyElement> = match self.response.as_ref() {
             Some(LyricsResponse::Synced { url, .. }) => self
                 .lines
@@ -1181,20 +1226,24 @@ impl Render for LyricsPanel {
                             playing && active && !reduce_motion,
                             active,
                             reduce_motion,
+                            lyric_font_size,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| this.seek_to_line(time, cx)))
                         .into_any_element();
                     }
-                    let element = lyric_line_container(format!("lyrics-line-{index}"))
-                        .cursor_pointer()
-                        .hover(|style| style.text_color(rgb(FOREGROUND)).bg(rgba(0xffffff0a)))
-                        .when(active, |this| {
-                            this.font_weight(FontWeight::BOLD)
-                                .text_color(rgb(FOREGROUND))
-                                .bg(rgba(0xffffff14))
-                        })
-                        .child(line.text.clone())
-                        .on_click(cx.listener(move |this, _, _, cx| this.seek_to_line(time, cx)));
+                    let element =
+                        lyric_line_container(format!("lyrics-line-{index}"), lyric_font_size)
+                            .cursor_pointer()
+                            .hover(|style| style.text_color(rgb(FOREGROUND)).bg(rgba(0xffffff0a)))
+                            .when(active, |this| {
+                                this.font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(FOREGROUND))
+                                    .bg(rgba(0xffffff14))
+                            })
+                            .child(line.text.clone())
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.seek_to_line(time, cx)),
+                            );
                     Self::lyric_menu(
                         element,
                         line_text,
@@ -1212,17 +1261,18 @@ impl Render for LyricsPanel {
                     let line = line.to_owned();
                     let trimmed = line.trim().to_owned();
                     let interactive = is_highlightable_line(&line);
-                    let element = lyric_line_container(format!("plain-lyrics-line-{index}"))
-                        .when(interactive, |this| {
-                            this.hover(|style| {
-                                style.text_color(rgb(FOREGROUND)).bg(rgba(0xffffff0a))
+                    let element =
+                        lyric_line_container(format!("plain-lyrics-line-{index}"), lyric_font_size)
+                            .when(interactive, |this| {
+                                this.hover(|style| {
+                                    style.text_color(rgb(FOREGROUND)).bg(rgba(0xffffff0a))
+                                })
                             })
-                        })
-                        .child(if line.is_empty() {
-                            " ".to_owned()
-                        } else {
-                            line
-                        });
+                            .child(if line.is_empty() {
+                                " ".to_owned()
+                            } else {
+                                line
+                            });
                     if !interactive {
                         element.into_any_element()
                     } else {
@@ -1246,36 +1296,38 @@ impl Render for LyricsPanel {
                             let fragments = genius_line_fragments(prepared, index);
                             let first_annotation = genius_fragment::first_annotation_id(&fragments);
                             let nonempty = !line.trim().is_empty();
-                            let row = lyric_line_container(format!("genius-lyrics-line-{index}"))
-                                .flex()
-                                .flex_row()
-                                .flex_wrap()
-                                .items_baseline()
-                                .when(nonempty, |this| {
-                                    this.cursor_pointer().hover(|style| {
-                                        style.text_color(rgb(FOREGROUND)).bg(rgba(0xffffff0a))
-                                    })
+                            let row = lyric_line_container(
+                                format!("genius-lyrics-line-{index}"),
+                                lyric_font_size,
+                            )
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_baseline()
+                            .when(nonempty, |this| {
+                                this.cursor_pointer().hover(|style| {
+                                    style.text_color(rgb(FOREGROUND)).bg(rgba(0xffffff0a))
                                 })
-                                .when_some(first_annotation, |this, id| {
-                                    this.on_click(cx.listener(move |this, _, _, cx| {
-                                        this.show_annotation(id.clone(), cx)
-                                    }))
-                                })
-                                .children(fragments.into_iter().map(|fragment| {
-                                    if let Some(id) = fragment.annotation_id {
-                                        genius_fragment::render(
-                                            id.clone(),
-                                            index,
-                                            fragment.text,
-                                            cx.listener(move |this, _, _, cx| {
-                                                this.show_annotation(id.clone(), cx)
-                                            }),
-                                        )
-                                    } else {
-                                        genius_fragment::render_plain(fragment.text)
-                                            .into_any_element()
-                                    }
-                                }));
+                            })
+                            .when_some(first_annotation, |this, id| {
+                                this.on_click(cx.listener(move |this, _, _, cx| {
+                                    this.show_annotation(id.clone(), cx)
+                                }))
+                            })
+                            .children(fragments.into_iter().map(|fragment| {
+                                if let Some(id) = fragment.annotation_id {
+                                    genius_fragment::render(
+                                        id.clone(),
+                                        index,
+                                        fragment.text,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.show_annotation(id.clone(), cx)
+                                        }),
+                                    )
+                                } else {
+                                    genius_fragment::render_plain(fragment.text).into_any_element()
+                                }
+                            }));
                             if line.trim().is_empty() {
                                 row.child(" ").into_any_element()
                             } else {
@@ -1361,7 +1413,7 @@ impl Render for LyricsPanel {
                                     .items_center()
                                     .gap(px(8.))
                                     .min_w_0()
-                                    .when(self.detached(cx), |this| {
+                                    .when(detached, |this| {
                                         this.window_control_area(gpui::WindowControlArea::Drag)
                                     })
                                     .child(
@@ -1374,7 +1426,7 @@ impl Render for LyricsPanel {
                                             .child(crate::i18n::text("Lyrics")),
                                     ),
                             )
-                            .when(self.detached(cx), |this| {
+                            .when(detached, |this| {
                                 let playback = self.playback.clone();
                                 this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "lyrics-always-on-top",
@@ -1401,7 +1453,12 @@ impl Render for LyricsPanel {
                                     },
                                 ))
                             })
-                            .when(!self.detached(cx), |this| {
+                            .when(detached, |this| {
+                                this.child(font_control::popout_font_size_control(
+                                    self.popout_font_slider.clone(),
+                                ))
+                            })
+                            .when(!detached, |this| {
                                 this.child(crate::music_ui::ghost_icon_button_with_nudge(
                                     "lyrics-detach",
                                     LocalIcon::ArrowUpRightFromSquare,
@@ -1517,7 +1574,7 @@ impl Render for LyricsPanel {
                             self.scroll.clone(),
                             self.scrollbar_freeze.clone(),
                         ),
-                        if self.detached(cx) {
+                        if detached {
                             f32::INFINITY
                         } else {
                             crate::music_ui::window_content_width(window)

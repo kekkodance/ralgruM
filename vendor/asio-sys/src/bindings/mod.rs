@@ -403,7 +403,12 @@ impl Asio {
         // Make owned CString to send to load driver
         let driver_name_cstring =
             CString::new(driver_name).expect("failed to create `CString` from driver name");
-        let mut driver_info = std::mem::MaybeUninit::<ai::ASIODriverInfo>::uninit();
+        // ASIOInit reads `sysRef` from this struct before filling in the
+        // version and name fields, so the storage must not be left
+        // uninitialized: a random pointer makes drivers that inspect `sysRef`
+        // fail or crash. A null system reference is valid for drivers that do
+        // not need a window handle.
+        let mut driver_info = std::mem::MaybeUninit::<ai::ASIODriverInfo>::zeroed();
 
         unsafe {
             // TODO: Check that a driver of the same name does not already exist?

@@ -1,33 +1,47 @@
-use gpui::px;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use gpui::{WindowId, px};
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, Mutex, MutexGuard},
+};
 
-static OPEN_CONTEXT_MENUS: AtomicUsize = AtomicUsize::new(0);
+/// Menus swallow wheel input in the window that owns them, not in every window
+/// of the app. A lyrics popout menu must never freeze scrolling in settings.
+static OPEN_CONTEXT_MENUS: LazyLock<Mutex<HashMap<WindowId, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub(crate) fn context_menu_is_open() -> bool {
-    OPEN_CONTEXT_MENUS.load(Ordering::Relaxed) > 0
+fn open_context_menus() -> MutexGuard<'static, HashMap<WindowId, usize>> {
+    OPEN_CONTEXT_MENUS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[cfg(test)]
-fn open_context_menu_count() -> usize {
-    OPEN_CONTEXT_MENUS.load(Ordering::Relaxed)
+pub(crate) fn context_menu_is_open_in(window_id: WindowId) -> bool {
+    open_context_menus()
+        .get(&window_id)
+        .is_some_and(|count| *count > 0)
 }
 
-pub(crate) struct ContextMenuLease;
+pub(crate) struct ContextMenuLease {
+    window_id: WindowId,
+}
 
 impl ContextMenuLease {
-    pub(crate) fn acquire() -> Self {
-        OPEN_CONTEXT_MENUS.fetch_add(1, Ordering::Relaxed);
-        Self
+    pub(crate) fn acquire(window_id: WindowId) -> Self {
+        *open_context_menus().entry(window_id).or_insert(0) += 1;
+        Self { window_id }
     }
 }
 
 impl Drop for ContextMenuLease {
     fn drop(&mut self) {
-        OPEN_CONTEXT_MENUS
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                Some(count.saturating_sub(1))
-            })
-            .ok();
+        let mut open = open_context_menus();
+        let Some(count) = open.get_mut(&self.window_id) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            open.remove(&self.window_id);
+        }
     }
 }
 
@@ -75,8 +89,9 @@ pub(crate) use discover_card::{
 };
 pub(crate) use items::{compact_checked_action_item, lyrics_copy_menu};
 pub(crate) use palette::{
-    CONTEXT_MENU_BORDER, CONTEXT_MENU_FOREGROUND, CONTEXT_MENU_HOVER,
-    CONTEXT_MENU_HOVER_FOREGROUND, CONTEXT_MENU_SEPARATOR, CONTEXT_MENU_SURFACE,
+    CONTEXT_MENU_ACTION_HORIZONTAL_PADDING, CONTEXT_MENU_BORDER, CONTEXT_MENU_FOREGROUND,
+    CONTEXT_MENU_HOVER, CONTEXT_MENU_HOVER_FOREGROUND, CONTEXT_MENU_SEPARATOR,
+    CONTEXT_MENU_SURFACE,
 };
 pub(crate) use popup::{PopupMenu, PopupMenuArrowEdge, PopupMenuItem};
 // Only the Windows tray popup consumes the arrow geometry re-exports.

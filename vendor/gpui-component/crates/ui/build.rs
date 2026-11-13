@@ -27,7 +27,10 @@ fn main() {
         );
     }
 
-    println!("cargo:rustc-env=GPUI_COMPONENT_DEFAULT_ICONS_DIR={}", icons_dir.display());
+    println!(
+        "cargo:rustc-env=GPUI_COMPONENT_DEFAULT_ICONS_DIR={}",
+        icons_dir.display()
+    );
 
     // Rerun if the icon set changes (rename/add/remove).
     //

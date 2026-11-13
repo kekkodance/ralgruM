@@ -767,7 +767,9 @@ fn register_handlers(
         if !phase.capture() {
             return;
         }
-        if crate::context_menu::context_menu_is_open() && !wheel_state.scrolls_while_menu_open() {
+        if crate::context_menu::context_menu_is_open_in(window.window_handle().window_id())
+            && !wheel_state.scrolls_while_menu_open()
+        {
             cancel_autoscroll_and_release(&wheel_state, window);
             if wheel_hitbox.should_handle_scroll(window) {
                 cx.stop_propagation();

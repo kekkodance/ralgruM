@@ -385,9 +385,39 @@ fn card_menu_allows_local_deezer_albums_without_account() {
 
 #[test]
 fn context_menu_lease_releases_when_the_owner_is_torn_down() {
-    let baseline = open_context_menu_count();
-    let lease = ContextMenuLease::acquire();
-    assert_eq!(open_context_menu_count(), baseline + 1);
+    let window_id = gpui::WindowId::from(0x51DE_0002);
+    let lease = ContextMenuLease::acquire(window_id);
+    assert!(context_menu_is_open_in(window_id));
     drop(lease);
-    assert_eq!(open_context_menu_count(), baseline);
+    assert!(!context_menu_is_open_in(window_id));
+}
+
+#[test]
+fn context_menu_leases_are_scoped_to_their_window() {
+    let first = gpui::WindowId::from(0x51DE_0003);
+    let second = gpui::WindowId::from(0x51DE_0004);
+    let first_lease = ContextMenuLease::acquire(first);
+    let second_lease = ContextMenuLease::acquire(second);
+
+    assert!(context_menu_is_open_in(first));
+    assert!(context_menu_is_open_in(second));
+
+    drop(first_lease);
+    assert!(!context_menu_is_open_in(first));
+    assert!(context_menu_is_open_in(second));
+
+    drop(second_lease);
+    assert!(!context_menu_is_open_in(second));
+}
+
+#[test]
+fn nested_context_menu_leases_keep_the_same_window_open() {
+    let window_id = gpui::WindowId::from(0x51DE_0005);
+    let outer = ContextMenuLease::acquire(window_id);
+    let inner = ContextMenuLease::acquire(window_id);
+
+    drop(outer);
+    assert!(context_menu_is_open_in(window_id));
+    drop(inner);
+    assert!(!context_menu_is_open_in(window_id));
 }

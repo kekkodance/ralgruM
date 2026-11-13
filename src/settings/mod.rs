@@ -482,11 +482,11 @@ impl SettingsView {
             );
         }
         let saved = if asio_mode {
-            asio_driver
+            asio_driver.map(asio_drivers::canonical_asio_driver_name)
         } else {
-            output_device
+            output_device.map(str::to_owned)
         };
-        let selected = output_devices::output_device_selected_index(&options, saved);
+        let selected = output_devices::output_device_selected_index(&options, saved.as_deref());
         let has_rows = !options.is_empty();
         (
             options.into_iter().map(SharedString::from).collect(),

@@ -255,8 +255,7 @@ fn render_scrollbar<H: ScrollbarHandle + Clone>(
 mod tests {
     use super::*;
     use gpui::{
-        Context, Render, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point,
-        px,
+        Context, Render, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px,
     };
 
     fn draw(cx: &mut VisualTestContext) {

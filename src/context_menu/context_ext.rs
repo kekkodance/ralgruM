@@ -381,7 +381,9 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                                     }
                                 });
                                 let mut shared = shared_state.borrow_mut();
-                                shared.lease = Some(ContextMenuLease::acquire());
+                                shared.lease = Some(ContextMenuLease::acquire(
+                                    window.window_handle().window_id(),
+                                ));
                                 shared.menu_view = Some(menu);
                                 shared.subscription = Some(subscription);
                                 window.refresh();
@@ -440,11 +442,11 @@ mod tests {
 
     #[test]
     fn tearing_down_context_menu_state_releases_its_lease() {
-        let baseline = super::super::open_context_menu_count();
+        let window_id = gpui::WindowId::from(0x51DE_0001);
         let state = ContextMenuState::default();
-        state.shared_state.borrow_mut().lease = Some(ContextMenuLease::acquire());
-        assert_eq!(super::super::open_context_menu_count(), baseline + 1);
+        state.shared_state.borrow_mut().lease = Some(ContextMenuLease::acquire(window_id));
+        assert!(super::super::context_menu_is_open_in(window_id));
         drop(state);
-        assert_eq!(super::super::open_context_menu_count(), baseline);
+        assert!(!super::super::context_menu_is_open_in(window_id));
     }
 }
