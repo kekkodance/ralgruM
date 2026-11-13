@@ -13,12 +13,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "accesskit"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e883d1d28c5fd5568c79ed2d2bd48d9f2fd3945c8974ed0f53690ceddb051be"
+dependencies = [
+ "enumn",
+ "uuid 1.24.1",
+]
+
+[[package]]
 name = "accesskit_atspi_common"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "023da0e5097f46df7092d5280b02efb9bbf8d93298daeced42652463e357d636"
 dependencies = [
- "accesskit",
+ "accesskit 0.24.1",
  "accesskit_consumer",
  "atspi-common",
  "phf 0.13.1",
@@ -32,7 +42,7 @@ version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d10a236f96f87d70732e44520046785431ef01d5bcd6b041317bfadd2f88245"
 dependencies = [
- "accesskit",
+ "accesskit 0.24.1",
  "hashbrown 0.16.1",
 ]
 
@@ -42,7 +52,7 @@ version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce02dc63b43f0c9296af9ac946312a2dc8814427d7a64d2d600971dac55b6076"
 dependencies = [
- "accesskit",
+ "accesskit 0.24.1",
  "accesskit_consumer",
  "hashbrown 0.16.1",
  "objc2 0.5.2",
@@ -56,7 +66,7 @@ version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03e156ed3802e35eefe894ef2671bc6c889303d8a7e110b5e1b48f504b91362f"
 dependencies = [
- "accesskit",
+ "accesskit 0.24.1",
  "accesskit_atspi_common",
  "async-channel",
  "async-executor",
@@ -74,7 +84,7 @@ version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "106c2b961215864d1c2e703ee63269c25c4e80a577ffb2c1017b9c17dcdf83a1"
 dependencies = [
- "accesskit",
+ "accesskit 0.24.1",
  "accesskit_consumer",
  "hashbrown 0.16.1",
  "static_assertions",
@@ -3235,7 +3245,7 @@ dependencies = [
 name = "gpui"
 version = "0.2.2"
 dependencies = [
- "accesskit",
+ "accesskit 0.25.2",
  "anyhow",
  "async-channel",
  "async-task",
@@ -3452,7 +3462,7 @@ name = "gpui_linux"
 version = "0.1.0"
 source = "git+https://github.com/zed-industries/zed#79fe6a645f68f8c9230578f154bf99852d9f716f"
 dependencies = [
- "accesskit",
+ "accesskit 0.24.1",
  "accesskit_unix",
  "anyhow",
  "as-raw-xcb-connection",
@@ -3496,7 +3506,7 @@ name = "gpui_macos"
 version = "0.1.0"
 source = "git+https://github.com/zed-industries/zed#79fe6a645f68f8c9230578f154bf99852d9f716f"
 dependencies = [
- "accesskit",
+ "accesskit 0.24.1",
  "accesskit_macos",
  "anyhow",
  "block2 0.6.2",
@@ -3634,7 +3644,7 @@ dependencies = [
 name = "gpui_windows"
 version = "0.1.0"
 dependencies = [
- "accesskit",
+ "accesskit 0.24.1",
  "accesskit_windows",
  "anyhow",
  "collections",
