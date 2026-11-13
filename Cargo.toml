@@ -115,6 +115,9 @@ gpui = { path = "vendor/gpui" }
 # Vendored Windows backend from the same Zed commit, retaining stale-atlas safety,
 # suspend/session forwarding, custom windows, and the existing direct native prompts.
 gpui_windows = { path = "vendor/gpui_windows" }
+# Vendored GPU backend from Zed 79fe6a6, pinned to the GPUI revision the
+# vendored desktop backends are built against.
+gpui_wgpu = { path = "vendor/gpui_wgpu" }
 [patch.crates-io]
 # Vendored cpal (0.16.0) with two fixes: every ASIO Device handle shares the
 # driver's stream slot, so reopening an ASIO output reuses the existing
@@ -137,4 +140,4 @@ asio-sys = { path = "vendor/asio-sys" }
 # workspace roots (or no inheritance at all), so they must stay excluded.
 members = ["vendor/gpui"]
 default-members = ["."]
-exclude = ["vendor/gpui-component", "vendor/gpui_windows"]
+exclude = ["vendor/gpui-component", "vendor/gpui_windows", "vendor/gpui_wgpu"]
