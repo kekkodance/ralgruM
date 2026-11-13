@@ -4,10 +4,10 @@ use std::{ffi::c_void, sync::Arc};
 
 use gpui::{Action, App, AssetSource, ImageFormat, Pixels, Point, SharedString, Window};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{BOOL, GlobalFree, HANDLE, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{GlobalFree, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, ClientToScreen, CreateDIBSection, DIB_RGB_COLORS,
-    DeleteObject, HBITMAP, HDC, HGDIOBJ,
+    DeleteObject, HBITMAP, HGDIOBJ,
 };
 use windows::Win32::Graphics::GdiPlus::{
     GdipCreateBitmapFromStream, GdipCreateHBITMAPFromBitmap, GdipDisposeImage,
@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetMenuItemInfoW, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN, TrackPopupMenuEx,
     WM_NULL,
 };
-use windows::core::PCWSTR;
+use windows::core::{BOOL, PCWSTR};
 
 use super::{NativeMenuItem, resolve_icon_image};
 
@@ -123,7 +123,7 @@ fn run_menu(
         // restore it so GPUI's mouse-up `ReleaseCapture` succeeds and doesn't
         // log a spurious "operation completed successfully" (GetLastError == 0).
         let _ = SetCapture(hwnd);
-        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
 
         // Ids are 1-based (0 means "no selection"); map back to `actions`.
         match selected.0 {
@@ -334,17 +334,17 @@ unsafe fn stream_from_bytes(bytes: &[u8]) -> Option<windows::Win32::System::Com:
     let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes.len()) }.ok()?;
     let data = unsafe { GlobalLock(hglobal) };
     if data.is_null() {
-        let _ = unsafe { GlobalFree(hglobal) };
+        let _ = unsafe { GlobalFree(Some(hglobal)) };
         return None;
     }
 
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast::<u8>(), bytes.len()) };
     let _ = unsafe { GlobalUnlock(hglobal) };
 
-    match unsafe { CreateStreamOnHGlobal(hglobal, BOOL(1)) } {
+    match unsafe { CreateStreamOnHGlobal(hglobal, true) } {
         Ok(stream) => Some(stream),
         Err(_) => {
-            let _ = unsafe { GlobalFree(hglobal) };
+            let _ = unsafe { GlobalFree(Some(hglobal)) };
             None
         }
     }
@@ -421,17 +421,8 @@ unsafe fn create_dib(pixels: &[u8], width: u32, height: u32) -> Option<HBITMAP> 
 
     let mut bits: *mut c_void = std::ptr::null_mut();
     // A null `HDC` is fine with `DIB_RGB_COLORS` (no palette to resolve).
-    let hbitmap = unsafe {
-        CreateDIBSection(
-            HDC::default(),
-            &info,
-            DIB_RGB_COLORS,
-            &mut bits,
-            HANDLE::default(),
-            0,
-        )
-    }
-    .ok()?;
+    let hbitmap =
+        unsafe { CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0) }.ok()?;
 
     if bits.is_null() {
         let _ = unsafe { DeleteObject(HGDIOBJ(hbitmap.0)) };
