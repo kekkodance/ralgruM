@@ -107,7 +107,7 @@ hdrhistogram = { version = "7", default-features = false, optional = true }
 waker-fn = "1.2.0"
 lyon = "1.0"
 pin-project = "1.1.10"
-spin = { version = "0.10", default-features = false, features = ["mutex", "spin_mutex", "lock_api"] }
+spin = { version = "0.12", default-features = false, features = ["mutex", "spin_mutex", "lock_api"] }
 url = { version = "2.2" }
 uuid = { version = "1.1", features = ["serde", "v4"] }
 web-time = { version = "1.1.0", optional = true }
