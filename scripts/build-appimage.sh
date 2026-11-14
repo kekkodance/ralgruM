@@ -15,11 +15,12 @@ esac
 # linuxdeploy's continuous channel is a moving target, so the download is
 # pinned by SHA-256. A hash mismatch means the upstream publish moved, and
 # the failure points at the pin instead of producing a silently different
-# release artifact. Bump both together.
+# release artifact. Bump both together. These digests match the continuous
+# build published on 2026-11-01.
 LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$arch.AppImage"
 declare -A LINUXDEPLOY_SHA256=(
-  [x86_64]="8aea8da0f7f7039d2a2cecb14657d752a222a5e1d3825caeef186c82f751cdd1"
-  [aarch64]="5c1fddf96066891e829831cac0d84424690f3b22846c7f8f1bb9990a5c6c73f4"
+  [x86_64]="df908b19f1ed1cdafa79508d415aa12d6c56ce4d56d4149aa8c09286718706e5"
+  [aarch64]="f38e4d7cebf20d8073ec4e00e0a167ac146cd8585fe2f8fe82df27d74f2bd8e1"
 )
 
 # appimagetool is pinned to a tagged release so packaging does not change
