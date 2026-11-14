@@ -87,7 +87,7 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 x11rb = "0.14"
 zbus = "5"
 keyring = { version = "3", features = ["sync-secret-service"] }
-libloading = "0.8"
+libloading = "0.9"
 gtk = "0.18"
 
 # Media keys use souvlaki on every desktop OS: SMTC on Windows, MPRIS over
