@@ -1,7 +1,10 @@
 use super::*;
 
 pub(super) fn deezer_key(track_id: &str) -> [u8; 16] {
-    let hex = format!("{:x}", Md5::digest(track_id.as_bytes()));
+    let hex = Md5::digest(track_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let bytes = hex.as_bytes();
     let mut key = [0; 16];
     for index in 0..16 {
