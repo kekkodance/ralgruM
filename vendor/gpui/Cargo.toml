@@ -78,7 +78,7 @@ itertools = { version = "0.15.0" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 num_cpus = "1.13"
 parking = "2.0.0"
-parking_lot = { version = "0.12.1" }
+parking_lot = { version = "0.13.0" }
 postage = { version = "0.5", default-features = false, features = ["blocking"], optional = true }
 proptest = { version = "1.12.0", features = ["attr-macro"], optional = true }
 chrono = { version = "0.4", default-features = true, features = ["std", "serde"] }
