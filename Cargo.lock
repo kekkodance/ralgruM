@@ -9,7 +9,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3b7f7f85a7e5f68090000ed7622545829afd484d210358702ae4cb97dd0c320"
 dependencies = [
  "enumn",
- "uuid 1.24.1",
+ "uuid 1.29.3",
 ]
 
 [[package]]
@@ -3223,7 +3223,7 @@ dependencies = [
  "url",
  "usvg 0.48.1",
  "util_macros",
- "uuid 1.24.1",
+ "uuid 1.29.3",
  "waker-fn",
  "wasm-bindgen",
  "web-sys",
@@ -3273,7 +3273,7 @@ dependencies = [
  "smol",
  "tracing",
  "unicode-segmentation",
- "uuid 1.24.1",
+ "uuid 1.29.3",
  "web-time",
  "windows 0.62.2",
  "zed-sum-tree",
@@ -3360,7 +3360,7 @@ dependencies = [
  "objc2-ui-kit",
  "parking_lot",
  "raw-window-handle",
- "uuid 1.24.1",
+ "uuid 1.29.3",
 ]
 
 [[package]]
@@ -3394,7 +3394,7 @@ dependencies = [
  "smol",
  "strum",
  "url",
- "uuid 1.24.1",
+ "uuid 1.29.3",
  "wayland-backend",
  "wayland-client",
  "wayland-cursor",
@@ -3442,7 +3442,7 @@ dependencies = [
  "semver",
  "smallvec",
  "strum",
- "uuid 1.24.1",
+ "uuid 1.29.3",
 ]
 
 [[package]]
@@ -3512,7 +3512,7 @@ dependencies = [
  "unicode-properties",
  "unicode-script",
  "unicode-segmentation",
- "uuid 1.24.1",
+ "uuid 1.29.3",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm_thread",
@@ -3567,7 +3567,7 @@ dependencies = [
  "raw-window-handle",
  "scheduler",
  "smallvec",
- "uuid 1.24.1",
+ "uuid 1.29.3",
  "windows 0.62.2",
  "windows-core 0.62.2",
  "windows-numerics 0.3.1",
@@ -4816,7 +4816,7 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "time",
- "uuid 1.24.1",
+ "uuid 1.29.3",
 ]
 
 [[package]]
@@ -6753,7 +6753,7 @@ dependencies = [
  "tokio-util",
  "tray-icon",
  "url",
- "uuid 1.24.1",
+ "uuid 1.29.3",
  "webkit2gtk",
  "windows 0.62.2",
  "windows-registry 0.100.0",
@@ -9448,9 +9448,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.24.1"
+version = "1.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cefc03fd367c0c6d4305de1b312cf00248c4114f4a0418ce6a6af769e3b0bd9"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -11070,7 +11070,7 @@ dependencies = [
  "serde_repr",
  "tracing",
  "uds_windows",
- "uuid 1.24.1",
+ "uuid 1.29.3",
  "windows-sys 0.61.2",
  "winnow 1.0.4",
  "zbus_macros",
