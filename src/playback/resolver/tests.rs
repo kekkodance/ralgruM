@@ -3,7 +3,7 @@ use super::format::MAX_SOUNDCLOUD_TRACK_AUTHORIZATION_LENGTH;
 use super::format::{soundcloud_format_from_hint, soundcloud_format_from_url_path};
 use super::*;
 use crate::playback::PlaybackContext;
-use blowfish::cipher::BlockEncrypt;
+use blowfish::cipher::BlockCipherEncrypt;
 
 struct TestBackendSource {
     metadata: super::super::media_source::BackendSourceMetadata,
@@ -2365,7 +2365,7 @@ fn encrypt_cbc_for_test(cipher: &Blowfish, bytes: &mut [u8]) {
         for index in 0..8 {
             block[index] = plaintext[index] ^ previous[index];
         }
-        cipher.encrypt_block(GenericArray::from_mut_slice(block));
+        cipher.encrypt_block(block.into());
         previous = *block;
     }
 }

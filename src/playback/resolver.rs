@@ -8,7 +8,7 @@ use std::{
 
 use blowfish::{
     Blowfish,
-    cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray},
+    cipher::{BlockCipherDecrypt, KeyInit},
 };
 use chrono::NaiveDate;
 use futures::{StreamExt, future::join_all};
