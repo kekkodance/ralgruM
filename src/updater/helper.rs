@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -196,7 +197,14 @@ pub(crate) fn confirm(id: Uuid) {
 fn verify(path: &Path, digest: [u8; 32]) -> Result<(), String> {
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let mut hash = Sha256::new();
-    std::io::copy(&mut file, &mut hash).map_err(|error| error.to_string())?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
     if hash.finalize().as_slice() != digest {
         return Err("The staged executable changed after verification".into());
     }
