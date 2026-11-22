@@ -445,6 +445,14 @@ impl AudioCache {
         format!("{key}\0{total}")
     }
 
+    fn hex_digest(digest: impl AsRef<[u8]>) -> String {
+        digest
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
     pub(crate) async fn set_limit(&self, limit_mb: u64) -> Result<Overview, String> {
         if !LIMITS_MB.contains(&limit_mb) {
             return Err("Audio cache limit must be 256 MB, 512 MB, 1 GB, or 4 GB".into());
@@ -469,7 +477,7 @@ impl AudioCache {
         digest.update(start.to_le_bytes());
         digest.update(end.to_le_bytes());
         self.directory
-            .join(format!("{:x}.block", digest.finalize()))
+            .join(format!("{}.block", Self::hex_digest(digest.finalize())))
     }
 
     fn total_path(&self, key: &str) -> PathBuf {
@@ -478,7 +486,7 @@ impl AudioCache {
         digest.update(key.as_bytes());
         digest.update(b"\0total");
         self.directory
-            .join(format!("{:x}.total", digest.finalize()))
+            .join(format!("{}.total", Self::hex_digest(digest.finalize())))
     }
 
     fn prefetch_marker_path(&self, key: &str, total: u64) -> PathBuf {
@@ -488,7 +496,7 @@ impl AudioCache {
         digest.update(b"\0prefetch");
         digest.update(total.to_le_bytes());
         self.directory
-            .join(format!("{:x}.prefetch", digest.finalize()))
+            .join(format!("{}.prefetch", Self::hex_digest(digest.finalize())))
     }
 
     fn catalog_path(&self) -> PathBuf {
@@ -1595,7 +1603,10 @@ mod tests {
         digest.update(total.to_le_bytes());
         digest.update(0_u64.to_le_bytes());
         digest.update(3_u64.to_le_bytes());
-        let legacy = temp.path().join(format!("{:x}.block", digest.finalize()));
+        let legacy = temp.path().join(format!(
+            "{}.block",
+            AudioCache::hex_digest(digest.finalize())
+        ));
         tokio::fs::create_dir_all(temp.path()).await.unwrap();
         tokio::fs::write(&legacy, b"old!").await.unwrap();
 
@@ -2241,7 +2252,10 @@ mod tests {
             digest.update(10_u64.to_le_bytes());
             digest.update(0_u64.to_le_bytes());
             digest.update(9_u64.to_le_bytes());
-            temp.path().join(format!("{:x}.block", digest.finalize()))
+            temp.path().join(format!(
+                "{}.block",
+                AudioCache::hex_digest(digest.finalize())
+            ))
         };
         assert_ne!(current, old);
     }

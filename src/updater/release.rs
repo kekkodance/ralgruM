@@ -73,6 +73,7 @@ pub(crate) async fn fetch_latest(client: &reqwest::Client) -> Result<Option<Rele
 #[cfg(debug_assertions)]
 fn fixture_release(candidate: &std::path::Path) -> Result<Release, String> {
     use sha2::{Digest as _, Sha256};
+    use std::io::Read as _;
     let mut file = std::fs::File::open(candidate)
         .map_err(|error| format!("Could not open the updater test candidate: {error}"))?;
     let size = file.metadata().map_err(|error| error.to_string())?.len();
@@ -80,7 +81,14 @@ fn fixture_release(candidate: &std::path::Path) -> Result<Release, String> {
         return Err("The updater test candidate has an invalid size".into());
     }
     let mut hash = Sha256::new();
-    std::io::copy(&mut file, &mut hash).map_err(|error| error.to_string())?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
     let mut version =
         Version::parse(env!("CARGO_PKG_VERSION")).expect("the package version must be SemVer");
     if version <= current_version() {

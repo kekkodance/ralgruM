@@ -450,11 +450,7 @@ fn a_privacy_failure_contains_only_its_source_path_and_digest() {
     let path = Path::new("src/fixture.rs");
     assert_eq!(
         violation(path, &digest),
-        format!(
-            "{}: {:x}",
-            path.display(),
-            Sha256::digest(b"example_private_field")
-        )
+        format!("{}: {}", path.display(), hex_digest(&digest))
     );
 }
 
