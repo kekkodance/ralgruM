@@ -120,6 +120,11 @@ fn open_stream_on_this_thread(driver: &str) -> Result<rodio::MixerDeviceSink, St
     let stream = rodio::DeviceSinkBuilder::from_device(device)
         .and_then(|builder| {
             builder
+                // Rodio 0.22 replaces Default with a fixed safe size (2048 at
+                // 44.1/48 kHz). ASIO users set their buffer size in the
+                // driver's control panel, so pass Default through and let the
+                // driver use its preferred size.
+                .with_buffer_size(rodio::cpal::BufferSize::Default)
                 .with_error_callback(crate::playback::engine::log_output_stream_error)
                 .open_sink_or_fallback()
         })
