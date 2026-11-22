@@ -3564,7 +3564,7 @@ dependencies = [
  "anyhow",
  "collections",
  "dunce",
- "etagere 0.2.15",
+ "etagere 0.3.0",
  "futures",
  "gpui",
  "gpui_util",

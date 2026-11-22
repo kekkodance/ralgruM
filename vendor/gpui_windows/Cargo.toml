@@ -46,7 +46,7 @@ accesskit_windows = { version = "0.34" }
 anyhow = { version = "1.0.86" }
 collections = { version = "0.1.0", git = "https://github.com/zed-industries/zed" }
 dunce = { version = "1.0" }
-etagere = { version = "0.2" }
+etagere = { version = "0.3" }
 futures = { version = "0.3.34" }
 gpui_util = { git = "https://github.com/zed-industries/zed" }
 image = { version = "0.25.1", default-features = false, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "rayon", "tga", "tiff", "webp"] }
