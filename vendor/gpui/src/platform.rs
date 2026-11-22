@@ -2003,6 +2003,18 @@ impl From<TileId> for etagere::AllocId {
     }
 }
 
+impl From<etagere_02::AllocId> for TileId {
+    fn from(id: etagere_02::AllocId) -> Self {
+        Self(id.serialize())
+    }
+}
+
+impl From<TileId> for etagere_02::AllocId {
+    fn from(id: TileId) -> Self {
+        Self::deserialize(id.0)
+    }
+}
+
 #[expect(missing_docs)]
 pub struct PlatformInputHandler {
     cx: AsyncWindowContext,

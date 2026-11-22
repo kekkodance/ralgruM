@@ -3185,6 +3185,7 @@ dependencies = [
  "dioxus-devtools-types",
  "embed-resource",
  "env_logger",
+ "etagere 0.2.15",
  "etagere 0.3.0",
  "futures",
  "futures-concurrency",
