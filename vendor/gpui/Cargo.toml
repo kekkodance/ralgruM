@@ -67,6 +67,9 @@ criterion = { version = "0.8.2", features = ["html_reports"], optional = true }
 ctor = { version = "1.0.12" }
 derive_more = { version = "2.1", features = ["deref", "deref_mut", "from_str", "add", "add_assign", "mul", "mul_assign", "not"] }
 etagere = { version = "0.3" }
+# The git GPU backends still depend on etagere 0.2. Keep a renamed edge so
+# TileId can bridge both allocator versions.
+etagere_02 = { package = "etagere", version = "0.2" }
 futures = { version = "0.3.34" }
 futures-concurrency = { version = "7.7.1", optional = true }
 gpui_macros = { git = "https://github.com/zed-industries/zed" }
